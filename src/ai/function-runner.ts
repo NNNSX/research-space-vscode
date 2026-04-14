@@ -25,10 +25,16 @@ function getRegistry(): ToolRegistry {
 
 // ── Active run registry (for cancel support) ───────────────────────────────
 const activeRuns = new Map<string, AbortController>();
+const nodeToRunId = new Map<string, string>();
 
 export function cancelRun(runId: string): void {
   activeRuns.get(runId)?.abort();
   activeRuns.delete(runId);
+}
+
+export function cancelRunByNodeId(nodeId: string): void {
+  const runId = nodeToRunId.get(nodeId);
+  if (runId) { cancelRun(runId); nodeToRunId.delete(nodeId); }
 }
 
 // ── Options type ────────────────────────────────────────────────────────────
@@ -54,6 +60,7 @@ export async function runFunctionNode(
   opts?: RunFunctionOpts
 ): Promise<FunctionRunResult> {
   const runId = uuid();
+  nodeToRunId.set(nodeId, runId);
   const fnNode = canvas.nodes.find(n => n.id === nodeId);
   if (!fnNode || !fnNode.meta?.ai_tool) {
     webview.postMessage({ type: 'aiError', runId, message: '找不到功能节点或 ai_tool 配置' });
@@ -1029,13 +1036,12 @@ async function runVideoGen(
     const jobId = submitData.id ?? submitData.task_id;
     if (!jobId) { throw new Error('Video API did not return a job ID'); }
 
-    // Step 2: Poll for completion (15s interval, max 20 iterations = 5 min)
+    // Step 2: Poll for completion (15s interval, no timeout — user can cancel manually)
     const startTime = Date.now();
-    const MAX_WAIT_MS = 5 * 60 * 1000;
     const POLL_INTERVAL_MS = 15000;
 
     let completed = false;
-    while (Date.now() - startTime < MAX_WAIT_MS) {
+    while (true) {
       if (controller.signal.aborted) {
         throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
       }
@@ -1065,10 +1071,6 @@ async function runVideoGen(
         throw new Error('视频生成任务在服务端失败');
       }
       // still pending — continue polling
-    }
-
-    if (!completed) {
-      throw new Error('视频生成超时（超过 5 分钟），请稍后重试');
     }
 
     // Step 3: Download video via /v1/videos/{id}/content

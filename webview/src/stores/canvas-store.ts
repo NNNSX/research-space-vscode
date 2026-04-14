@@ -489,14 +489,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedNodes = [...state.nodes, newFlowNode];
       const updatedEdges = [...state.edges, newFlowEdge];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
-      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      let newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
 
       if ((node.node_type === 'image' && node.meta?.display_mode !== 'mermaid' || node.node_type === 'video' || node.node_type === 'audio' || node.node_type === 'paper') && node.file_path) {
         postMessage({ type: 'requestImageUri', filePath: node.file_path });
       }
 
+      // Auto-add output node to the summary group that contains the function node
+      let updatedGroups = state.summaryGroups;
+      const fnNodeId = edge.source; // the function node that produced this output
+      const parentGroup = state.summaryGroups.find(g => g.nodeIds.includes(fnNodeId));
+      if (parentGroup) {
+        updatedGroups = state.summaryGroups.map(g => {
+          if (g.id !== parentGroup.id) { return g; }
+          const newNodeIds = [...g.nodeIds, node.id];
+          // Expand bounds to include new output node
+          const PAD = 30;
+          const allMembers = updatedNodes.filter(n => newNodeIds.includes(n.id));
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const m of allMembers) {
+            const w = m.data.size?.width ?? 280;
+            const h = m.data.size?.height ?? 160;
+            minX = Math.min(minX, m.position.x);
+            minY = Math.min(minY, m.position.y);
+            maxX = Math.max(maxX, m.position.x + w);
+            maxY = Math.max(maxY, m.position.y + h);
+          }
+          return {
+            ...g,
+            nodeIds: newNodeIds,
+            bounds: { x: minX - PAD, y: minY - PAD, width: maxX - minX + PAD * 2, height: maxY - minY + PAD * 2 },
+          };
+        });
+        newFile = { ...newFile, summaryGroups: updatedGroups };
+      }
+
       debouncedSave(newFile);
-      return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, aiOutputRunId: runId };
+      return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, summaryGroups: updatedGroups, aiOutputRunId: runId };
     });
   },
 
@@ -574,16 +603,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateNodePreview(nodeId, preview) {
-    set(state => ({
-      nodes: state.nodes.map(n =>
-        n.id === nodeId
-          ? { ...n, data: { ...n.data, meta: { ...n.data.meta, content_preview: preview, file_missing: false } } }
-          : n
-      ),
-    }));
+    set(state => {
+      // Invalidate fullContentCache so lazy-load re-fetches fresh content
+      const newCache = { ...state.fullContentCache };
+      delete newCache[nodeId];
+      return {
+        nodes: state.nodes.map(n =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, meta: { ...n.data.meta, content_preview: preview, file_missing: false } } }
+            : n
+        ),
+        fullContentCache: newCache,
+      };
+    });
   },
 
   setFullContent(nodeId, content) {
+    // Don't cache empty content — let content_preview show instead
+    if (!content) { return; }
     set(state => ({
       fullContentCache: { ...state.fullContentCache, [nodeId]: content },
     }));

@@ -132,7 +132,7 @@ export function App() {
     setNodeFileMissing, updateNodeFilePath, updateNodePreview,
     addToStaging, setFullContent,
     setError, clearError, lastError, setModelCache,
-    setSettings, setToolDefs, setNodeDefs, setOutputHistory,
+    setSettings, setToolDefs, setNodeDefs,
   } = useCanvasStore();
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
@@ -250,14 +250,6 @@ export function App() {
         case 'nodeDefs':
           if (Array.isArray((msg as { defs?: unknown }).defs)) {
             setNodeDefs((msg as { defs: import('../../../src/core/canvas-model').DataNodeDef[] }).defs);
-          }
-          break;
-        case 'outputHistory':
-          if ((msg as { nodeId?: unknown }).nodeId && Array.isArray((msg as { entries?: unknown }).entries)) {
-            setOutputHistory({
-              nodeId: (msg as { nodeId: string }).nodeId,
-              entries: (msg as { entries: import('../../../src/core/canvas-model').OutputHistoryEntry[] }).entries,
-            });
           }
           break;
         case 'fileContent': {

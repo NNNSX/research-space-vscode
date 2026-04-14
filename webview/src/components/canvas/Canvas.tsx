@@ -23,7 +23,6 @@ import { AiOutputPanel } from '../panels/AiOutputPanel';
 import { StagingPanel, STAGING_NODE_KEY } from '../panels/StagingPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { EmptyCanvasGuide } from './EmptyCanvasGuide';
-import { OutputHistoryModal } from './OutputHistoryModal';
 import { SelectionToolbar } from './SelectionToolbar';
 import { SummaryNameDialog } from './SummaryNameDialog';
 import { SummaryOverlays } from './SummaryOverlay';
@@ -248,7 +247,6 @@ export function Canvas() {
         <StagingPanel />
         <SettingsPanel />
         {nodes.length === 0 && <EmptyCanvasGuide />}
-        <OutputHistoryModal />
         <SelectionToolbar />
         {showSummaryDialog && <SummaryNameDialog />}
         {pendingConnection && (

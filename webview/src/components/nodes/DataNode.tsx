@@ -304,7 +304,6 @@ export function DataNode({ data, selected }: DataNodeProps) {
           onClose={() => setCtxMenu(null)}
           filePath={data.file_path}
           canDuplicate={true}
-          canViewHistory={data.node_type === 'ai_output'}
         />
       )}
     </div>

@@ -72,11 +72,37 @@ const NODE_TYPE_ICONS: Record<string, string> = {
   task:           '✅',
 };
 
+// ── Inject keyframe animations once ───────────────────────────────────────
+const FN_STYLE_ID = 'rs-fn-running-animations';
+function ensureFnAnimations() {
+  if (document.getElementById(FN_STYLE_ID)) { return; }
+  const style = document.createElement('style');
+  style.id = FN_STYLE_ID;
+  style.textContent = `
+    @keyframes rsFnBorderFlow {
+      0%   { border-color: rgba(59,130,246,0.7); }
+      33%  { border-color: rgba(139,92,246,0.7); }
+      66%  { border-color: rgba(236,72,153,0.7); }
+      100% { border-color: rgba(59,130,246,0.7); }
+    }
+    @keyframes rsFnGlow {
+      0%   { box-shadow: 0 0 8px 2px rgba(59,130,246,0.4); }
+      50%  { box-shadow: 0 0 16px 4px rgba(99,102,241,0.55); }
+      100% { box-shadow: 0 0 8px 2px rgba(59,130,246,0.4); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 export function FunctionNode({ data, selected }: FunctionNodeProps) {
   const status: FnStatus = data.meta?.fn_status ?? 'idle';
   const statusColor = STATUS_COLORS[status];
   const tool = data.meta?.ai_tool;
   const icon = tool ? (TOOL_ICONS[tool] ?? '⚡') : '⚡';
+  const isRunning = status === 'running';
+
+  // Inject CSS keyframes on first render
+  React.useEffect(() => { ensureFnAnimations(); }, []);
 
   return (
     <FullFunctionNode
@@ -85,6 +111,7 @@ export function FunctionNode({ data, selected }: FunctionNodeProps) {
       status={status}
       statusColor={statusColor}
       icon={icon}
+      isRunning={isRunning}
     />
   );
 }
@@ -95,12 +122,14 @@ function FullFunctionNode({
   status,
   statusColor,
   icon,
+  isRunning,
 }: {
   data: CanvasNode;
   selected: boolean;
   status: FnStatus;
   statusColor: string;
   icon: string;
+  isRunning: boolean;
 }) {
   const { updateNodeParamValue, updateInputOrder, getUpstreamNodes, modelCache, settings, toolDefs } = useCanvasStore();
 
@@ -265,9 +294,46 @@ function FullFunctionNode({
     dragSourceId.current = null;
   };
 
+  // High-cost tools get a 2s delay before API call
+  const HIGH_COST_API_TYPES = new Set(['image_generation', 'image_edit', 'video_generation']);
+  const isHighCost = !!(toolDef?.apiType && HIGH_COST_API_TYPES.has(toolDef.apiType));
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleRun = () => {
-    postMessage({ type: 'runFunction', nodeId: data.id });
+    if (isHighCost) {
+      // Start 2s countdown before actually calling API
+      setCountdown(2);
+      let remaining = 2;
+      countdownTimer.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          if (countdownTimer.current) { clearInterval(countdownTimer.current); countdownTimer.current = null; }
+          setCountdown(null);
+          postMessage({ type: 'runFunction', nodeId: data.id });
+        } else {
+          setCountdown(remaining);
+        }
+      }, 1000);
+    } else {
+      postMessage({ type: 'runFunction', nodeId: data.id });
+    }
   };
+
+  const handleCancel = () => {
+    // Cancel countdown if still waiting
+    if (countdownTimer.current) {
+      clearInterval(countdownTimer.current);
+      countdownTimer.current = null;
+      setCountdown(null);
+      return;
+    }
+    // Cancel running task
+    postMessage({ type: 'cancelFunction', nodeId: data.id });
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => () => { if (countdownTimer.current) clearInterval(countdownTimer.current); }, []);
 
   const selectStyle: React.CSSProperties = {
     flex: 1,
@@ -300,13 +366,18 @@ function FullFunctionNode({
       style={{
       width,
       background: 'var(--vscode-editor-background)',
-      border: `2px solid ${selected ? statusColor : 'var(--vscode-panel-border)'}`,
+      border: isRunning
+        ? '2px solid rgba(59,130,246,0.7)'
+        : `2px solid ${selected ? statusColor : 'var(--vscode-panel-border)'}`,
       borderRadius: 8,
       padding: 10,
       display: 'flex',
       flexDirection: 'column',
       gap: 8,
-      boxShadow: status === 'running' ? `0 0 12px ${statusColor}60` : undefined,
+      boxShadow: isRunning ? '0 0 8px 2px rgba(59,130,246,0.4)' : undefined,
+      animation: isRunning
+        ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
+        : undefined,
     }}>
 
       {/* Header */}
@@ -627,27 +698,44 @@ function FullFunctionNode({
         </>
       )}
 
-      {/* Run button */}
-      <div style={{ marginTop: 4 }}>
-        <button
-          onClick={handleRun}
-          disabled={status === 'running'}
-          style={{
-            width: '100%',
-            background: status === 'running'
-              ? 'var(--vscode-button-secondaryBackground)'
-              : 'var(--vscode-button-background)',
-            color: 'var(--vscode-button-foreground)',
-            border: 'none',
-            borderRadius: 4,
-            padding: '6px 12px',
-            cursor: status === 'running' ? 'not-allowed' : 'pointer',
-            fontSize: 12,
-            fontWeight: 600,
-          }}
-        >
-          {status === 'running' ? '⏳ 运行中…' : '▶ 运行'}
-        </button>
+      {/* Run / Stop button */}
+      <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
+        {status === 'running' || countdown !== null ? (
+          <button
+            onClick={handleCancel}
+            style={{
+              flex: 1,
+              background: 'var(--vscode-inputValidation-errorBackground, #5a1d1d)',
+              color: 'var(--vscode-inputValidation-errorForeground, #f48771)',
+              border: '1px solid var(--vscode-inputValidation-errorBorder, #be1100)',
+              borderRadius: 4,
+              padding: '6px 12px',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            {countdown !== null ? `取消 (${countdown}s)` : '⏹ 停止'}
+          </button>
+        ) : (
+          <button
+            onClick={handleRun}
+            disabled={status === 'running'}
+            style={{
+              flex: 1,
+              background: 'var(--vscode-button-background)',
+              color: 'var(--vscode-button-foreground)',
+              border: 'none',
+              borderRadius: 4,
+              padding: '6px 12px',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            ▶ 运行
+          </button>
+        )}
       </div>
 
       {/* Handles */}

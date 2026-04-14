@@ -3,7 +3,7 @@ import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode } from '../core/canvas-model';
 import { readCanvas, writeCanvas, setDataNodeRegistry, ensureAiOutputDir, toRelPath } from '../core/storage';
-import { runFunctionNode, runBatchFunctionNode, cancelRun, setToolRegistry } from '../ai/function-runner';
+import { runFunctionNode, runBatchFunctionNode, cancelRun, cancelRunByNodeId, setToolRegistry } from '../ai/function-runner';
 import { getProviderById } from '../ai/provider';
 import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
@@ -658,6 +658,15 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'cancelAI': {
         const runId = msg['runId'] as string;
         if (runId) { cancelRun(runId); }
+        break;
+      }
+
+      case 'cancelFunction': {
+        const nodeId = msg['nodeId'] as string;
+        if (nodeId) {
+          cancelRunByNodeId(nodeId);
+          webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+        }
         break;
       }
 

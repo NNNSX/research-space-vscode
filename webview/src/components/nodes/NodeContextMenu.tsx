@@ -12,11 +12,10 @@ interface NodeContextMenuProps {
   onClose: () => void;
   filePath?: string;      // D2: open file item (data nodes)
   canDuplicate?: boolean; // D2: copy node (data + function nodes)
-  canViewHistory?: boolean; // C3: view output history (ai_output nodes)
 }
 
-export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, filePath, canDuplicate, canViewHistory }: NodeContextMenuProps) {
-  const { onNodesChange, onEdgesChange, edges, duplicateNode, setOutputHistory } = useCanvasStore();
+export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, filePath, canDuplicate }: NodeContextMenuProps) {
+  const { onNodesChange, onEdgesChange, edges, duplicateNode } = useCanvasStore();
   const [renaming, setRenaming] = React.useState(false);
   const [draft, setDraft] = React.useState(nodeTitle);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -88,14 +87,6 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
     duplicateNode(nodeId);
   };
 
-  const handleViewHistory = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onClose();
-    if (filePath) {
-      postMessage({ type: 'requestOutputHistory', nodeId, filePath });
-    }
-  };
-
   // Which nodes support renaming: note (file rename) and function (title rename)
   const canRename = nodeType === 'note' || nodeType === 'function';
 
@@ -140,9 +131,6 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
       )}
       {canRename && (
         <MenuItem label="✏️ 重命名" onClick={handleRenameClick} />
-      )}
-      {canViewHistory && filePath && (
-        <MenuItem label="🕓 查看生成历史" onClick={handleViewHistory} />
       )}
       {canDuplicate && (
         <MenuItem label="⧉ 复制节点" onClick={handleDuplicate} />

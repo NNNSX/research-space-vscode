@@ -82,7 +82,7 @@ function SummaryOverlay({ group }: SummaryOverlayProps) {
     window.addEventListener('mouseup', handleMouseUp);
   }, [id, screenToFlowPosition, moveSummary]);
 
-  const HEADER_H = 26;
+  const HEADER_H = 32;
 
   return (
     <>
@@ -105,21 +105,21 @@ function SummaryOverlay({ group }: SummaryOverlayProps) {
             display: 'flex',
             alignItems: 'center',
             gap: 6,
-            padding: '0 8px',
+            padding: '0 10px',
             background: groupColor,
             color: '#fff',
             borderRadius: '6px 6px 0 0',
-            fontSize: 11,
-            fontWeight: 600,
+            fontSize: 14,
+            fontWeight: 700,
             pointerEvents: 'auto',
             cursor: dragging ? 'grabbing' : 'grab',
             userSelect: 'none',
           }}
         >
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textShadow: '0 1px 3px rgba(0,0,0,0.6), 0 0 6px rgba(0,0,0,0.3)' }}>
             {name}
           </span>
-          <span style={{ fontSize: 10, opacity: 0.8, textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
+          <span style={{ fontSize: 11, fontWeight: 600, textShadow: '0 1px 3px rgba(0,0,0,0.6)', opacity: 0.9 }}>
             {nodeIds.length} 节点
           </span>
           {/* Edit button */}
@@ -130,11 +130,12 @@ function SummaryOverlay({ group }: SummaryOverlayProps) {
               color: '#fff',
               border: 'none',
               cursor: 'pointer',
-              fontSize: 11,
+              fontSize: 13,
               padding: '0 2px',
               lineHeight: 1,
-              opacity: 0.7,
+              opacity: 0.8,
               pointerEvents: 'auto',
+              textShadow: '0 1px 2px rgba(0,0,0,0.4)',
             }}
             title="编辑归纳"
           >
@@ -148,11 +149,12 @@ function SummaryOverlay({ group }: SummaryOverlayProps) {
               color: '#fff',
               border: 'none',
               cursor: 'pointer',
-              fontSize: 13,
+              fontSize: 15,
               padding: '0 2px',
               lineHeight: 1,
-              opacity: 0.7,
+              opacity: 0.8,
               pointerEvents: 'auto',
+              textShadow: '0 1px 2px rgba(0,0,0,0.4)',
             }}
             title="删除归纳"
           >
@@ -165,7 +167,7 @@ function SummaryOverlay({ group }: SummaryOverlayProps) {
           style={{
             width: '100%',
             height: bounds.height,
-            border: `2px dashed ${groupColor}`,
+            border: `2.5px dashed ${groupColor}`,
             borderRadius: '0 0 6px 6px',
           }}
         />
