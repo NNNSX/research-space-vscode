@@ -1,0 +1,11 @@
+{
+  "id": "note",
+  "label": "Note",
+  "icon": "📝",
+  "color": "var(--vscode-terminal-ansiYellow)",
+  "extensions": ["md", "txt"],
+  "previewType": "markdown",
+  "watchContent": true,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

@@ -1,0 +1,221 @@
+# Research Space
+
+在 VSCode 里用可视化画布管理研究工作流，AI 一键分析文献、笔记和代码。
+
+---
+
+## 核心理念
+
+**工作区即研究空间，文件即素材，画布是工作流编排工具。**
+
+打开任意文件夹，该文件夹就是你的研究工作区。把 PDF、图片、代码、笔记拖入画布成为数据节点，从工具箱拉出 AI 功能节点连线，点击运行，AI 自动处理并在画布上生成输出节点。
+
+插件不改变你的文件结构，不引入额外概念，最大程度复用 VSCode 原生能力。
+
+---
+
+## 快速上手
+
+1. 打开任意文件夹（`File > Open Folder`）
+2. 点击左侧活动栏的 **Research Space** 图标，点击 **+ New Canvas** 新建画布
+3. 在 Explorer 中右键任意 PDF / Markdown / 代码文件，选择 **Add to Canvas**
+4. 从左侧工具箱**拖出**一个 AI 功能节点到画布（拖至画布任意位置落下，经暂存架中转）
+5. 将数据节点连线到功能节点（从数据节点右侧圆点拖向功能节点左侧圆点）
+6. 点击功能节点的 **▶ Run** 按钮，等待 AI 生成输出
+
+---
+
+## 节点类型
+
+### 数据节点
+
+| 图标 | 类型 | 来源文件 | 双击行为 |
+|------|------|---------|---------|
+| 📄 | Paper | `.pdf` | 系统 PDF 阅读器 |
+| 📝 | Note | `.md` `.txt` | VSCode 编辑器 |
+| `</>` | Code | `.py` `.js` `.ts` 等 | VSCode 编辑器（语法高亮） |
+| 🖼 | Image | `.png` `.jpg` `.gif` `.webp` | VSCode 图片预览 |
+| 🤖 | AI Output | `.md`（在 `outputs/`） | VSCode 编辑器 |
+| 🎵 | Audio | `.mp3` `.wav` 等（v0.5.0） | 系统播放器 |
+| 🎬 | Video | `.mp4` `.mov`（v0.5.0） | 系统播放器 |
+| 🧪 | Experiment Log | 无文件（数据存于 meta） | 内联编辑 |
+| ✅ | Task | 无文件（数据存于 meta） | 内联编辑 |
+
+### 功能节点（AI 工具）
+
+| 工具 | 说明 | 主要参数 |
+|------|------|---------|
+| **Summarize** 摘要 | 生成结构化摘要，支持图片多模态 | 语言、风格、最大字数 |
+| **Polish** 润色 | 对文本进行学术润色 | 力度（轻/中/重）、语言 |
+| **Review** 审稿 | 模拟审稿人视角输出评分和意见 | 严格度、语言 |
+| **Translate** 翻译 | 学术翻译，附专业术语对照 | 源语言、目标语言、领域 |
+| **Draw** 绘图 | 根据描述生成 Mermaid 图表 | 图表类型 |
+| **RAG Chat** 检索问答 | 基于工作区文件回答问题，引用来源 | 问题、检索数量 |
+| **Chat** 自由对话 | 自定义提示词，`@ref` 引用文件 | 自定义提示词 |
+| **图像生成** ✨ | Gemini 图像生成（需 AIHubMix Key） | 模型（gemini-3.1-flash / gemini-3-pro）、尺寸、质量 |
+| **文字转语音** ✨ | 将文本转换为音频（需 AIHubMix Key） | 模型（gpt-4o-mini-tts / tts-1）、声音、格式 |
+| **语音转文字** ✨ | Whisper 音频转录（需 AIHubMix Key） | 模型（whisper-large-v3-turbo / v3）、语言、任务 |
+| **视频生成** ✨ | Doubao Seedance 文字生成视频（需 AIHubMix Key） | 模型（seedance-2.0 / seedance-2.0-fast）、时长、分辨率 |
+| **图像编辑** ✨ | Gemini 图像编辑（需连接图片节点 + 指令）| 模型、编辑指令、尺寸 |
+| **图生视频** ✨ | Doubao Seedance 图像转视频（需连接图片节点，可选运动描述）| 模型、时长、分辨率、运动描述 |
+
+---
+
+## AI Provider 配置
+
+插件支持三种 AI Provider，按优先级自动降级：
+
+**GitHub Copilot**（零配置，推荐）
+- 需要 VSCode 中已安装并登录 GitHub Copilot
+- 在功能节点上可选择具体模型（GPT-4o、Claude Sonnet 等）
+
+**Anthropic**（需 API Key）
+- 在 VSCode 设置中填入 `researchSpace.ai.anthropicApiKey`
+- 支持 claude-opus-4-5 / claude-sonnet-4-5 / claude-haiku-4-5
+- 模型列表自动从 API 拉取
+
+**Ollama**（本地模型，完全离线）
+- 需本地运行 [Ollama](https://ollama.com)，默认地址 `http://localhost:11434`
+- 可用模型列表自动从本地实例同步
+- 图片输入需要多模态模型（如 qwen2-vl、llava、gemma3、llama3.2-vision）；非视觉模型会弹出警告提示
+
+### Per-node 覆盖
+
+每个功能节点可独立设置：
+- **Provider**：覆盖全局设置，指定节点使用的 AI 提供商
+- **Model**：在所选 Provider 下选择具体模型
+- **System Prompt**：查看并修改该工具的系统提示词，支持 Reset 恢复默认
+
+---
+
+## 工具栏说明
+
+| 按钮 | 功能 |
+|------|------|
+| **+ Files** | 从工作区选择文件，添加到**暂存架** |
+| **+ Note** | 新建 Markdown 笔记，添加到**暂存架**（自动防重名：若文件已存在自动追加数字后缀） |
+| **🧪 实验** | 新建实验记录节点到暂存架（内联编辑状态、日期、参数、结果） |
+| **✅ 任务** | 新建任务清单节点到暂存架（内联 checkbox 列表 + 进度条） |
+| **⚡ AI Tools** | 展开/收起左侧工具箱；工具支持拖拽添加，也可点击「**+ 新建节点**」通过可视化表单创建功能节点 |
+| **⚙ Settings** | 打开内嵌设置面板，配置 AI Provider |
+
+**暂存架**：悬浮在画布右下角，新增节点先汇聚于此，从暂存架拖动节点到画布中精确摆放。暂存架可自由拖动位置。
+
+**MiniMap**：右下角小地图支持拖动和缩放，可快速定位画布任意区域。
+
+**设置面板**：右侧滑出，按 Provider 分组展示配置项（API Key、Default Model、Base URL），输入后实时保存到 VSCode 用户设置，无需重启。Copilot 模型区分标准/Pro，功能节点模型下拉标注 `(Pro)` 提示。
+
+**右键菜单**：右键任意节点（数据/功能）弹出上下文菜单，支持**删除节点**；笔记节点额外支持**重命名**（同步重命名实体文件，自动检测命名冲突）。
+
+键盘快捷键：选中节点后按 `Delete` 或 `Backspace` 删除。
+
+---
+
+**侧边栏（ResearchSpace 面板）**
+
+点击左侧活动栏的 Research Space 图标，面板中以树形列出所有画布及其节点。
+
+**右键菜单：**
+- **数据节点**：Open File（打开关联文件）、Remove from Canvas（从画布移除，不删文件）
+- **功能节点**：Run（运行）、Remove from Canvas
+- **画布**：Open Canvas（打开画布编辑器）、Delete Canvas（删除 .rsws 文件）
+
+---
+
+## 导出
+
+通过命令面板（`Ctrl+Shift+P`）执行：
+
+- **Research Space: Export as Markdown** — 将画布中的数据节点内容合并导出为单个 Markdown 文件
+- **Research Space: Export as JSON** — 导出完整画布数据（`.rsws` 格式的 JSON）
+
+---
+
+## 配置项
+
+在 VSCode 设置中搜索 `researchSpace` 查看所有配置：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `researchSpace.ai.provider` | `copilot` | 全局 AI Provider（copilot / anthropic / ollama） |
+| `researchSpace.ai.anthropicApiKey` | — | Anthropic API Key |
+| `researchSpace.ai.anthropicModel` | `claude-sonnet-4-5` | Anthropic 全局模型 |
+| `researchSpace.ai.ollamaBaseUrl` | `http://localhost:11434` | Ollama 服务地址 |
+| `researchSpace.ai.ollamaModel` | `llama3.2` | Ollama 全局模型 |
+| `researchSpace.ai.aiHubMixApiKey` | — | AIHubMix API Key（多模态工具专用：图像/TTS/STT/视频） |
+| `researchSpace.ai.aiHubMixImageGenModel` | — | 图像生成默认模型（空 = gemini-3.1-flash-image-preview） |
+| `researchSpace.ai.aiHubMixImageEditModel` | — | 图像编辑默认模型（空 = gemini-3.1-flash-image-preview） |
+| `researchSpace.ai.aiHubMixTtsModel` | — | TTS 默认模型（空 = gpt-4o-mini-tts） |
+| `researchSpace.ai.aiHubMixSttModel` | — | STT 默认模型（空 = whisper-large-v3-turbo） |
+| `researchSpace.ai.aiHubMixVideoGenModel` | — | 视频生成默认模型（空 = doubao-seedance-2-0-260128） |
+| `researchSpace.canvas.autoSave` | `true` | 画布变更后自动保存 |
+| `researchSpace.canvas.maxUndoSteps` | `50` | 最大撤销步数 |
+| `researchSpace.pet.enabled` | `false` | 启用宠物伴侣（浮动窗口） |
+| `researchSpace.pet.type` | `dog` | 宠物类型（dog / fox / rubber-duck / turtle / crab / clippy / cockatiel） |
+| `researchSpace.pet.name` | — | 自定义宠物名字（空 = 使用默认名） |
+| `researchSpace.pet.restReminder` | `45` | 休息提醒间隔（分钟，0 = 关闭） |
+| `researchSpace.pet.aiSuggestionInterval` | `15` | AI 建议最小间隔（分钟，0 = 关闭） |
+| `researchSpace.pet.groundTheme` | `forest` | 漫游窗口场景主题（none / forest / castle / autumn / beach / winter） |
+| `researchSpace.pet.aiProvider` | `auto` | 宠物 AI 服务商（auto = 跟随全局） |
+| `researchSpace.pet.aiModel` | — | 宠物 AI 模型（空 = 使用服务商默认） |
+
+---
+
+## 文件结构
+
+每个画布拥有独立的工作空间文件夹，实现自然隔离：
+
+```
+my-workspace/
+├── papers/                        ← 你的研究文件
+│   └── attention.pdf
+├── MyResearch/                    ← 画布工作空间（自动创建）
+│   ├── MyResearch.rsws            ← 画布文件
+│   ├── notes/                     ← 笔记、实验记录、任务清单
+│   │   ├── reading-notes.md
+│   │   └── experiment-1.md
+│   ├── outputs/                   ← AI 生成的输出文件
+│   │   └── summary_0414_1430.md
+│   ├── tools/                     ← 自定义功能节点
+│   │   └── my-tool.json
+│   └── pet/                       ← 宠物状态与记忆
+│       ├── state.json
+│       └── memory.md
+├── AnotherProject/                ← 另一个画布，完全隔离
+│   ├── AnotherProject.rsws
+│   ├── notes/
+│   ├── outputs/
+│   └── ...
+```
+
+---
+
+## 版本历史
+
+当前版本：**v1.1.3**（2026-04-14）
+
+完整版本历史请查看 [CHANGELOG](CHANGELOG.md)。
+
+---
+
+## 致谢
+
+Research Space 的开发离不开以下优秀的开源项目，在此表示衷心感谢：
+
+| 项目 | 用途 | 许可证 |
+|------|------|--------|
+| [React](https://react.dev) | Webview UI 框架 | MIT |
+| [React Flow](https://reactflow.dev) (@xyflow/react) | 画布节点/边/视口渲染引擎 | MIT |
+| [Zustand](https://github.com/pmndrs/zustand) | 轻量状态管理 | MIT |
+| [Vite](https://vite.dev) | Webview 前端构建工具 | MIT |
+| [esbuild](https://esbuild.github.io) | Extension Host 打包工具 | MIT |
+| [pdf-parse](https://gitlab.com/nickerso/pdfjs) | PDF 文本提取 | MIT |
+| [pdfjs-dist](https://github.com/nickerso/pdfjs-dist) | PDF 渲染预览 | Apache-2.0 |
+| [Mermaid](https://mermaid.js.org) | 图表/流程图渲染 | MIT |
+| [react-markdown](https://github.com/remarkjs/react-markdown) + [remark-gfm](https://github.com/remarkjs/remark-gfm) | Markdown 渲染 | MIT |
+| [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript) | Anthropic API 接入 | MIT |
+| [uuid](https://github.com/uuidjs/uuid) | 唯一 ID 生成 | MIT |
+| [vscode-pets](https://github.com/tonybaloney/vscode-pets) | 宠物像素 GIF 动画素材 | MIT |
+| [TypeScript](https://www.typescriptlang.org) | 类型安全的 JavaScript 超集 | Apache-2.0 |
+
+同时感谢 [VSCode Extension API](https://code.visualstudio.com/api)、[GitHub Copilot](https://github.com/features/copilot) 和 [Ollama](https://ollama.com) 为本插件提供了强大的运行平台与 AI 能力支持。

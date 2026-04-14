@@ -1,0 +1,14 @@
+{
+  "id": "chat",
+  "name": "Chat 对话",
+  "description": "自由编写 Prompt，用 @文件名 引用已连接的文件",
+  "icon": "comment-discussion",
+  "supportsImages": true,
+  "outputNodeType": "ai_output",
+  "params": [],
+  "paramMaps": {},
+  "systemPromptTemplate": "You are a helpful research assistant. When the user references a file with @filename, focus your answer on the content of that file. If multiple files are referenced, address each one as instructed. Be concise and precise.",
+  "postProcessType": null,
+  "uiMode": "chat",
+  "category": "general"
+}

@@ -1,0 +1,346 @@
+import React, { useState } from 'react';
+import { useCanvasStore } from '../../stores/canvas-store';
+import { postMessage } from '../../bridge';
+
+export function Toolbar() {
+  const {
+    setAiToolsPanelOpen, aiToolsPanelOpen,
+    settingsPanelOpen, setSettingsPanelOpen,
+    selectionMode, setSelectionMode,
+    undo, redo, undoStack, redoStack,
+  } = useCanvasStore();
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  const handleAddFiles = () => {
+    postMessage({ type: 'addFiles' });
+  };
+
+  const handleNewNote = () => {
+    postMessage({ type: 'newNote', title: '' });
+  };
+
+  return (
+    <>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 12px',
+        background: 'var(--vscode-titleBar-activeBackground)',
+        borderBottom: '1px solid var(--vscode-panel-border)',
+        minHeight: 40,
+        flexShrink: 0,
+        flexWrap: 'wrap',
+      }}>
+        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--vscode-titleBar-activeForeground)' }}>
+          Research Space
+        </span>
+
+        <div style={{ width: 1, height: 18, background: 'var(--vscode-panel-border)', margin: '0 4px' }} />
+
+        <ToolbarButton onClick={undo} title="撤销 (Ctrl+Z)" disabled={undoStack.length === 0}>
+          ↩
+        </ToolbarButton>
+        <ToolbarButton onClick={redo} title="重做 (Ctrl+Shift+Z)" disabled={redoStack.length === 0}>
+          ↪
+        </ToolbarButton>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+        <ToolbarButton onClick={handleAddFiles} title="从工作区添加文件">
+          + 📄 文件
+        </ToolbarButton>
+
+        <ToolbarButton onClick={handleNewNote} title="新建 Markdown 笔记">
+          + 📝 笔记
+        </ToolbarButton>
+
+        <ToolbarButton onClick={() => {
+          postMessage({ type: 'newExperimentLog', title: '' });
+        }} title="新建实验记录节点">
+          + 🧪 实验
+        </ToolbarButton>
+
+        <ToolbarButton onClick={() => {
+          postMessage({ type: 'newTask', title: '' });
+        }} title="新建任务清单节点">
+          + ✅ 任务
+        </ToolbarButton>
+
+        <ToolbarButton
+          onClick={() => setSelectionMode(!selectionMode)}
+          title={selectionMode ? '退出选区模式（拖拽恢复为平移画布）' : '进入选区模式（拖拽画布变为框选节点）'}
+          active={selectionMode}
+        >
+          ⬚ 选区
+        </ToolbarButton>
+
+        <ToolbarButton
+          onClick={() => setAiToolsPanelOpen(!aiToolsPanelOpen)}
+          title="AI 工具"
+          active={aiToolsPanelOpen}
+        >
+          ⚡ AI 工具
+        </ToolbarButton>
+
+        <ToolbarButton
+          onClick={() => setSettingsPanelOpen(!settingsPanelOpen)}
+          title="设置"
+          active={settingsPanelOpen}
+        >
+          ⚙ 设置
+        </ToolbarButton>
+
+        <ToolbarButton
+          onClick={() => setHelpOpen(true)}
+          title="使用指南"
+        >
+          ? 帮助
+        </ToolbarButton>
+        </div>
+      </div>
+
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+    </>
+  );
+}
+
+function ToolbarButton({
+  children, onClick, title, active, disabled,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title?: string;
+  active?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      style={{
+        background: active
+          ? 'var(--vscode-button-background)'
+          : 'var(--vscode-button-secondaryBackground)',
+        color: active
+          ? 'var(--vscode-button-foreground)'
+          : 'var(--vscode-button-secondaryForeground)',
+        border: `1px solid var(--vscode-button-border, transparent)`,
+        borderRadius: 4,
+        padding: '3px 10px',
+        cursor: disabled ? 'default' : 'pointer',
+        fontSize: 12,
+        fontWeight: 500,
+        opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Help Modal ────────────────────────────────────────────────────────────────
+
+const STEPS: { icon: string; title: string; desc: string }[] = [
+  {
+    icon: '📂',
+    title: '1. 打开文件夹',
+    desc: '通过「文件 > 打开文件夹」将任意文件夹作为研究工作区打开，文件夹结构保持不变。',
+  },
+  {
+    icon: '🖼',
+    title: '2. 创建画布',
+    desc: '点击活动栏中的 Research Space 图标，再点击「+ 画布」。工作区根目录会自动创建一个 .rsws 文件。',
+  },
+  {
+    icon: '➕',
+    title: '3. 添加素材到画布',
+    desc: '在资源管理器中右键任意文件，选择「添加到画布」。文件将出现在暂存架中，拖到画布即可放置。支持 PDF、Markdown、代码、图片、音频、视频、CSV/TSV 等格式。也可通过工具栏「+ 文件」「+ 笔记」「🧪 实验」「✅ 任务」按钮快速添加。也可从资源管理器拖拽文件到画布上方，按住 Shift 后松手直接放入。',
+  },
+  {
+    icon: '⚡',
+    title: '4. 添加 AI 工具节点',
+    desc: '点击工具栏「⚡ AI 工具」打开左侧工具箱，将工具拖到画布。工具按「文本处理 / 研究辅助 / 多模态创作 / 项目管理 / 通用」分组，支持搜索过滤。还可通过「↑ 导入工具」导入自定义工具 JSON。',
+  },
+  {
+    icon: '🔗',
+    title: '5. 连线并运行',
+    desc: '从数据节点右侧连接点拖到功能节点左侧连接点。若工具定义了输入槽（slots），连线时会弹出角色选择。点击功能节点的「▶ 运行」，AI 生成的输出将作为新节点出现在画布上。',
+  },
+  {
+    icon: '🤖',
+    title: 'AI 服务商',
+    desc: '支持 GitHub Copilot（零配置推荐）、Anthropic Claude、Ollama（本地离线）及自定义 OpenAI 兼容服务商（如 AIHubMix，支持图像分析）。可在「⚙ 设置」面板全局配置，也可在每个功能节点上单独覆盖。',
+  },
+  {
+    icon: '🎨',
+    title: '多模态工具',
+    desc: '图像生成 / 图像编辑 / 文字转语音 / 语音转文字 / 视频生成 / 图生视频 — 通过 AIHubMix API 调用，需在设置中配置 AIHubMix API Key。功能节点上会显示蓝色输入提示。',
+  },
+  {
+    icon: '✏️',
+    title: '系统 Prompt 自定义',
+    desc: '每个 LLM 功能节点可展开「编辑系统 Prompt」面板查看并覆盖默认提示词。修改后标签变黄提示已启用，可随时「恢复默认」。Chat 工具支持自由 Prompt 和 @文件 引用。',
+  },
+  {
+    icon: '📦',
+    title: '选区与归纳',
+    desc: '点击工具栏「⬚ 选区」进入框选模式，拖拽画布框选多个节点。选中后弹出浮动工具栏：「移动」整体拖动，「归纳」将节点包裹在命名矩形框中（支持选色和编辑名称/颜色），归纳框标题栏可拖拽整体移动。',
+  },
+  {
+    icon: '↩',
+    title: '撤销与重做',
+    desc: 'Ctrl+Z（Mac: Cmd+Z）撤销，Ctrl+Shift+Z 重做。覆盖节点增删、边操作、拖拽移动、连线、归纳等操作，最多保留 50 步。',
+  },
+  {
+    icon: '🖱',
+    title: '右键菜单与快捷键',
+    desc: '右键任意节点：删除、复制；笔记节点可重命名（同步文件）。选中节点后 Delete / Backspace 快速删除。数据节点标题栏「预览」按钮在 VSCode 原生查看器中打开文件。',
+  },
+  {
+    icon: '🔧',
+    title: '自定义工具',
+    desc: '在 AI 工具面板底部点击「✨ AI 编排提示词」获取工具定义 JSON 规范。将其粘贴到 AI 助手，描述功能即可生成自定义工具 JSON，通过「↑ 导入工具」使用。',
+  },
+  {
+    icon: '🐾',
+    title: '宠物伴侣',
+    desc: '在设置中开启宠物伴侣，画布中会出现可拖拽的浮动宠物窗口。7 种像素宠物按等级解锁，支持成长、心情、对话（AI 驱动）、休息提醒和每日总结。宠物可感知画布操作并即时反应。',
+  },
+  {
+    icon: '📤',
+    title: '导出',
+    desc: '通过命令面板（Ctrl+Shift+P）执行「Export as Markdown」或「Export as JSON」，将画布内容导出为文件。',
+  },
+];
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    // Backdrop
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+      }}
+    >
+      {/* Panel */}
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--vscode-editor-background)',
+          border: '1px solid var(--vscode-panel-border)',
+          borderRadius: 10,
+          width: 560,
+          maxWidth: 'calc(100vw - 48px)',
+          maxHeight: 'calc(100vh - 80px)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '14px 18px',
+          borderBottom: '1px solid var(--vscode-panel-border)',
+          flexShrink: 0,
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>
+            Research Space — 快速入门
+          </span>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--vscode-descriptionForeground)',
+              fontSize: 18,
+              cursor: 'pointer',
+              padding: '0 4px',
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Steps */}
+        <div style={{ overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {STEPS.map((step, i) => (
+            <div key={i} style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div style={{
+                fontSize: 22,
+                width: 36,
+                height: 36,
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--vscode-badge-background)',
+                borderRadius: 8,
+              }}>
+                {step.icon}
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>{step.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.6 }}>
+                  {step.desc}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Tip box */}
+          <div style={{
+            marginTop: 4,
+            padding: '10px 14px',
+            background: 'var(--vscode-textBlockQuote-background, var(--vscode-input-background))',
+            borderLeft: '3px solid var(--vscode-terminal-ansiBlue)',
+            borderRadius: '0 6px 6px 0',
+            fontSize: 12,
+            color: 'var(--vscode-descriptionForeground)',
+            lineHeight: 1.6,
+          }}>
+            <strong style={{ color: 'var(--vscode-foreground)' }}>提示：</strong>{' '}
+            右下角 MiniMap 支持拖拽导航。暂存架悬浮在右下角，新增节点先汇聚于此，拖出即可精确放置。
+            侧边栏 Research Space 面板以树形展示所有画布及节点，右键可操作。
+            CSV/TSV 文件以表格样式展示。工具栏按钮会根据窗口宽度自动换行。
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: '10px 18px',
+          borderTop: '1px solid var(--vscode-panel-border)',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'var(--vscode-button-background)',
+              color: 'var(--vscode-button-foreground)',
+              border: 'none',
+              borderRadius: 4,
+              padding: '5px 16px',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            Got it — 知道了
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

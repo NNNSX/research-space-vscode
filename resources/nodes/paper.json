@@ -1,0 +1,11 @@
+{
+  "id": "paper",
+  "label": "Paper",
+  "icon": "📄",
+  "color": "var(--vscode-terminal-ansiRed)",
+  "extensions": ["pdf"],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "pdf",
+  "supportsMultimodal": false
+}

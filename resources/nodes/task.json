@@ -1,0 +1,11 @@
+{
+  "id": "task",
+  "label": "任务清单",
+  "icon": "✅",
+  "color": "var(--vscode-terminal-ansiGreen)",
+  "extensions": [],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

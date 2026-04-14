@@ -1,0 +1,296 @@
+{
+  "name": "research-space",
+  "publisher": "research-space-dev",
+  "displayName": "Research Space",
+  "description": "Visual canvas for managing research workflows with AI-powered analysis",
+  "version": "1.1.3",
+  "icon": "resources/icon.png",
+  "engines": { "vscode": "^1.93.0" },
+  "categories": ["Other"],
+  "activationEvents": [
+    "workspaceContains:**/*.rsws",
+    "onView:researchSpace.explorer"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "researchSpace.canvas",
+        "displayName": "Research Canvas",
+        "selector": [{ "filenamePattern": "*.rsws" }],
+        "priority": "default"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "researchSpace",
+          "title": "Research Space",
+          "icon": "resources/icon-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "researchSpace": [
+        {
+          "id": "researchSpace.explorer",
+          "name": "Canvases"
+        }
+      ]
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "researchSpace.addToCanvas",
+          "group": "researchSpace@1",
+          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|txt|py|js|ts|tsx|png|jpg|jpeg|gif|webp|rs|go|java|c|cpp|cs|rb|swift|kt|r)$/"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "researchSpace.tree.openFile",
+          "when": "view == researchSpace.explorer && viewItem =~ /^node-(paper|note|code|image|ai_output)/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "researchSpace.tree.removeFromCanvas",
+          "when": "view == researchSpace.explorer && viewItem =~ /^node-/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "researchSpace.tree.runNode",
+          "when": "view == researchSpace.explorer && viewItem == node-function",
+          "group": "navigation@1"
+        },
+        {
+          "command": "researchSpace.tree.openCanvas",
+          "when": "view == researchSpace.explorer && viewItem == canvas",
+          "group": "navigation@1"
+        },
+        {
+          "command": "researchSpace.tree.deleteCanvas",
+          "when": "view == researchSpace.explorer && viewItem == canvas",
+          "group": "navigation@3"
+        }
+      ],
+      "commandPalette": [
+        { "command": "researchSpace.addToCanvas", "when": "false" },
+        { "command": "researchSpace.tree.openFile", "when": "false" },
+        { "command": "researchSpace.tree.removeFromCanvas", "when": "false" },
+        { "command": "researchSpace.tree.runNode", "when": "false" },
+        { "command": "researchSpace.tree.openCanvas", "when": "false" },
+        { "command": "researchSpace.tree.deleteCanvas", "when": "false" }
+      ]
+    },
+    "commands": [
+      {
+        "command": "researchSpace.addToCanvas",
+        "title": "Add to Canvas",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.newCanvas",
+        "title": "New Canvas",
+        "category": "Research Space",
+        "icon": "$(add)"
+      },
+      {
+        "command": "researchSpace.newNote",
+        "title": "New Note",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.exportMarkdown",
+        "title": "Export as Markdown",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.exportJson",
+        "title": "Export as JSON",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.openSettings",
+        "title": "Open Settings",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.tree.openFile",
+        "title": "Open File",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.tree.removeFromCanvas",
+        "title": "Remove from Canvas",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.tree.runNode",
+        "title": "Run",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.tree.openCanvas",
+        "title": "Open Canvas",
+        "category": "Research Space"
+      },
+      {
+        "command": "researchSpace.tree.deleteCanvas",
+        "title": "Delete Canvas",
+        "category": "Research Space"
+      }
+    ],
+    "configuration": {
+      "title": "Research Space",
+      "properties": {
+        "researchSpace.ai.provider": {
+          "type": "string",
+          "enum": ["copilot", "anthropic", "ollama"],
+          "default": "copilot",
+          "description": "Preferred AI provider (falls back automatically if unavailable)"
+        },
+        "researchSpace.ai.copilotModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default Copilot model to use (empty = let Copilot choose automatically)"
+        },
+        "researchSpace.ai.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API Key"
+        },
+        "researchSpace.ai.anthropicModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-5",
+          "enum": ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+          "description": "Anthropic model to use"
+        },
+        "researchSpace.ai.ollamaBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama base URL"
+        },
+        "researchSpace.ai.ollamaModel": {
+          "type": "string",
+          "default": "llama3.2",
+          "description": "Ollama model name"
+        },
+        "researchSpace.canvas.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-save canvas on change (debounced 1s)"
+        },
+        "researchSpace.canvas.maxUndoSteps": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum undo history steps"
+        },
+        "researchSpace.ai.customProviders": {
+          "type": "array",
+          "default": [],
+          "description": "Custom OpenAI-compatible AI providers (e.g. AIHubMix). Each item: { id, name, baseUrl, apiKey, defaultModel }",
+          "items": { "type": "object" }
+        },
+        "researchSpace.ai.aiHubMixApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "AIHubMix API Key for multimodal tools (image generation, TTS, STT, video generation)"
+        },
+        "researchSpace.ai.aiHubMixImageGenModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for image generation (empty = use tool default: FLUX.1-Kontext-pro)"
+        },
+        "researchSpace.ai.aiHubMixImageEditModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for image editing (empty = use tool default: FLUX.1-Kontext-pro)"
+        },
+        "researchSpace.ai.aiHubMixTtsModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for text-to-speech (empty = use tool default: tts-1)"
+        },
+        "researchSpace.ai.aiHubMixSttModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for speech-to-text (empty = use tool default: whisper-large-v3)"
+        },
+        "researchSpace.ai.aiHubMixVideoGenModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for video generation (empty = use tool default: wan2.6-t2v-plus)"
+        },
+        "researchSpace.pet.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the pet companion panel at the bottom of the canvas"
+        },
+        "researchSpace.pet.type": {
+          "type": "string",
+          "enum": ["dog", "fox", "rubber-duck", "turtle", "crab", "clippy", "cockatiel"],
+          "default": "dog",
+          "description": "Pet type"
+        },
+        "researchSpace.pet.name": {
+          "type": "string",
+          "default": "",
+          "description": "Custom pet name (empty = use default name for pet type)"
+        },
+        "researchSpace.pet.restReminder": {
+          "type": "number",
+          "default": 45,
+          "description": "Rest reminder interval in minutes (0 = disabled)"
+        },
+        "researchSpace.pet.aiSuggestionInterval": {
+          "type": "number",
+          "default": 15,
+          "description": "AI suggestion minimum interval in minutes (0 = disabled)"
+        },
+        "researchSpace.pet.groundTheme": {
+          "type": "string",
+          "enum": ["none", "forest", "castle", "autumn", "beach", "winter"],
+          "default": "forest",
+          "description": "Pet panel background theme"
+        },
+        "researchSpace.pet.aiProvider": {
+          "type": "string",
+          "default": "auto",
+          "description": "AI provider for pet companion (auto = follow global provider)"
+        },
+        "researchSpace.pet.aiModel": {
+          "type": "string",
+          "default": "",
+          "description": "AI model for pet companion (empty = use provider default)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:ext && npm run build:webview",
+    "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --sourcemap",
+    "build:webview": "cd webview && npm run build",
+    "watch": "concurrently \"npm run watch:ext\" \"npm run watch:webview\"",
+    "watch:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --sourcemap --watch",
+    "watch:webview": "cd webview && npm run dev",
+    "package": "npm run build && vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.93.0",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "concurrently": "^9.0.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "pdf-parse": "^1.1.1",
+    "uuid": "^11.0.0"
+  }
+}

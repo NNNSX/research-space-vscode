@@ -1,0 +1,11 @@
+{
+  "id": "video",
+  "label": "Video",
+  "icon": "🎬",
+  "color": "var(--vscode-terminal-ansiBlue)",
+  "extensions": ["mp4", "mov"],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "video",
+  "supportsMultimodal": false
+}

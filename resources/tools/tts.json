@@ -1,0 +1,54 @@
+{
+  "id": "tts",
+  "name": "文字转语音",
+  "description": "将文本内容转换为语音音频文件（需 AIHubMix Key）",
+  "icon": "unmute",
+  "supportsImages": false,
+  "outputNodeType": "audio",
+  "apiType": "tts",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "模型",
+      "options": [
+        "gpt-4o-mini-tts",
+        "tts-1"
+      ],
+      "default": ""
+    },
+    {
+      "name": "voice",
+      "type": "select",
+      "label": "声音",
+      "options": [
+        "alloy",
+        "coral",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "shimmer"
+      ],
+      "default": "coral"
+    },
+    {
+      "name": "response_format",
+      "type": "select",
+      "label": "输出格式",
+      "options": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac",
+        "wav",
+        "pcm"
+      ],
+      "default": "mp3"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "category": "multimodal"
+}

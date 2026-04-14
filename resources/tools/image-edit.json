@@ -1,0 +1,44 @@
+{
+  "id": "image-edit",
+  "name": "图像编辑",
+  "description": "基于参考图像 + 文字指令编辑图像（Gemini，需连接图像节点）",
+  "icon": "edit",
+  "supportsImages": true,
+  "outputNodeType": "image",
+  "apiType": "image_edit",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "模型",
+      "options": [
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview"
+      ],
+      "default": ""
+    },
+    {
+      "name": "instruction",
+      "type": "text",
+      "label": "编辑指令",
+      "default": ""
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "select",
+      "label": "输出比例",
+      "options": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4"
+      ],
+      "default": "1:1"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "category": "multimodal"
+}

@@ -1,0 +1,51 @@
+{
+  "id": "meeting-transcribe",
+  "name": "会议转写",
+  "description": "将会议录音转录为文字（需 AIHubMix Key），支持说话人标注",
+  "icon": "record",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "apiType": "stt",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "转写模型",
+      "options": [
+        "whisper-large-v3-turbo",
+        "whisper-large-v3"
+      ],
+      "default": ""
+    },
+    {
+      "name": "language",
+      "type": "text",
+      "label": "语言（如 zh、en，留空自动检测）",
+      "default": ""
+    },
+    {
+      "name": "response_format",
+      "type": "select",
+      "label": "输出格式",
+      "options": [
+        "text",
+        "verbose_json",
+        "srt"
+      ],
+      "default": "text"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "会议录音",
+      "description": "需要转写的音频文件（mp3 / wav / m4a 等）",
+      "required": true,
+      "multiple": false
+    }
+  ],
+  "category": "project"
+}

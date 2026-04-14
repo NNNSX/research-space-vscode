@@ -1,0 +1,13 @@
+node_modules/
+webview/node_modules/
+webview/src/
+webview/vite.config.ts
+webview/tsconfig.json
+src/
+tsconfig.json
+.eslintrc*
+*.ts
+*.tsx
+*.map
+!dist/
+!resources/

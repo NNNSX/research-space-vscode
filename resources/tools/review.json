@@ -1,0 +1,63 @@
+{
+  "id": "review",
+  "name": "论文评审",
+  "description": "以同行评审风格对学术论文进行专业点评",
+  "category": "text",
+  "icon": "comment-discussion",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "level",
+      "type": "select",
+      "label": "评审严格度",
+      "options": [
+        "gentle",
+        "standard",
+        "strict"
+      ],
+      "default": "standard"
+    },
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "auto",
+        "zh",
+        "en"
+      ],
+      "default": "auto"
+    }
+  ],
+  "paramMaps": {
+    "level": {
+      "gentle": "encouraging and constructive",
+      "standard": "balanced and professional",
+      "strict": "rigorous and critical, holding to high academic standards"
+    },
+    "language": {
+      "auto": " Write the review in the same language as the paper.",
+      "zh": " Write the entire review in Chinese.",
+      "en": " Write the entire review in English."
+    }
+  },
+  "systemPromptTemplate": "You are an expert academic peer reviewer with a {{level:map}} tone.{{language:map}} Provide a structured review with:\n## Overall Score: [X/10]\n\n## Dimension Scores\n- Novelty: X/10\n- Methodology: X/10\n- Clarity: X/10\n- Impact: X/10\n\n## Major Comments\n[Numbered list of major issues]\n\n## Minor Comments\n[Numbered list of minor issues]\n\n## Summary\n[2-3 sentence overall assessment and recommendation]",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "论文",
+      "description": "需要评审的论文正文",
+      "required": true,
+      "multiple": false
+    },
+    {
+      "name": "reference",
+      "label": "补充材料",
+      "description": "相关背景文献、前稿审稿意见或补充说明，供 AI 参考",
+      "required": false,
+      "multiple": true
+    }
+  ]
+}

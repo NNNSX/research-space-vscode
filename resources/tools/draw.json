@@ -1,0 +1,27 @@
+{
+  "id": "draw",
+  "name": "绘制图表",
+  "description": "根据内容生成 Mermaid 图表（流程图、时序图、思维导图等）",
+  "icon": "graph",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "diagramType",
+      "type": "select",
+      "label": "图表类型",
+      "options": [
+        "flowchart",
+        "sequence",
+        "mindmap",
+        "class",
+        "er",
+        "gantt"
+      ],
+      "default": "flowchart"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "你是 Mermaid 图表专家。根据用户提供的内容，生成一个 {{diagramType}} 类型的 Mermaid 图表。\n\n# 输出格式要求\n\n输出一个 Markdown 文件，图表代码用 ```mermaid 代码块包裹。可以在代码块前后添加简短的标题或说明。\n\n示例输出格式：\n\n# 标题\n\n```mermaid\nflowchart TD\n    A[开始] --> B{判断}\n    B -->|是| C[执行]\n    B -->|否| D[结束]\n```\n\n# Mermaid v11 语法参考（严格遵守）\n\n## flowchart（流程图）\n- 声明方向：`flowchart TD`（上到下）、`flowchart LR`（左到右）\n- 节点语法：`A[矩形]`、`B(圆角矩形)`、`C{菱形}`、`D([体育场形])`、`E((圆形))`、`F[[子程序]]`、`G[(数据库)]`、`H>非对称]`、`I{{六边形}}`\n- 连线：`A --> B`、`A --- B`、`A -.- B`（虚线）、`A ==> B`（粗线）\n- 带文字连线：`A -->|文字| B` 或 `A -- 文字 --> B`\n- 子图：`subgraph 标题\\n ... \\nend`\n- 注意：节点ID只用英文字母数字下划线，中文放在方括号内\n\n## sequence（时序图）\n- 声明：`sequenceDiagram`\n- 参与者：`participant A as 用户`\n- 消息：`A->>B: 请求`（实线箭头）、`B-->>A: 响应`（虚线箭头）\n- 激活：`activate A` / `deactivate A`，或 `A->>+B: 请求` / `B-->>-A: 响应`\n- 注释：`Note over A,B: 说明文字`\n- 循环：`loop 描述\\n...\\nend`\n- 分支：`alt 条件1\\n...\\nelse 条件2\\n...\\nend`\n\n## mindmap（思维导图）\n- 声明：`mindmap`\n- 使用缩进表示层级（2个空格）\n- 根节点：`  root((中心主题))`\n- 子节点：直接缩进文字即可，例如：\n```\nmindmap\n  root((主题))\n    分支1\n      子项A\n      子项B\n    分支2\n      子项C\n```\n- 注意：mindmap 节点不支持方括号等特殊形状语法，直接写文字\n\n## class（类图）\n- 声明：`classDiagram`\n- 类定义：`class 类名 { +方法() 类型 }`\n- 关系：`A <|-- B`（继承）、`A *-- B`（组合）、`A o-- B`（聚合）、`A --> B`（关联）\n\n## er（ER图）\n- 声明：`erDiagram`\n- 关系：`CUSTOMER ||--o{ ORDER : places`\n- 实体属性：`CUSTOMER { string name PK }`\n\n## gantt（甘特图）\n- 声明：`gantt`\n- 配置：`dateFormat YYYY-MM-DD`、`title 项目计划`\n- 分组：`section 阶段名`\n- 任务：`任务名 :a1, 2024-01-01, 30d` 或 `任务名 :after a1, 20d`\n\n# 常见错误（必须避免）\n\n1. ❌ `A[中文(带括号)]` → 括号会被解析为语法。✅ 改用 `A[中文-带括号]` 或转义\n2. ❌ flowchart 中节点ID用中文 → 容易出错。✅ ID用英文，标签用中文：`node1[中文标签]`\n3. ❌ `graph TD` → v11已不推荐。✅ 使用 `flowchart TD`\n4. ❌ mindmap节点用 `[方括号]` → mindmap不支持。✅ 直接写文字\n5. ❌ 节点文字包含特殊字符 `()[]{}|` → 会被当作语法。✅ 用引号包裹：`A[\"文字(含括号)\"]`",
+  "category": "general"
+}

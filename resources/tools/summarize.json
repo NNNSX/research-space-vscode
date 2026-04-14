@@ -1,0 +1,60 @@
+{
+  "id": "summarize",
+  "name": "内容摘要",
+  "description": "生成文档的学术摘要，支持图像内容描述",
+  "category": "text",
+  "icon": "book",
+  "supportsImages": true,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "zh",
+        "en"
+      ],
+      "default": "zh"
+    },
+    {
+      "name": "style",
+      "type": "select",
+      "label": "写作风格",
+      "options": [
+        "academic",
+        "casual"
+      ],
+      "default": "academic"
+    },
+    {
+      "name": "maxLength",
+      "type": "number",
+      "label": "最大字数",
+      "default": 500
+    },
+    {
+      "name": "focus",
+      "type": "text",
+      "label": "关注点",
+      "default": ""
+    }
+  ],
+  "paramMaps": {
+    "language": {
+      "zh": "Chinese",
+      "en": "English"
+    }
+  },
+  "systemPromptTemplate": "You are an expert academic summarizer. Summarize the provided content in {{language:map}} with a {{style}} writing style. Keep the summary under {{maxLength}} words.{{focus}} For images, first describe the visual content, then summarize the key information. Output only the summary without meta-commentary.",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "摘要对象",
+      "description": "需要生成摘要的文档或内容",
+      "required": true,
+      "multiple": true
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "experiment_log",
+  "label": "实验记录",
+  "icon": "🧪",
+  "color": "var(--vscode-terminal-ansiCyan)",
+  "extensions": [],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

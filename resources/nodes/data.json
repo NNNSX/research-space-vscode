@@ -1,0 +1,11 @@
+{
+  "id": "data",
+  "label": "Data",
+  "icon": "📊",
+  "color": "var(--vscode-terminal-ansiGreen)",
+  "extensions": ["csv", "tsv"],
+  "previewType": "table",
+  "watchContent": true,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

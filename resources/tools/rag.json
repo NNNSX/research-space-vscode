@@ -1,0 +1,26 @@
+{
+  "id": "rag",
+  "name": "文档问答",
+  "description": "基于工作区文档回答问题（RAG 检索增强）",
+  "icon": "search",
+  "supportsImages": true,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "query",
+      "type": "text",
+      "label": "问题",
+      "default": ""
+    },
+    {
+      "name": "topK",
+      "type": "number",
+      "label": "检索文档数",
+      "default": 5
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "You are a knowledgeable research assistant. Answer questions based strictly on the provided document context. Cite the source file name when referencing specific information. If the answer is not found in the context, say so clearly.",
+  "postProcessType": null,
+  "category": "research"
+}

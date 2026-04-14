@@ -1,0 +1,52 @@
+{
+  "id": "image-to-video",
+  "name": "图生视频",
+  "description": "将参考图像转换为视频（需连接图像节点，需 AIHubMix Key）",
+  "icon": "play-circle",
+  "supportsImages": true,
+  "outputNodeType": "video",
+  "apiType": "video_generation",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "模型",
+      "options": [
+        "doubao-seedance-2-0-260128",
+        "doubao-seedance-2-0-fast-260128"
+      ],
+      "default": ""
+    },
+    {
+      "name": "motion_prompt",
+      "type": "text",
+      "label": "运动描述（可选）",
+      "default": ""
+    },
+    {
+      "name": "seconds",
+      "type": "select",
+      "label": "时长（秒）",
+      "options": [
+        "5",
+        "10"
+      ],
+      "default": "5"
+    },
+    {
+      "name": "size",
+      "type": "select",
+      "label": "分辨率",
+      "options": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "default": "1080p"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "category": "multimodal"
+}

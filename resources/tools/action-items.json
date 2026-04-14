@@ -1,0 +1,61 @@
+{
+  "id": "action-items",
+  "name": "行动项提取",
+  "description": "从会议记录或转写文本中提取行动项（谁、做什么、截止时间）",
+  "icon": "tasklist",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "zh",
+        "en",
+        "auto"
+      ],
+      "default": "auto"
+    },
+    {
+      "name": "format",
+      "type": "select",
+      "label": "输出格式",
+      "options": [
+        "checklist",
+        "table"
+      ],
+      "default": "checklist"
+    }
+  ],
+  "paramMaps": {
+    "language": {
+      "zh": " 用中文输出。",
+      "en": " Output in English.",
+      "auto": " Use the same language as the input."
+    },
+    "format": {
+      "checklist": "a Markdown checklist (- [ ] **@Assignee** Task description — Due: date)",
+      "table": "a Markdown table with columns: Assignee | Action Item | Due Date | Priority"
+    }
+  },
+  "systemPromptTemplate": "You are an expert meeting facilitator. Extract all action items from the provided meeting transcript or notes.{{language:map}}\n\nFor each action item, identify:\n- **Assignee**: who is responsible (use exact names mentioned, or \"Team\" if unspecified)\n- **Action**: what needs to be done (clear, specific)\n- **Due date**: when it should be done (use exact date if mentioned, \"TBD\" if not)\n- **Priority**: High / Medium / Low (infer from context)\n\nFormat the output as {{format:map}}.\n\nIf no action items are found, output: \"本次会议未发现明确的行动项。\"\n\nOutput only the action items list, no preamble.",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "会议记录",
+      "description": "会议转写文本或手动记录的会议笔记",
+      "required": true,
+      "multiple": false
+    },
+    {
+      "name": "reference",
+      "label": "上次行动项",
+      "description": "上次会议的行动项，供 AI 对照跟进",
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "category": "project"
+}

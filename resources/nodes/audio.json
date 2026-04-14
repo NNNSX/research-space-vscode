@@ -1,0 +1,11 @@
+{
+  "id": "audio",
+  "label": "Audio",
+  "icon": "🎵",
+  "color": "var(--vscode-terminal-ansiMagenta)",
+  "extensions": ["mp3", "wav", "opus", "aac", "flac", "m4a", "webm"],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "audio",
+  "supportsMultimodal": false
+}

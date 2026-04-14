@@ -1,0 +1,67 @@
+{
+  "id": "literature-review",
+  "name": "文献综述",
+  "description": "批量读取多篇论文，生成段落综述、对比表格或论点图谱",
+  "icon": "book",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "output_format",
+      "type": "select",
+      "label": "输出格式",
+      "options": [
+        "paragraph",
+        "table",
+        "argument_map"
+      ],
+      "default": "paragraph"
+    },
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "zh",
+        "en"
+      ],
+      "default": "zh"
+    },
+    {
+      "name": "focus",
+      "type": "text",
+      "label": "综述关注点（可选）",
+      "default": ""
+    }
+  ],
+  "paramMaps": {
+    "output_format": {
+      "paragraph": "a coherent academic paragraph synthesis",
+      "table": "a structured comparison table with columns: Paper | Key Contribution | Methodology | Limitations",
+      "argument_map": "an argument map in Markdown outline format, grouping papers by the main claims they support or challenge"
+    },
+    "language": {
+      "zh": "Chinese",
+      "en": "English"
+    }
+  },
+  "systemPromptTemplate": "You are an expert academic literature synthesizer. Based on the provided papers, write {{output_format:map}} in {{language:map}}.{{focus}} Focus only on the content of the provided papers. For each key point, note which paper(s) it comes from. Keep the synthesis concise, accurate, and academically rigorous. Output only the synthesis.",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "论文",
+      "description": "需要综述的论文（可连接多篇）",
+      "required": true,
+      "multiple": true
+    },
+    {
+      "name": "reference",
+      "label": "综述方向说明",
+      "description": "用笔记节点描述综述方向或研究问题，供 AI 参考",
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "category": "research"
+}

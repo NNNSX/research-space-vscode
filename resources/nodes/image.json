@@ -1,0 +1,11 @@
+{
+  "id": "image",
+  "label": "Image",
+  "icon": "🖼️",
+  "color": "var(--vscode-terminal-ansiMagenta)",
+  "extensions": ["png", "jpg", "jpeg", "gif", "webp"],
+  "previewType": "none",
+  "watchContent": false,
+  "contentExtractor": "image",
+  "supportsMultimodal": true
+}

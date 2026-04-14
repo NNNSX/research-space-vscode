@@ -1,0 +1,11 @@
+{
+  "id": "ai_output",
+  "label": "AI Output",
+  "icon": "🤖",
+  "color": "var(--vscode-terminal-ansiGreen)",
+  "extensions": [],
+  "previewType": "markdown",
+  "watchContent": true,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

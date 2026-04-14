@@ -1,0 +1,103 @@
+{
+  "id": "translate",
+  "name": "学术翻译",
+  "description": "学术质量翻译，附术语对照表",
+  "category": "text",
+  "icon": "globe",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "sourceLang",
+      "type": "select",
+      "label": "源语言",
+      "options": [
+        "auto",
+        "zh",
+        "en",
+        "ja",
+        "ko",
+        "fr",
+        "de",
+        "es"
+      ],
+      "default": "auto"
+    },
+    {
+      "name": "targetLang",
+      "type": "select",
+      "label": "目标语言",
+      "options": [
+        "zh",
+        "en",
+        "ja",
+        "ko",
+        "fr",
+        "de",
+        "es"
+      ],
+      "default": "zh"
+    },
+    {
+      "name": "domain",
+      "type": "select",
+      "label": "领域",
+      "options": [
+        "general",
+        "cs",
+        "bio",
+        "med",
+        "law",
+        "finance"
+      ],
+      "default": "general"
+    }
+  ],
+  "paramMaps": {
+    "sourceLang": {
+      "auto": "auto-detected",
+      "zh": "Chinese",
+      "en": "English",
+      "ja": "Japanese",
+      "ko": "Korean",
+      "fr": "French",
+      "de": "German",
+      "es": "Spanish"
+    },
+    "targetLang": {
+      "zh": "Chinese",
+      "en": "English",
+      "ja": "Japanese",
+      "ko": "Korean",
+      "fr": "French",
+      "de": "German",
+      "es": "Spanish"
+    },
+    "domain": {
+      "general": "general academic",
+      "cs": "computer science and software engineering",
+      "bio": "biology and life sciences",
+      "med": "medical and clinical",
+      "law": "legal and regulatory",
+      "finance": "financial and economic"
+    }
+  },
+  "systemPromptTemplate": "You are an expert {{domain:map}} translator. Translate the provided content from {{sourceLang:map}} to {{targetLang:map}}. Maintain academic terminology and style. After the translation, include a \"## Key Terms\" section with a table of important technical terms and their translations.",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "待翻译文本",
+      "description": "需要翻译的原始文档",
+      "required": true,
+      "multiple": false
+    },
+    {
+      "name": "glossary",
+      "label": "术语表",
+      "description": "领域专有名词的翻译对照表，AI 会优先遵循这里的术语规范",
+      "required": false,
+      "multiple": false
+    }
+  ]
+}

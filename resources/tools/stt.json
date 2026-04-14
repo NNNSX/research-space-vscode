@@ -1,0 +1,44 @@
+{
+  "id": "stt",
+  "name": "语音转文字",
+  "description": "将音频文件转录为文本（需 AIHubMix Key）",
+  "icon": "mic",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "apiType": "stt",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "模型",
+      "options": [
+        "whisper-large-v3-turbo",
+        "whisper-large-v3"
+      ],
+      "default": ""
+    },
+    {
+      "name": "language",
+      "type": "text",
+      "label": "语言（如 zh、en，留空自动检测）",
+      "default": ""
+    },
+    {
+      "name": "response_format",
+      "type": "select",
+      "label": "输出格式",
+      "options": [
+        "text",
+        "json",
+        "verbose_json",
+        "srt",
+        "vtt"
+      ],
+      "default": "text"
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "category": "multimodal"
+}

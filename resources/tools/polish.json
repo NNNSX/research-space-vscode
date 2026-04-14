@@ -1,0 +1,63 @@
+{
+  "id": "polish",
+  "name": "文本润色",
+  "description": "提升文章写作质量与表达清晰度",
+  "category": "text",
+  "icon": "edit",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "intensity",
+      "type": "select",
+      "label": "润色力度",
+      "options": [
+        "light",
+        "medium",
+        "heavy"
+      ],
+      "default": "medium"
+    },
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "auto",
+        "zh",
+        "en"
+      ],
+      "default": "auto"
+    }
+  ],
+  "paramMaps": {
+    "intensity": {
+      "light": "minimal changes — fix grammar and typos only",
+      "medium": "moderate — improve clarity, flow, and word choice while preserving the author's voice",
+      "heavy": "comprehensive rewrite — improve structure, clarity, and style significantly"
+    },
+    "language": {
+      "auto": " Match the output language to the input text language.",
+      "zh": " Output your response in Chinese.",
+      "en": " Output your response in English."
+    }
+  },
+  "systemPromptTemplate": "You are an expert writing editor. Polish the provided text with {{intensity:map}}.{{language:map}} Structure your response as:\n## Changes Made\n[Brief explanation of main changes]\n\n## Polished Text\n[The full polished content]",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "原文",
+      "description": "需要润色的主体文本，AI 将直接对其进行修改",
+      "required": true,
+      "multiple": false
+    },
+    {
+      "name": "reference",
+      "label": "参考建议",
+      "description": "审稿意见、风格示例或改写要求，AI 会参考但不直接修改",
+      "required": false,
+      "multiple": true
+    }
+  ]
+}

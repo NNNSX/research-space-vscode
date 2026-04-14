@@ -1,0 +1,72 @@
+{
+  "id": "outline-gen",
+  "name": "大纲生成",
+  "description": "从笔记、草稿或论文中提取论点，生成层次化论文大纲",
+  "icon": "list-tree",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "params": [
+    {
+      "name": "depth",
+      "type": "select",
+      "label": "大纲层级",
+      "options": [
+        "2",
+        "3",
+        "4"
+      ],
+      "default": "3"
+    },
+    {
+      "name": "style",
+      "type": "select",
+      "label": "大纲风格",
+      "options": [
+        "research_paper",
+        "thesis",
+        "report"
+      ],
+      "default": "research_paper"
+    },
+    {
+      "name": "language",
+      "type": "select",
+      "label": "输出语言",
+      "options": [
+        "zh",
+        "en"
+      ],
+      "default": "zh"
+    }
+  ],
+  "paramMaps": {
+    "style": {
+      "research_paper": "a research paper (Introduction → Related Work → Methodology → Experiments → Discussion → Conclusion)",
+      "thesis": "a thesis or dissertation (with Chapter structure)",
+      "report": "a technical report or project report"
+    },
+    "language": {
+      "zh": "Chinese",
+      "en": "English"
+    }
+  },
+  "systemPromptTemplate": "You are an expert academic writing coach. Based on the provided notes and drafts, generate a {{depth}}-level hierarchical outline for {{style:map}}, written in {{language:map}}.\n\nRequirements:\n- Each section heading should be a clear, specific claim or topic (not just a generic label)\n- Include 1-sentence description for each section explaining its purpose\n- Use Markdown heading levels (## for level 1, ### for level 2, #### for level 3)\n- Ensure logical flow and argument progression\n\nOutput only the outline.",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "笔记/草稿",
+      "description": "用于生成大纲的笔记、草稿或论文片段",
+      "required": true,
+      "multiple": true
+    },
+    {
+      "name": "reference",
+      "label": "参考结构",
+      "description": "已有的提纲或参考论文结构，供 AI 参考",
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "category": "research"
+}

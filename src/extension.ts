@@ -1,0 +1,394 @@
+import * as vscode from 'vscode';
+import * as path from 'path';
+import { CanvasEditorProvider } from './providers/CanvasEditorProvider';
+import { WorkspaceTreeProvider, ResearchSpaceTreeItem } from './providers/WorkspaceTreeProvider';
+import { registerAddToCanvas } from './commands/add-to-canvas';
+import { registerNewCanvas } from './commands/new-canvas';
+import { readCanvas, writeCanvas } from './core/storage';
+import { toAbsPath, toRelPath } from './core/storage';
+
+export function activate(context: vscode.ExtensionContext): void {
+  // ── Custom Editor Provider ────────────────────────────────────────────────
+  const editorProvider = new CanvasEditorProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerCustomEditorProvider(
+      CanvasEditorProvider.viewType,
+      editorProvider,
+      {
+        webviewOptions: { retainContextWhenHidden: true },
+        supportsMultipleEditorsPerDocument: false,
+      }
+    )
+  );
+
+  // ── Sidebar TreeView ──────────────────────────────────────────────────────
+  const treeProvider = new WorkspaceTreeProvider();
+  const treeView = vscode.window.createTreeView('researchSpace.explorer', {
+    treeDataProvider: treeProvider,
+    showCollapseAll: true,
+  });
+  context.subscriptions.push(treeView);
+
+  // Refresh tree when .rsws files change
+  const rsWatcher = vscode.workspace.createFileSystemWatcher('**/*.rsws');
+  rsWatcher.onDidCreate(() => treeProvider.refresh());
+  rsWatcher.onDidChange(() => treeProvider.refresh());
+  rsWatcher.onDidDelete(() => treeProvider.refresh());
+  context.subscriptions.push(rsWatcher);
+
+  // ── Commands ──────────────────────────────────────────────────────────────
+  registerAddToCanvas(context);
+  registerNewCanvas(context);
+
+  // New Note — creates note in the active canvas's notes/ directory
+  context.subscriptions.push(
+    vscode.commands.registerCommand('researchSpace.newNote', async () => {
+      // Find the active canvas
+      const activeDoc = Array.from(CanvasEditorProvider.activeDocuments.values())[0];
+      if (!activeDoc) {
+        vscode.window.showWarningMessage('Open a canvas first to create a note.');
+        return;
+      }
+      const canvasDir = path.dirname(activeDoc.uri.fsPath);
+      const title = await vscode.window.showInputBox({ prompt: 'Note title', value: 'New Note' });
+      if (!title) { return; }
+      const notesDir = path.join(canvasDir, 'notes');
+      try { await vscode.workspace.fs.createDirectory(vscode.Uri.file(notesDir)); } catch { /* exists */ }
+      const safeName = title.replace(/[\\/:*?"<>|]/g, '-');
+      const noteUri = vscode.Uri.file(path.join(notesDir, `${safeName}.md`));
+      await vscode.workspace.fs.writeFile(noteUri, Buffer.from(`# ${title}\n`, 'utf-8'));
+      vscode.window.showInformationMessage(`Note "${title}" created.`);
+    })
+  );
+
+  // Run Function (from tree view)
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.runFunction',
+      async (nodeId: string, canvasUri: vscode.Uri) => {
+        const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+        if (!webview) {
+          await vscode.commands.executeCommand('vscode.openWith', canvasUri, 'researchSpace.canvas');
+          vscode.window.showInformationMessage('Canvas opened. Please click Run inside the canvas.');
+          return;
+        }
+        webview.postMessage({ type: 'runFunction', nodeId });
+      }
+    )
+  );
+
+  // Export Markdown
+  context.subscriptions.push(
+    vscode.commands.registerCommand('researchSpace.exportMarkdown', async () => {
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      if (rswsFiles.length === 0) {
+        vscode.window.showWarningMessage('No canvas file found.');
+        return;
+      }
+      const target = rswsFiles.length === 1 ? rswsFiles[0] : await pickCanvas(rswsFiles);
+      if (!target) { return; }
+      await exportMarkdown(target);
+    })
+  );
+
+  // Export JSON
+  context.subscriptions.push(
+    vscode.commands.registerCommand('researchSpace.exportJson', async () => {
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      if (rswsFiles.length === 0) { return; }
+      const target = rswsFiles.length === 1 ? rswsFiles[0] : await pickCanvas(rswsFiles);
+      if (!target) { return; }
+      await exportJson(target);
+    })
+  );
+
+  // Open Settings
+  context.subscriptions.push(
+    vscode.commands.registerCommand('researchSpace.openSettings', () => {
+      vscode.commands.executeCommand(
+        'workbench.action.openSettings',
+        '@ext:research-space'
+      );
+    })
+  );
+
+  // ── Tree view context menu commands ──────────────────────────────────────
+
+  // Open File (data nodes)
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.tree.openFile',
+      async (item: ResearchSpaceTreeItem) => {
+        if (!item.node?.file_path || !item.canvasUri) { return; }
+        const absPath = toAbsPath(item.node.file_path, item.canvasUri);
+        const fileUri = vscode.Uri.file(absPath);
+        try {
+          await vscode.commands.executeCommand('vscode.open', fileUri);
+        } catch {
+          await vscode.env.openExternal(fileUri);
+        }
+      }
+    )
+  );
+
+  // Remove from Canvas (any node — does not delete the file)
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.tree.removeFromCanvas',
+      async (item: ResearchSpaceTreeItem) => {
+        if (!item.node || !item.canvasUri) { return; }
+        const confirm = await vscode.window.showWarningMessage(
+          `Remove "${item.node.title}" from canvas? (The file will not be deleted.)`,
+          { modal: true },
+          'Remove'
+        );
+        if (confirm !== 'Remove') { return; }
+        const canvas = await readCanvas(item.canvasUri);
+        canvas.nodes = canvas.nodes.filter(n => n.id !== item.node!.id);
+        canvas.edges = canvas.edges.filter(
+          e => e.source !== item.node!.id && e.target !== item.node!.id
+        );
+        CanvasEditorProvider.suppressRevert(item.canvasUri.fsPath);
+        await writeCanvas(item.canvasUri, canvas);
+        treeProvider.refresh();
+        // Notify open webview if any
+        const webview = CanvasEditorProvider.activeWebviews.get(item.canvasUri.fsPath);
+        webview?.postMessage({ type: 'init', data: canvas, workspaceRoot: path.dirname(item.canvasUri.fsPath) });
+      }
+    )
+  );
+
+  // Run function node from tree
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.tree.runNode',
+      async (item: ResearchSpaceTreeItem) => {
+        if (!item.node || !item.canvasUri) { return; }
+        const webview = CanvasEditorProvider.activeWebviews.get(item.canvasUri.fsPath);
+        if (!webview) {
+          await vscode.commands.executeCommand('vscode.openWith', item.canvasUri, 'researchSpace.canvas');
+          vscode.window.showInformationMessage('Canvas opened. Please click Run inside the canvas.');
+          return;
+        }
+        webview.postMessage({ type: 'runFunction', nodeId: item.node.id });
+      }
+    )
+  );
+
+  // Open Canvas from tree
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.tree.openCanvas',
+      async (item: ResearchSpaceTreeItem) => {
+        if (!item.canvasUri) { return; }
+        await vscode.commands.executeCommand('vscode.openWith', item.canvasUri, 'researchSpace.canvas');
+      }
+    )
+  );
+
+  // Delete Canvas (deletes the entire canvas folder)
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.tree.deleteCanvas',
+      async (item: ResearchSpaceTreeItem) => {
+        if (!item.canvasUri) { return; }
+        const canvasDir = path.dirname(item.canvasUri.fsPath);
+        const folderName = path.basename(canvasDir);
+        const confirm = await vscode.window.showWarningMessage(
+          `Delete canvas "${folderName}" and all its contents (notes, outputs, tools, pet)? This cannot be undone.`,
+          { modal: true },
+          'Delete'
+        );
+        if (confirm !== 'Delete') { return; }
+        await vscode.workspace.fs.delete(vscode.Uri.file(canvasDir), { recursive: true });
+        treeProvider.refresh();
+      }
+    )
+  );
+
+  // ── File watcher for workspace files ─────────────────────────────────────
+  setupFileWatcher(context);
+}
+
+export function deactivate(): void {
+  // Nothing to clean up
+}
+
+// ── File watcher ──────────────────────────────────────────────────────────
+
+function setupFileWatcher(context: vscode.ExtensionContext): void {
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    '**/*.{md,txt,py,js,ts,tsx,jsx,pdf,png,jpg,jpeg,gif,webp,rs,go,java,csv,tsv}'
+  );
+
+  // ── File changed: update content_preview ──────────────────────────────────
+  watcher.onDidChange(uri => {
+    if (debounceTimer) { clearTimeout(debounceTimer); }
+    debounceTimer = setTimeout(async () => {
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      for (const canvasUri of rswsFiles) {
+        const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+        if (!webview) { continue; }
+        try {
+          const canvas = await readCanvas(canvasUri);
+          const canvasDir = path.dirname(canvasUri.fsPath);
+          // Compute path relative to canvas directory (not workspace root)
+          const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+          // Skip files inside outputs/ directory
+          if (relPath.startsWith('outputs/')) { continue; }
+          for (const node of canvas.nodes) {
+            if (node.file_path !== relPath) { continue; }
+            // Clear missing flag
+            webview.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+            // Refresh content preview — skip node types that don't watch content (PDFs, images)
+            const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
+            if (CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext)) {
+              try {
+                const bytes = await vscode.workspace.fs.readFile(uri);
+                const preview = Buffer.from(bytes).toString('utf-8').slice(0, 300);
+                // Persist to canvas file
+                node.meta = { ...node.meta, content_preview: preview, file_missing: false };
+                webview.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview });
+              } catch { /* ignore read errors */ }
+            }
+          }
+          // Persist updated previews back to disk
+          CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+          await writeCanvas(canvasUri, canvas);
+        } catch { /* ignore */ }
+      }
+    }, 800);
+  });
+
+  // ── File deleted: mark missing ────────────────────────────────────────────
+  watcher.onDidDelete(uri => {
+    // Short delay lets the rename event (delete+create pair) arrive first.
+    // Timer is not tracked — postMessage to a disposed webview is silently ignored.
+    setTimeout(async () => {
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      for (const canvasUri of rswsFiles) {
+        const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+        if (!webview) { continue; }
+        try {
+          const canvas = await readCanvas(canvasUri);
+          const canvasDir = path.dirname(canvasUri.fsPath);
+          const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+          if (relPath.startsWith('outputs/')) { continue; }
+          for (const node of canvas.nodes) {
+            if (node.file_path === relPath) {
+              webview.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }, 600);
+  });
+
+  context.subscriptions.push(watcher);
+
+  // ── File renamed: update node.file_path in all canvases ──────────────────
+  context.subscriptions.push(
+    vscode.workspace.onDidRenameFiles(async e => {
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      for (const canvasUri of rswsFiles) {
+        let canvas;
+        try { canvas = await readCanvas(canvasUri); } catch { continue; }
+        const canvasDir = path.dirname(canvasUri.fsPath);
+
+        let changed = false;
+        for (const { oldUri, newUri } of e.files) {
+          const oldRel = path.relative(canvasDir, oldUri.fsPath).split(path.sep).join('/');
+          const newRel = path.relative(canvasDir, newUri.fsPath).split(path.sep).join('/');
+          const newTitle = path.basename(newUri.fsPath, path.extname(newUri.fsPath));
+
+          for (const node of canvas.nodes) {
+            if (node.file_path === oldRel) {
+              node.file_path = newRel;
+              node.title = newTitle;
+              if (node.meta) { node.meta.file_missing = false; }
+              changed = true;
+
+              const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+              webview?.postMessage({
+                type: 'nodeFileMoved',
+                nodeId: node.id,
+                newFilePath: newRel,
+                newTitle,
+              });
+            }
+          }
+        }
+
+        if (changed) {
+          CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+          await writeCanvas(canvasUri, canvas);
+        }
+      }
+    })
+  );
+}
+
+// ── Export helpers ────────────────────────────────────────────────────────
+
+async function pickCanvas(uris: vscode.Uri[]): Promise<vscode.Uri | undefined> {
+  const items = uris.map(u => ({
+    label: path.basename(u.fsPath),
+    description: vscode.workspace.asRelativePath(u),
+    uri: u,
+  }));
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select canvas' });
+  return picked?.uri;
+}
+
+async function exportMarkdown(canvasUri: vscode.Uri): Promise<void> {
+  const canvas = await readCanvas(canvasUri);
+  const dataNodes = canvas.nodes
+    .filter(n => ['paper', 'note', 'code', 'ai_output', 'image', 'data'].includes(n.node_type))
+    .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+
+  const sections: string[] = [`# ${canvas.metadata.title}\n`];
+  for (const node of dataNodes) {
+    sections.push(`## ${node.title}\n`);
+    if (node.file_path) {
+      try {
+        const absPath = toAbsPath(node.file_path, canvasUri);
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
+        const content = Buffer.from(bytes).toString('utf-8');
+        sections.push(content + '\n');
+      } catch {
+        sections.push(node.meta?.content_preview ?? '_[File not available]_' + '\n');
+      }
+    } else {
+      sections.push(node.meta?.content_preview ?? '' + '\n');
+    }
+    sections.push('---\n');
+  }
+
+  const saveUri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(
+      path.join(path.dirname(canvasUri.fsPath), `${canvas.metadata.title}.md`)
+    ),
+    filters: { Markdown: ['md'] },
+  });
+  if (!saveUri) { return; }
+  await vscode.workspace.fs.writeFile(saveUri, Buffer.from(sections.join('\n'), 'utf-8'));
+  vscode.window.showInformationMessage(`Exported to ${path.basename(saveUri.fsPath)}`);
+}
+
+async function exportJson(canvasUri: vscode.Uri): Promise<void> {
+  const canvas = await readCanvas(canvasUri);
+  const saveUri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(
+      path.join(path.dirname(canvasUri.fsPath), `${canvas.metadata.title}.json`)
+    ),
+    filters: { JSON: ['json'] },
+  });
+  if (!saveUri) { return; }
+  await vscode.workspace.fs.writeFile(
+    saveUri,
+    Buffer.from(JSON.stringify(canvas, null, 2), 'utf-8')
+  );
+  vscode.window.showInformationMessage(`Exported to ${path.basename(saveUri.fsPath)}`);
+}
