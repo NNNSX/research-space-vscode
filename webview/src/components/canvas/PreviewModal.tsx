@@ -345,7 +345,11 @@ function FullCodePreview({ source, filePath }: { source: string; filePath?: stri
 // ── Full PDF Preview (multi-page) ────────────────────────────────────────────
 
 function FullPdfPreview({ uri }: { uri: string | undefined }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  // This ref holds a container whose DOM is managed entirely by imperative code
+  // (not React). We must NEVER put React children inside it — otherwise React's
+  // reconciler will try to remove nodes that imperative code already removed,
+  // causing the "removeChild: not a child of this node" crash.
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState(0);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -361,11 +365,11 @@ function FullPdfPreview({ uri }: { uri: string | undefined }) {
         if (cancelled) { pdfDoc.destroy(); return; }
         setNumPages(pdfDoc.numPages);
 
-        const container = containerRef.current;
+        const container = canvasContainerRef.current;
         if (!container || cancelled) { pdfDoc.destroy(); return; }
 
-        // Clear previous canvases
-        container.innerHTML = '';
+        // Clear previous canvases — safe because React does not manage children here
+        while (container.firstChild) { container.removeChild(container.firstChild); }
 
         const dpr = window.devicePixelRatio || 1;
         const scale = 1.5;
@@ -391,8 +395,8 @@ function FullPdfPreview({ uri }: { uri: string | undefined }) {
             await page.render({ canvasContext: ctx, viewport }).promise;
           }
 
-          if (!cancelled) {
-            container.appendChild(canvas);
+          if (!cancelled && canvasContainerRef.current) {
+            canvasContainerRef.current.appendChild(canvas);
           }
         }
 
@@ -409,6 +413,11 @@ function FullPdfPreview({ uri }: { uri: string | undefined }) {
     return () => {
       cancelled = true;
       if (pdfDoc) { pdfDoc.destroy(); }
+      // Clean up appended canvases
+      const container = canvasContainerRef.current;
+      if (container) {
+        while (container.firstChild) { container.removeChild(container.firstChild); }
+      }
     };
   }, [uri]);
 
@@ -436,19 +445,20 @@ function FullPdfPreview({ uri }: { uri: string | undefined }) {
           共 {numPages} 页
         </div>
       )}
+      {/* Loading hint — lives OUTSIDE the imperative container so React manages it safely */}
+      {loading && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, color: 'var(--vscode-descriptionForeground)', flexShrink: 0 }}>
+          渲染中…
+        </div>
+      )}
+      {/* Imperative-only container: React never touches its children */}
       <div
-        ref={containerRef}
+        ref={canvasContainerRef}
         style={{
           flex: 1, overflow: 'auto', padding: 16,
           display: 'flex', flexDirection: 'column', alignItems: 'center',
         }}
-      >
-        {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, color: 'var(--vscode-descriptionForeground)' }}>
-            渲染中…
-          </div>
-        )}
-      </div>
+      />
     </div>
   );
 }
