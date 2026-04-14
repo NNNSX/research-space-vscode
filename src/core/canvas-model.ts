@@ -168,11 +168,20 @@ export interface OutputHistoryEntry {
 
 // ── Canvas file (.rsws) ─────────────────────────────────────────────────────
 
+/** @deprecated Use Board instead — kept for migration only */
 export interface SummaryGroup {
   id: string;
-  name: string;                 // unique among all summaries
-  color?: string;               // border/header color (CSS value, defaults to first preset)
-  nodeIds: string[];            // IDs of contained nodes
+  name: string;
+  color?: string;
+  nodeIds: string[];
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
+export interface Board {
+  id: string;
+  name: string;
+  color: string;          // semi-transparent fill, e.g. 'rgba(79,195,247,0.12)'
+  borderColor: string;    // solid border color, e.g. '#4fc3f7'
   bounds: { x: number; y: number; width: number; height: number };
 }
 
@@ -187,7 +196,8 @@ export interface CanvasFile {
     updated_at: string;
   };
   stagingNodes?: CanvasNode[];  // Nodes waiting to be placed on canvas (persisted)
-  summaryGroups?: SummaryGroup[];
+  summaryGroups?: SummaryGroup[];  // @deprecated — migrated to boards on load
+  boards?: Board[];
 }
 
 // ── Type guards ─────────────────────────────────────────────────────────────

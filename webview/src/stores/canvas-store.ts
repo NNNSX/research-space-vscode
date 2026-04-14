@@ -18,7 +18,7 @@ import type {
   JsonToolDef,
   DataNodeDef,
   ParamDef,
-  SummaryGroup,
+  Board,
 } from '../../../src/core/canvas-model';
 import { postMessage } from '../bridge';
 import { usePetStore } from './pet-store';
@@ -75,14 +75,15 @@ interface CanvasState {
   nodeDefs: DataNodeDef[];
   pendingConnection: PendingConnection | null;
   outputHistory: { nodeId: string; entries: import('../../../src/core/canvas-model').OutputHistoryEntry[] } | null;
-  summaryGroups: SummaryGroup[];
+  boards: Board[];
+  activeBoardId: string | null;
+  boardDropdownOpen: boolean;
   selectedNodeIds: string[];
-  showSummaryDialog: boolean;
-  editingSummaryId: string | null;
   selectionMode: boolean;
   undoStack: CanvasFile[];
   redoStack: CanvasFile[];
   fullContentCache: Record<string, string>;
+  previewNodeId: string | null;
 
   initCanvas(data: CanvasFile, workspaceRoot: string): void;
   onNodesChange(changes: NodeChange[]): void;
@@ -122,13 +123,18 @@ interface CanvasState {
   setNodeDefs(defs: DataNodeDef[]): void;
   setOutputHistory(data: { nodeId: string; entries: import('../../../src/core/canvas-model').OutputHistoryEntry[] } | null): void;
   setSelectedNodeIds(ids: string[]): void;
-  setShowSummaryDialog(open: boolean): void;
-  setEditingSummaryId(id: string | null): void;
   setSelectionMode(on: boolean): void;
-  createSummary(name: string, nodeIds: string[], bounds: { x: number; y: number; width: number; height: number }, color?: string): void;
-  deleteSummary(summaryId: string): void;
-  moveSummary(summaryId: string, dx: number, dy: number): void;
-  updateSummary(summaryId: string, updates: { name?: string; color?: string }): void;
+  // ── Board methods ──
+  createBoard(board: Board): void;
+  deleteBoard(boardId: string): void;
+  moveBoard(boardId: string, dx: number, dy: number): void;
+  resizeBoard(boardId: string, newBounds: Board['bounds']): void;
+  updateBoard(boardId: string, updates: Partial<Board>): void;
+  setActiveBoardId(id: string | null): void;
+  setBoardDropdownOpen(open: boolean): void;
+  addBoardToStaging(name: string, color: string, borderColor: string): void;
+  openPreview(nodeId: string): void;
+  closePreview(): void;
   pushUndo(): void;
   undo(): void;
   redo(): void;
@@ -243,19 +249,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   nodeDefs: [],
   pendingConnection: null,
   outputHistory: null,
-  summaryGroups: [],
+  boards: [],
+  activeBoardId: null,
+  boardDropdownOpen: false,
   selectedNodeIds: [],
-  showSummaryDialog: false,
-  editingSummaryId: null,
   selectionMode: false,
   undoStack: [],
   redoStack: [],
   fullContentCache: {},
+  previewNodeId: null,
 
   initCanvas(data, workspaceRoot) {
     const { flowNodes, flowEdges } = canvasToFlow(data.nodes ?? [], data.edges ?? []);
 
-    const groups = data.summaryGroups ?? [];
+    // Migrate legacy summaryGroups → boards
+    let boards = data.boards ?? [];
+    if (boards.length === 0 && data.summaryGroups?.length) {
+      boards = data.summaryGroups.map(g => ({
+        id: g.id,
+        name: g.name,
+        borderColor: g.color || '#4fc3f7',
+        color: hexToRgba(g.color || '#4fc3f7', 0.12),
+        bounds: g.bounds,
+      }));
+    }
 
     for (const n of data.nodes ?? []) {
       if ((n.node_type === 'image' && n.meta?.display_mode !== 'mermaid' || n.node_type === 'video' || n.node_type === 'audio' || n.node_type === 'paper') && n.file_path) {
@@ -264,13 +281,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
 
     set({
-      canvasFile: data,
+      canvasFile: { ...data, boards, summaryGroups: undefined },
       workspaceRoot,
       nodes: flowNodes,
       edges: flowEdges,
       syntheticEdges: [],
       stagingNodes: data.stagingNodes ?? [],
-      summaryGroups: groups,
+      boards,
       aiOutput: '',
       aiOutputRunId: '',
       fullContentCache: {},
@@ -305,37 +322,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updated = applyNodeChanges(changes, state.nodes) as FlowNode[];
       const { nodes, edges } = flowToCanvas(updated, state.edges);
 
-      // Recompute summary group bounds if any member node moved
-      const hasPositionChange = changes.some(c => c.type === 'position');
-      let updatedGroups = state.summaryGroups;
-      if (hasPositionChange && updatedGroups.length > 0) {
-        const PAD = 30;
-        updatedGroups = updatedGroups.map(g => {
-          const members = updated.filter(n => g.nodeIds.includes(n.id));
-          if (members.length < 2) { return g; }
-          // Use actual DOM-measured node dimensions when available
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const n of members) {
-            const el = document.querySelector(`[data-id="${n.id}"]`) as HTMLElement | null;
-            const w = el ? el.offsetWidth : (n.data.size?.width ?? 280);
-            const h = el ? el.offsetHeight : (n.data.size?.height ?? 160);
-            minX = Math.min(minX, n.position.x);
-            minY = Math.min(minY, n.position.y);
-            maxX = Math.max(maxX, n.position.x + w);
-            maxY = Math.max(maxY, n.position.y + h);
-          }
-          return {
-            ...g,
-            bounds: {
-              x: minX - PAD,
-              y: minY - PAD,
-              width: maxX - minX + PAD * 2,
-              height: maxY - minY + PAD * 2,
-            },
-          };
-        });
-      }
-
       // Clean up fullContentCache for deleted nodes
       let newCache = state.fullContentCache;
       if (hasRemove) {
@@ -347,13 +333,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
       }
 
-      const newFile: CanvasFile = { ...state.canvasFile, nodes, edges, summaryGroups: updatedGroups };
+      const newFile: CanvasFile = { ...state.canvasFile, nodes, edges };
 
       if (!isDragging) {
         debouncedSave(newFile);
       }
 
-      return { nodes: updated, canvasFile: newFile, summaryGroups: updatedGroups, fullContentCache: newCache };
+      return { nodes: updated, canvasFile: newFile, fullContentCache: newCache };
     });
   },
 
@@ -489,43 +475,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedNodes = [...state.nodes, newFlowNode];
       const updatedEdges = [...state.edges, newFlowEdge];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
-      let newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
 
       if ((node.node_type === 'image' && node.meta?.display_mode !== 'mermaid' || node.node_type === 'video' || node.node_type === 'audio' || node.node_type === 'paper') && node.file_path) {
         postMessage({ type: 'requestImageUri', filePath: node.file_path });
       }
 
-      // Auto-add output node to the summary group that contains the function node
-      let updatedGroups = state.summaryGroups;
-      const fnNodeId = edge.source; // the function node that produced this output
-      const parentGroup = state.summaryGroups.find(g => g.nodeIds.includes(fnNodeId));
-      if (parentGroup) {
-        updatedGroups = state.summaryGroups.map(g => {
-          if (g.id !== parentGroup.id) { return g; }
-          const newNodeIds = [...g.nodeIds, node.id];
-          // Expand bounds to include new output node
-          const PAD = 30;
-          const allMembers = updatedNodes.filter(n => newNodeIds.includes(n.id));
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const m of allMembers) {
-            const w = m.data.size?.width ?? 280;
-            const h = m.data.size?.height ?? 160;
-            minX = Math.min(minX, m.position.x);
-            minY = Math.min(minY, m.position.y);
-            maxX = Math.max(maxX, m.position.x + w);
-            maxY = Math.max(maxY, m.position.y + h);
-          }
-          return {
-            ...g,
-            nodeIds: newNodeIds,
-            bounds: { x: minX - PAD, y: minY - PAD, width: maxX - minX + PAD * 2, height: maxY - minY + PAD * 2 },
-          };
-        });
-        newFile = { ...newFile, summaryGroups: updatedGroups };
-      }
-
       debouncedSave(newFile);
-      return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, summaryGroups: updatedGroups, aiOutputRunId: runId };
+      return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, aiOutputRunId: runId };
     });
   },
 
@@ -660,6 +617,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const node = state.stagingNodes.find(n => n.id === nodeId);
       if (!node || !state.canvasFile) { return {}; }
 
+      const remainingStaging = state.stagingNodes.filter(n => n.id !== nodeId);
+
+      // Board staging node → create Board instead of FlowNode
+      if ((node.node_type as string) === 'board') {
+        const board: Board = {
+          id: node.id,
+          name: node.title,
+          color: (node.meta?.boardColor as string) || 'rgba(79,195,247,0.12)',
+          borderColor: (node.meta?.boardBorderColor as string) || '#4fc3f7',
+          bounds: { x: position.x, y: position.y, width: node.size.width, height: node.size.height },
+        };
+        const newBoards = [...state.boards, board];
+        const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards, stagingNodes: remainingStaging };
+        debouncedSave(newFile);
+        return { boards: newBoards, canvasFile: newFile, stagingNodes: remainingStaging };
+      }
+
       const placed: CanvasNode = { ...node, position };
       const flowNode: FlowNode = {
         id: placed.id,
@@ -671,7 +645,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
       const updatedNodes = [...state.nodes, flowNode];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
-      const remainingStaging = state.stagingNodes.filter(n => n.id !== nodeId);
       const newFile: CanvasFile = {
         ...state.canvasFile,
         nodes: cnNodes,
@@ -892,103 +865,133 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setNodeDefs(defs)           { set({ nodeDefs: defs }); },
   setOutputHistory(data)      { set({ outputHistory: data }); },
 
-  // ── Summary groups (归纳) ───────────────────────────────────────────────
+  // ── Boards (画板/工作区) ─────────────────────────────────────────────────
   setSelectedNodeIds(ids) { set({ selectedNodeIds: ids }); },
-  setShowSummaryDialog(open) { set({ showSummaryDialog: open }); },
-  setEditingSummaryId(id) { set({ editingSummaryId: id }); },
   setSelectionMode(on) { set({ selectionMode: on }); },
+  setActiveBoardId(id) { set({ activeBoardId: id }); },
+  setBoardDropdownOpen(open) { set({ boardDropdownOpen: open }); },
 
-  createSummary(name, nodeIds, bounds, color) {
+  addBoardToStaging(name, color, borderColor) {
+    // Create a pseudo-node for the staging shelf
+    const boardNode: CanvasNode = {
+      id: uuid(),
+      node_type: 'board' as CanvasNode['node_type'],
+      title: name,
+      position: { x: 0, y: 0 },
+      size: { width: 600, height: 400 },
+      meta: { boardColor: color, boardBorderColor: borderColor },
+    };
+    get().addToStaging([boardNode]);
+  },
+
+  createBoard(board) {
     get().pushUndo();
     set(state => {
       if (!state.canvasFile) { return {}; }
-      if (nodeIds.length < 2) { return {}; }
-
-      const PAD = 30;
-      const group: SummaryGroup = {
-        id: uuid(),
-        name,
-        color,
-        nodeIds: [...nodeIds],
-        bounds: {
-          x: bounds.x - PAD,
-          y: bounds.y - PAD,
-          width: bounds.width + PAD * 2,
-          height: bounds.height + PAD * 2,
-        },
-      };
-
-      const newGroups = [...state.summaryGroups, group];
-      const newFile: CanvasFile = { ...state.canvasFile, summaryGroups: newGroups };
+      const newBoards = [...state.boards, board];
+      const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards };
       debouncedSave(newFile);
-
-      return { summaryGroups: newGroups, canvasFile: newFile, showSummaryDialog: false };
+      return { boards: newBoards, canvasFile: newFile };
     });
   },
 
-  deleteSummary(summaryId) {
+  deleteBoard(boardId) {
     get().pushUndo();
     set(state => {
       if (!state.canvasFile) { return {}; }
-
-      const newGroups = state.summaryGroups.filter(g => g.id !== summaryId);
-      const newFile: CanvasFile = { ...state.canvasFile, summaryGroups: newGroups };
+      const newBoards = state.boards.filter(b => b.id !== boardId);
+      const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards };
       debouncedSave(newFile);
-
-      return { summaryGroups: newGroups, canvasFile: newFile };
+      return { boards: newBoards, canvasFile: newFile, activeBoardId: state.activeBoardId === boardId ? null : state.activeBoardId };
     });
   },
 
-  moveSummary(summaryId, dx, dy) {
+  moveBoard(boardId, dx, dy) {
     get().pushUndo();
     set(state => {
       if (!state.canvasFile) { return {}; }
-      const idx = state.summaryGroups.findIndex(g => g.id === summaryId);
+      const idx = state.boards.findIndex(b => b.id === boardId);
       if (idx < 0) { return {}; }
 
-      const group = state.summaryGroups[idx];
-      const memberSet = new Set(group.nodeIds);
+      const board = state.boards[idx];
+      // Dynamic overlap: nodes whose bbox overlaps with the board
+      const overlapping = state.nodes.filter(n => {
+        const nw = n.data.size?.width ?? 280;
+        const nh = n.data.size?.height ?? 160;
+        return rectsOverlap(
+          { x: n.position.x, y: n.position.y, width: nw, height: nh },
+          board.bounds
+        );
+      });
 
-      // Move all member nodes
+      const movedIds = new Set(overlapping.map(n => n.id));
       const updatedNodes = state.nodes.map(n =>
-        memberSet.has(n.id)
+        movedIds.has(n.id)
           ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
           : n
       );
 
-      // Move the group bounds
-      const updatedGroup: SummaryGroup = {
-        ...group,
-        bounds: { ...group.bounds, x: group.bounds.x + dx, y: group.bounds.y + dy },
+      const updatedBoard: Board = {
+        ...board,
+        bounds: { ...board.bounds, x: board.bounds.x + dx, y: board.bounds.y + dy },
       };
-      const newGroups = [...state.summaryGroups];
-      newGroups[idx] = updatedGroup;
+      const newBoards = [...state.boards];
+      newBoards[idx] = updatedBoard;
 
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
-      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges, summaryGroups: newGroups };
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges, boards: newBoards };
       debouncedSave(newFile);
 
-      return { summaryGroups: newGroups, nodes: updatedNodes, canvasFile: newFile };
+      return { boards: newBoards, nodes: updatedNodes, canvasFile: newFile };
     });
   },
 
-  updateSummary(summaryId, updates) {
+  resizeBoard(boardId, newBounds) {
     get().pushUndo();
     set(state => {
       if (!state.canvasFile) { return {}; }
-      const idx = state.summaryGroups.findIndex(g => g.id === summaryId);
+      const idx = state.boards.findIndex(b => b.id === boardId);
       if (idx < 0) { return {}; }
 
-      const updated: SummaryGroup = { ...state.summaryGroups[idx], ...updates };
-      const newGroups = [...state.summaryGroups];
-      newGroups[idx] = updated;
+      // Enforce minimum size
+      const MIN_W = 200, MIN_H = 150;
+      const clamped = {
+        x: newBounds.x,
+        y: newBounds.y,
+        width: Math.max(newBounds.width, MIN_W),
+        height: Math.max(newBounds.height, MIN_H),
+      };
 
-      const newFile: CanvasFile = { ...state.canvasFile, summaryGroups: newGroups };
+      const updated: Board = { ...state.boards[idx], bounds: clamped };
+      const newBoards = [...state.boards];
+      newBoards[idx] = updated;
+
+      const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards };
       debouncedSave(newFile);
-
-      return { summaryGroups: newGroups, canvasFile: newFile };
+      return { boards: newBoards, canvasFile: newFile };
     });
   },
+
+  updateBoard(boardId, updates) {
+    get().pushUndo();
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      const idx = state.boards.findIndex(b => b.id === boardId);
+      if (idx < 0) { return {}; }
+
+      const updated: Board = { ...state.boards[idx], ...updates };
+      const newBoards = [...state.boards];
+      newBoards[idx] = updated;
+
+      const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards };
+      debouncedSave(newFile);
+      return { boards: newBoards, canvasFile: newFile };
+    });
+  },
+
+  // ── Preview ─────────────────────────────────────────────────────────────────
+  openPreview(nodeId) { set({ previewNodeId: nodeId }); },
+  closePreview() { set({ previewNodeId: null }); },
 
   // ── Undo / Redo ────────────────────────────────────────────────────────────
 
@@ -1010,7 +1013,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const currentSnapshot = JSON.parse(JSON.stringify(canvasFile)) as CanvasFile;
 
     const { flowNodes, flowEdges } = canvasToFlow(prev.nodes ?? [], prev.edges ?? []);
-    const groups = prev.summaryGroups ?? [];
+    const boards = prev.boards ?? [];
 
     debouncedSave(prev);
     set({
@@ -1020,7 +1023,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nodes: flowNodes,
       edges: flowEdges,
       stagingNodes: prev.stagingNodes ?? [],
-      summaryGroups: groups,
+      boards,
     });
   },
 
@@ -1033,7 +1036,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const currentSnapshot = JSON.parse(JSON.stringify(canvasFile)) as CanvasFile;
 
     const { flowNodes, flowEdges } = canvasToFlow(next.nodes ?? [], next.edges ?? []);
-    const groups = next.summaryGroups ?? [];
+    const boards = next.boards ?? [];
 
     debouncedSave(next);
     set({
@@ -1043,7 +1046,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nodes: flowNodes,
       edges: flowEdges,
       stagingNodes: next.stagingNodes ?? [],
-      summaryGroups: groups,
+      boards,
     });
   },
 }));
@@ -1062,6 +1065,23 @@ function resolveDefaultsFromSettings(settings: SettingsSnapshot | null): { provi
     model = cp?.defaultModel ?? '';
   }
   return { provider: p, model };
+}
+
+// ── Board helpers ───────────────────────────────────────────────────────────
+
+interface Rect { x: number; y: number; width: number; height: number }
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x
+      && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+export function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // Suppress unused-import warning — ParamDef is referenced for type inference in toolParams

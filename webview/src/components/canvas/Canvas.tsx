@@ -24,8 +24,8 @@ import { StagingPanel, STAGING_NODE_KEY } from '../panels/StagingPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { EmptyCanvasGuide } from './EmptyCanvasGuide';
 import { SelectionToolbar } from './SelectionToolbar';
-import { SummaryNameDialog } from './SummaryNameDialog';
-import { SummaryOverlays } from './SummaryOverlay';
+import { BoardOverlays } from './BoardOverlay';
+import { PreviewModal } from './PreviewModal';
 import type { AiTool } from '../../../../../src/core/canvas-model';
 
 const nodeTypes: NodeTypes = {
@@ -45,9 +45,8 @@ export function Canvas() {
     pendingConnection,
     createFunctionNode, commitStagingNode,
     setSelectedNodeIds, selectedNodeIds,
-    showSummaryDialog,
-    summaryGroups, deleteSummary,
-    selectionMode, setSelectionMode,
+    boards, deleteBoard,
+    selectionMode,
     undo, redo,
   } = useCanvasStore();
   const { screenToFlowPosition } = useReactFlow();
@@ -176,22 +175,14 @@ export function Canvas() {
     }
   }, [screenToFlowPosition, commitStagingNode, createFunctionNode]);
 
-  // When nodes are deleted, also clean up their non-synthetic connected edges + summaries.
+  // When nodes are deleted, also clean up their non-synthetic connected edges.
   const handleNodesDelete = useCallback((deleted: Node[]) => {
     const ids = new Set(deleted.map(n => n.id));
     const danglingEdges = edges
       .filter(e => ids.has(e.source) || ids.has(e.target))
       .map(e => ({ type: 'remove' as const, id: e.id }));
     if (danglingEdges.length > 0) { onEdgesChange(danglingEdges); }
-
-    // Remove deleted nodes from summary groups
-    for (const group of summaryGroups) {
-      const remaining = group.nodeIds.filter(nid => !ids.has(nid));
-      if (remaining.length < 2) {
-        deleteSummary(group.id);
-      }
-    }
-  }, [edges, onEdgesChange, summaryGroups, deleteSummary]);
+  }, [edges, onEdgesChange]);
 
   const handleEdgesDelete = useCallback((deleted: Edge[]) => {
     const changes = deleted
@@ -240,7 +231,7 @@ export function Canvas() {
             }}
             nodeColor="var(--vscode-badge-background)"
           />
-          <SummaryOverlays />
+          <BoardOverlays />
         </ReactFlow>
         <AiToolsPanel />
         <AiOutputPanel />
@@ -248,7 +239,7 @@ export function Canvas() {
         <SettingsPanel />
         {nodes.length === 0 && <EmptyCanvasGuide />}
         <SelectionToolbar />
-        {showSummaryDialog && <SummaryNameDialog />}
+        <PreviewModal />
         {pendingConnection && (
           <RolePickerDialog
             sourceTitle={pendingConnection.sourceNode.title}

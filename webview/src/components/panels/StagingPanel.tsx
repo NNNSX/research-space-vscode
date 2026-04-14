@@ -51,6 +51,7 @@ function nodeIcon(type: string): string {
     case 'experiment_log': return '🧪';
     case 'task':           return '✅';
     case 'data':           return '📊';
+    case 'board':          return '📋';
     case 'function':       return '⚡';
     case 'blueprint':      return '📦';
     default:               return '📎';
@@ -62,13 +63,14 @@ function nodeIcon(type: string): string {
 export function StagingPanel() {
   const { stagingNodes, removeFromStaging } = useCanvasStore();
 
-  // Only show data nodes — function/blueprint nodes go directly to canvas
+  // Only show data nodes + boards — function/blueprint nodes go directly to canvas
   const fileNodes = stagingNodes.filter(n =>
     n.node_type === 'paper' || n.node_type === 'note' ||
     n.node_type === 'code'  || n.node_type === 'image' ||
     n.node_type === 'ai_output' || n.node_type === 'audio' ||
     n.node_type === 'video' || n.node_type === 'experiment_log' ||
-    n.node_type === 'task' || n.node_type === 'data'
+    n.node_type === 'task' || n.node_type === 'data' ||
+    (n.node_type as string) === 'board'
   );
 
   // ── Flash animation for newly added nodes ─────────────────────────────────

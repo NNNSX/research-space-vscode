@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
+import { BoardDropdown } from './BoardDropdown';
 
 export function Toolbar() {
   const {
@@ -68,11 +69,13 @@ export function Toolbar() {
 
         <ToolbarButton
           onClick={() => setSelectionMode(!selectionMode)}
-          title={selectionMode ? '退出选区模式（拖拽恢复为平移画布）' : '进入选区模式（拖拽画布变为框选节点）'}
+          title="框选模式"
           active={selectionMode}
         >
           ⬚ 选区
         </ToolbarButton>
+
+        <BoardDropdown />
 
         <ToolbarButton
           onClick={() => setAiToolsPanelOpen(!aiToolsPanelOpen)}
@@ -183,9 +186,9 @@ const STEPS: { icon: string; title: string; desc: string }[] = [
     desc: '每个 LLM 功能节点可展开「编辑系统 Prompt」面板查看并覆盖默认提示词。修改后标签变黄提示已启用，可随时「恢复默认」。Chat 工具支持自由 Prompt 和 @文件 引用。',
   },
   {
-    icon: '📦',
-    title: '选区与归纳',
-    desc: '点击工具栏「⬚ 选区」进入框选模式，拖拽画布框选多个节点。选中后弹出浮动工具栏：「移动」整体拖动，「归纳」将节点包裹在命名矩形框中（支持选色和编辑名称/颜色），归纳框标题栏可拖拽整体移动。',
+    icon: '📋',
+    title: '画板/工作区',
+    desc: '点击工具栏「📋 画板」打开画板管理下拉。新建画板：输入名称、选择颜色，确认后进入暂存架，拖到画布放置。画板是半透明的彩色矩形区域，节点放在上面，移动画板时内部节点跟随移动。8 个控制点可调整画板大小。右键画板可编辑名称/颜色或删除。画板列表点击可快速跳转到对应区域。',
   },
   {
     icon: '↩',

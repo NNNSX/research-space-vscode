@@ -48,7 +48,7 @@ const FALLBACK_ICONS: Record<string, string> = {
 const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'data']);
 
 export function DataNode({ data, selected }: DataNodeProps) {
-  const { imageUriMap, nodeDefs, updateNodeSize } = useCanvasStore();
+  const { imageUriMap, nodeDefs, updateNodeSize, openPreview } = useCanvasStore();
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
 
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
@@ -82,12 +82,12 @@ export function DataNode({ data, selected }: DataNodeProps) {
     postMessage({ type: 'requestFileContent', filePath: data.file_path, requestId: data.id });
   }, [data.id, data.file_path, data.meta?.file_missing, data.node_type, fullContent]);
 
-  // Preview button click → open in VSCode native viewer
+  // Preview button click → open in-canvas modal preview
   const handlePreviewClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!canPreview || !data.file_path) { return; }
-    postMessage({ type: 'previewFile', filePath: data.file_path });
-  }, [canPreview, data.file_path]);
+    if (!canPreview) { return; }
+    openPreview(data.id);
+  }, [canPreview, data.id, openPreview]);
 
   // Double click → open in VSCode editor (original behaviour)
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {

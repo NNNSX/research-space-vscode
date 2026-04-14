@@ -5,11 +5,11 @@ import { useCanvasStore } from '../../stores/canvas-store';
 
 /**
  * Floating toolbar that appears when 2+ nodes are selected.
- * Shows "移动" (Move) and "归纳" (Summarize) buttons.
+ * Shows node count and a "移动" (Move) hint.
  * Subscribes to viewport changes so it tracks node positions during pan/zoom.
  */
 export function SelectionToolbar() {
-  const { selectedNodeIds, setShowSummaryDialog, setSelectionMode } = useCanvasStore();
+  const { selectedNodeIds, setSelectionMode } = useCanvasStore();
   const { getNodesBounds, flowToScreenPosition } = useReactFlow();
 
   // Subscribe to viewport transform so we re-render on pan/zoom
@@ -31,10 +31,6 @@ export function SelectionToolbar() {
 
   const handleMove = () => {
     setSelectionMode(false);
-  };
-
-  const handleSummarize = () => {
-    setShowSummaryDialog(true);
   };
 
   return ReactDOM.createPortal(
@@ -77,22 +73,6 @@ export function SelectionToolbar() {
         title="选中节点已可拖动，点击画布空白处取消选区"
       >
         移动
-      </button>
-      <button
-        onClick={handleSummarize}
-        style={{
-          background: 'var(--vscode-button-background)',
-          color: 'var(--vscode-button-foreground)',
-          border: '1px solid var(--vscode-button-border, transparent)',
-          borderRadius: 4,
-          padding: '4px 12px',
-          cursor: 'pointer',
-          fontSize: 12,
-          fontWeight: 500,
-        }}
-        title="将选中节点归纳为一组"
-      >
-        归纳
       </button>
     </div>,
     document.body
