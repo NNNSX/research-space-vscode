@@ -196,7 +196,6 @@ export function Canvas() {
       <Toolbar />
       <div style={{ flex: 1, position: 'relative' }} ref={reactFlowWrapper} onDragLeave={handleDragLeave}>
         <ReactFlow
-          onlyRenderVisibleElements
           nodes={nodes}
           edges={allEdges}
           nodeTypes={nodeTypes}

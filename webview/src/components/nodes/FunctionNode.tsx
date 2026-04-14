@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { CanvasNode, FnStatus, ParamDef } from '../../../../../src/core/canvas-model';
 import { postMessage } from '../../bridge';
@@ -94,7 +94,9 @@ function ensureFnAnimations() {
   document.head.appendChild(style);
 }
 
-export function FunctionNode({ data, selected }: FunctionNodeProps) {
+export const FunctionNode = memo(FunctionNodeInner);
+
+function FunctionNodeInner({ data, selected }: FunctionNodeProps) {
   const status: FnStatus = data.meta?.fn_status ?? 'idle';
   const statusColor = STATUS_COLORS[status];
   const tool = data.meta?.ai_tool;

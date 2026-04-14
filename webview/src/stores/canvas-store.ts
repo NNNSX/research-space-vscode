@@ -155,6 +155,31 @@ function debouncedSave(file: CanvasFile | null) {
 const MAX_UNDO = 50;
 let _dragUndoPushed = false;
 
+// ── Board-drag membership snapshot ─────────────────────────────────────────
+// Captured once at drag-start in BoardOverlay; cleared on mouseup.
+// moveBoard reads this set rather than dynamically scanning for overlaps.
+let _boardDragMembers = new Set<string>();
+
+export function startBoardDrag(boardId: string, nodes: FlowNode[], boards: Board[]) {
+  const board = boards.find(b => b.id === boardId);
+  if (!board) { _boardDragMembers = new Set(); return; }
+  // Snapshot: only nodes fully or partially inside the board right now
+  _boardDragMembers = new Set(
+    nodes.filter(n => {
+      const nw = n.data.size?.width ?? 280;
+      const nh = n.data.size?.height ?? 160;
+      return rectsOverlap(
+        { x: n.position.x, y: n.position.y, width: nw, height: nh },
+        board.bounds
+      );
+    }).map(n => n.id)
+  );
+}
+
+export function endBoardDrag() {
+  _boardDragMembers = new Set();
+}
+
 // ── Conversion helpers ──────────────────────────────────────────────────────
 
 function canvasToFlow(
@@ -914,22 +939,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (idx < 0) { return {}; }
 
       const board = state.boards[idx];
-      // Dynamic overlap: nodes whose bbox overlaps with the board
-      const overlapping = state.nodes.filter(n => {
-        const nw = n.data.size?.width ?? 280;
-        const nh = n.data.size?.height ?? 160;
-        return rectsOverlap(
-          { x: n.position.x, y: n.position.y, width: nw, height: nh },
-          board.bounds
-        );
-      });
 
-      const movedIds = new Set(overlapping.map(n => n.id));
-      const updatedNodes = state.nodes.map(n =>
-        movedIds.has(n.id)
-          ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
-          : n
-      );
+      // ── Snapshot-based move: only move nodes that were ALREADY inside the
+      //    board at drag-start, NOT dynamically detected overlaps.  This
+      //    prevents the "sticky" effect where passing over nodes drags them.
+      const memberIds = _boardDragMembers;
+      const updatedNodes = memberIds.size > 0
+        ? state.nodes.map(n =>
+            memberIds.has(n.id)
+              ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+              : n
+          )
+        : state.nodes;
 
       const updatedBoard: Board = {
         ...board,

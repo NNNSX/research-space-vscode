@@ -236,15 +236,17 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
           const canvasDir = path.dirname(canvasUri.fsPath);
           // Compute path relative to canvas directory (not workspace root)
           const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
-          // Skip files inside outputs/ directory
-          if (relPath.startsWith('outputs/')) { continue; }
           for (const node of canvas.nodes) {
             if (node.file_path !== relPath) { continue; }
             // Clear missing flag
             webview.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
-            // Refresh content preview — skip node types that don't watch content (PDFs, images)
+            // Refresh content preview for text-based nodes (ai_output, note, code, data, etc.)
+            // Use node type to decide: ai_output has watchContent=true but no extensions,
+            // so check the node's own type definition rather than relying solely on extension lookup.
             const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
-            if (CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext)) {
+            const nodeDef = CanvasEditorProvider.dataNodeRegistry?.get(node.node_type);
+            const shouldWatch = nodeDef?.watchContent ?? CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext) ?? false;
+            if (shouldWatch) {
               try {
                 const bytes = await vscode.workspace.fs.readFile(uri);
                 const preview = Buffer.from(bytes).toString('utf-8').slice(0, 300);

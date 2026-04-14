@@ -2,6 +2,15 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [1.2.2] — 2026-04-14
+
+### Fixed
+- **画板拖动粘鼠板效应** — 拖动画板时不再"粘住"经过的节点。改为在拖动开始时快照内部节点，整个拖动过程中只移动快照中的节点，避免路过的节点被意外带走
+- **AI 输出编辑后不更新** — 双击编辑 AI 输出节点后，节点卡片和预览窗口现在正确刷新。修复原因：`ai_output` 节点定义 `extensions: []`（无扩展名），导致文件变更监听器无法通过扩展名匹配到节点类型，现改为直接查询节点类型定义的 `watchContent` 标志
+- **画布多节点时卡顿** — 移除 `onlyRenderVisibleElements`（ReactFlow 内置虚拟化）避免频繁挂载/卸载节点造成性能抖动；DataNode 和 FunctionNode 组件用 `React.memo()` 包裹，避免无关状态变更导致的不必要重渲染
+
+---
+
 ## [1.2.1] — 2026-04-14
 
 ### Added

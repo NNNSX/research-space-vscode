@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { Handle, Position, NodeResizer } from '@xyflow/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -47,7 +47,9 @@ const FALLBACK_ICONS: Record<string, string> = {
 // Node types that support the preview button (opens in VSCode native viewer)
 const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'data']);
 
-export function DataNode({ data, selected }: DataNodeProps) {
+export const DataNode = memo(DataNodeInner);
+
+function DataNodeInner({ data, selected }: DataNodeProps) {
   const { imageUriMap, nodeDefs, updateNodeSize, openPreview } = useCanvasStore();
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
 

@@ -2,7 +2,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { ViewportPortal, useReactFlow } from '@xyflow/react';
 import type { Board } from '../../../../../src/core/canvas-model';
-import { useCanvasStore } from '../../stores/canvas-store';
+import { useCanvasStore, startBoardDrag, endBoardDrag } from '../../stores/canvas-store';
 
 // ── Color presets (shared with BoardDropdown) ────────────────────────────────
 
@@ -80,6 +80,10 @@ function BoardOverlay({ board }: BoardOverlayProps) {
     e.stopPropagation();
     e.preventDefault();
 
+    // Snapshot which nodes are inside the board RIGHT NOW (before moving)
+    const state = useCanvasStore.getState();
+    startBoardDrag(id, state.nodes, state.boards);
+
     const startFlow = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     let lastFlowX = startFlow.x;
     let lastFlowY = startFlow.y;
@@ -97,6 +101,7 @@ function BoardOverlay({ board }: BoardOverlayProps) {
 
     const handleMouseUp = () => {
       setDragging(false);
+      endBoardDrag();
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
