@@ -74,8 +74,11 @@ export function Canvas() {
   const undo = useCanvasStore(s => s.undo);
   const redo = useCanvasStore(s => s.redo);
   const saveNow = useCanvasStore(s => s.saveNow);
+  const initialCanvasLoadActive = useCanvasStore(s => s.initialCanvasLoadActive);
+  const initialCanvasLoadSessionId = useCanvasStore(s => s.currentInitialCanvasLoadStats?.sessionId ?? null);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const initialCanvasFrameLoggedRef = useRef<number | null>(null);
 
   // Drag-over overlay state (shows big hint when dragging files onto canvas)
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -384,6 +387,16 @@ export function Canvas() {
 
     return visualNodes as unknown as RFNode[];
   }, [nodes, nodeGroups, collapsedNodeIds, searchOpen, searchMatches, searchIndex]);
+
+  useEffect(() => {
+    if (!initialCanvasLoadActive || !initialCanvasLoadSessionId) { return; }
+    if (initialCanvasFrameLoggedRef.current === initialCanvasLoadSessionId) { return; }
+    initialCanvasFrameLoggedRef.current = initialCanvasLoadSessionId;
+    console.debug('[ResearchSpace] initial canvas frame', {
+      displayNodeCount: displayNodes.length,
+      edgeCount: allEdges.length,
+    });
+  }, [allEdges.length, displayNodes.length, initialCanvasLoadActive, initialCanvasLoadSessionId]);
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>

@@ -12,7 +12,19 @@ import { NodeContextMenu } from './NodeContextMenu';
 import { ExperimentLogBody } from './ExperimentLogBody';
 import { TaskBody } from './TaskBody';
 import { AiReadabilityBadge } from './AiReadabilityBadge';
-import { buildNodePortStyle } from '../../utils/node-port';
+import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import {
+  ensureNodeChromeStyles,
+  NODE_BORDER_WIDTH,
+  NODE_CONTENT_GUTTER,
+  NODE_HEADER_ICON_SIZE,
+  NODE_HEADER_TITLE_STYLE,
+  NODE_RADIUS,
+  NODE_RESIZE_HANDLE_SIZE,
+  NODE_RESIZE_HIT_THICKNESS,
+  NODE_SELECTED_BORDER_WIDTH,
+  withAlpha,
+} from '../../utils/node-chrome';
 
 // Create blob worker URL from inlined source (CSP: worker-src blob:)
 const workerBlob = new Blob([pdfjsWorkerSrc], { type: 'application/javascript' });
@@ -88,6 +100,10 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     !isMissing &&
     fullContent === undefined;
 
+  useEffect(() => {
+    ensureNodeChromeStyles();
+  }, []);
+
   // Card body follows the node's own display mode; cached full content is only used in full mode.
   const displayContent = desiredCardContentMode === 'full'
     ? (fullContent ?? data.meta?.content_preview)
@@ -140,18 +156,21 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
 
   return (
     <div
+      className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       style={{
         width: '100%',
         height: '100%',
         background: 'var(--vscode-editor-background)',
-        border: `1.5px solid ${selected ? accentColor : 'var(--vscode-panel-border)'}`,
-        borderRadius: 8,
+        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px solid ${selected ? accentColor : 'var(--vscode-panel-border)'}`,
+        borderRadius: NODE_RADIUS,
         display: 'flex',
         /* NO overflow:hidden here — it clips the ReactFlow Handle dots */
         cursor: 'default',
-        boxShadow: selected ? `0 0 0 2px ${accentColor}40` : '0 2px 8px rgba(0,0,0,0.2)',
+        boxShadow: selected
+          ? `0 0 0 1px ${withAlpha(accentColor, 0.2, 'transparent')}, 0 10px 24px ${withAlpha(accentColor, 0.16, 'rgba(0,0,0,0.18)')}`
+          : '0 3px 10px rgba(0,0,0,0.18)',
         position: 'relative',
       }}
     >
@@ -161,11 +180,21 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         minWidth={160}
         minHeight={120}
         color={accentColor}
+        handleStyle={{
+          width: NODE_RESIZE_HANDLE_SIZE,
+          height: NODE_RESIZE_HANDLE_SIZE,
+          borderWidth: 2,
+          borderRadius: 3,
+        }}
+        lineStyle={{
+          width: NODE_RESIZE_HIT_THICKNESS,
+          height: NODE_RESIZE_HIT_THICKNESS,
+        }}
         onResize={handleResize}
         onResizeEnd={handleResizeEnd}
       />
       {/* Left accent bar */}
-      <div style={{ width: 4, background: accentColor, flexShrink: 0, borderRadius: '8px 0 0 8px' }} />
+      <div style={{ width: 4, background: accentColor, flexShrink: 0, borderRadius: `${NODE_RADIUS}px 0 0 ${NODE_RADIUS}px` }} />
 
       {/* Content */}
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -177,13 +206,11 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           overflow: 'hidden',
           flexShrink: 0,
           background: 'var(--vscode-editor-background)',
-          padding: '8px 10px 6px',
+          padding: `9px ${NODE_CONTENT_GUTTER}px 7px`,
         }}>
-          <span style={{ fontSize: 14 }}>{nodeIcon}</span>
+          <span style={{ fontSize: NODE_HEADER_ICON_SIZE, lineHeight: 1 }}>{nodeIcon}</span>
           <span style={{
-            fontSize: 13, fontWeight: 600,
-            color: 'var(--vscode-editor-foreground)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            ...NODE_HEADER_TITLE_STYLE,
             flex: 1,
           }}>
             {data.title || '无标题'}
@@ -227,7 +254,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           display: 'flex',
           flexDirection: 'column',
           gap: 4,
-          padding: '0 10px 6px',
+          padding: `0 ${NODE_CONTENT_GUTTER}px 6px`,
         }}>
 
           {/* Experiment log UI */}
@@ -311,7 +338,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           display: 'flex',
           flexDirection: 'column',
           gap: 4,
-          padding: '6px 10px 8px',
+          padding: `6px ${NODE_CONTENT_GUTTER}px 8px`,
           borderTop: '1px solid var(--vscode-panel-border)',
           background: 'var(--vscode-editor-background)',
         }}>
@@ -360,10 +387,26 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       </div>
 
       {/* Handles */}
-      <Handle type="source" position={Position.Right} id="out"
-        style={buildNodePortStyle(accentColor)} />
-      <Handle type="target" position={Position.Left} id="in"
-        style={buildNodePortStyle(accentColor)} />
+      <Handle
+        className={NODE_PORT_CLASSNAME}
+        type="source"
+        position={Position.Right}
+        id={NODE_PORT_IDS.out}
+        isConnectable
+        isConnectableStart
+        isConnectableEnd={false}
+        style={buildNodePortStyle(accentColor)}
+      />
+      <Handle
+        className={NODE_PORT_CLASSNAME}
+        type="target"
+        position={Position.Left}
+        id={NODE_PORT_IDS.in}
+        isConnectable
+        isConnectableStart={false}
+        isConnectableEnd
+        style={buildNodePortStyle(accentColor)}
+      />
 
       {/* Context menu */}
       {ctxMenu && (

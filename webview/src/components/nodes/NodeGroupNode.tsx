@@ -8,7 +8,16 @@ import {
 } from '@xyflow/react';
 import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
-import { buildNodePortStyle, NODE_PORT_SIZE } from '../../utils/node-port';
+import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import {
+  ensureNodeChromeStyles,
+  NODE_BORDER_WIDTH,
+  NODE_HEADER_ICON_SIZE,
+  NODE_HEADER_TITLE_STYLE,
+  NODE_RADIUS,
+  NODE_SELECTED_BORDER_WIDTH,
+  withAlpha,
+} from '../../utils/node-chrome';
 
 interface NodeGroupNodeData {
   hub_group_id?: string;
@@ -18,7 +27,7 @@ const HEADER_H = 38;
 const COLLAPSED_WIDTH = 220;
 const COLLAPSED_HEIGHT = 72;
 
-export function NodeGroupNode({ id, data }: NodeProps) {
+export function NodeGroupNode({ id, data, selected }: NodeProps) {
   const hubData = data as unknown as NodeGroupNodeData & CanvasNode;
   const groupId = hubData.meta?.hub_group_id ?? hubData.hub_group_id;
   const group = useCanvasStore(s =>
@@ -36,6 +45,10 @@ export function NodeGroupNode({ id, data }: NodeProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState(group?.name ?? hubData.title);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    ensureNodeChromeStyles();
+  }, []);
 
   useEffect(() => {
     setNameDraft(group?.name ?? hubData.title);
@@ -63,9 +76,6 @@ export function NodeGroupNode({ id, data }: NodeProps) {
 
   const portStyle = useMemo<React.CSSProperties>(() => ({
     ...buildNodePortStyle(group?.borderColor ?? '#d8b648'),
-    cursor: 'crosshair',
-    pointerEvents: 'all',
-    zIndex: 120,
   }), [group?.borderColor]);
 
   if (!group) { return null; }
@@ -76,6 +86,7 @@ export function NodeGroupNode({ id, data }: NodeProps) {
   const width = isCollapsed ? COLLAPSED_WIDTH : group.bounds.width;
   const height = isCollapsed ? COLLAPSED_HEIGHT : group.bounds.height;
   const borderColor = group.borderColor ?? '#d8b648';
+  const selectedShadow = `0 0 0 1px ${withAlpha(borderColor, 0.18, 'transparent')}, 0 10px 24px ${withAlpha(borderColor, 0.14, 'rgba(0,0,0,0.16)')}`;
   const visibleMembers = group.nodeIds.filter(id => nodes.some(n => n.id === id));
 
   if (visibleMembers.length === 0) { return null; }
@@ -107,10 +118,10 @@ export function NodeGroupNode({ id, data }: NodeProps) {
               zIndex: 80,
               width: COLLAPSED_WIDTH,
               height: COLLAPSED_HEIGHT,
-              borderRadius: 10,
-              border: `2px solid ${borderColor}`,
+              borderRadius: NODE_RADIUS,
+              border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px solid ${borderColor}`,
               background: 'transparent',
-              boxShadow: '0 8px 20px rgba(0,0,0,0.22)',
+              boxShadow: selected ? selectedShadow : '0 3px 10px rgba(0,0,0,0.16)',
               display: 'flex',
               alignItems: 'center',
               padding: '0 14px',
@@ -120,13 +131,10 @@ export function NodeGroupNode({ id, data }: NodeProps) {
               color: 'var(--vscode-foreground)',
             }}
           >
-            <span style={{ fontSize: 19, lineHeight: 1 }}>◫</span>
+            <span style={{ fontSize: NODE_HEADER_ICON_SIZE + 1, lineHeight: 1, color: borderColor }}>◫</span>
             <span style={{
-              fontSize: 16,
-              fontWeight: 800,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              ...NODE_HEADER_TITLE_STYLE,
+              color: 'var(--vscode-foreground)',
             }}
             >
               {title}
@@ -142,17 +150,17 @@ export function NodeGroupNode({ id, data }: NodeProps) {
               }}
               className="rs-group-header"
               style={{
-                pointerEvents: 'auto',
-                position: 'relative',
-                zIndex: 80,
-                height: HEADER_H,
-                borderRadius: '8px 8px 0 0',
-                border: `2px dashed ${borderColor}`,
-                borderBottom: 'none',
-                background: 'transparent',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
+              pointerEvents: 'auto',
+              position: 'relative',
+              zIndex: 80,
+              height: HEADER_H,
+              borderRadius: `${NODE_RADIUS}px ${NODE_RADIUS}px 0 0`,
+              border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px dashed ${borderColor}`,
+              borderBottom: 'none',
+              background: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
                 padding: '0 10px',
                 cursor: 'grab',
                 userSelect: 'none',
@@ -170,8 +178,8 @@ export function NodeGroupNode({ id, data }: NodeProps) {
                 flex: 1,
               }}
               >
-                <span style={{ fontSize: 19, lineHeight: 1 }}>◫</span>
-                <span style={{ fontSize: 16, fontWeight: 800 }}>{title}</span>
+                <span style={{ fontSize: NODE_HEADER_ICON_SIZE + 1, lineHeight: 1, color: borderColor }}>◫</span>
+                <span style={{ ...NODE_HEADER_TITLE_STYLE, color: 'var(--vscode-foreground)' }}>{title}</span>
               </span>
               <span className="nodrag" style={{ display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
                 <button
@@ -203,33 +211,36 @@ export function NodeGroupNode({ id, data }: NodeProps) {
                 zIndex: 40,
                 width,
                 height: Math.max(0, height - HEADER_H),
-                borderRadius: '0 0 8px 8px',
-                border: `2px dashed ${borderColor}`,
+                borderRadius: `0 0 ${NODE_RADIUS}px ${NODE_RADIUS}px`,
+                border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px dashed ${borderColor}`,
                 borderTop: 'none',
                 background: 'transparent',
                 boxSizing: 'border-box',
+                boxShadow: selected ? selectedShadow : '0 2px 10px rgba(0,0,0,0.08)',
               }}
             />
           </>
         )}
 
         <Handle
+          className={NODE_PORT_CLASSNAME}
           type="target"
           position={Position.Left}
-          id="in"
+          id={NODE_PORT_IDS.in}
           isConnectable
           isConnectableStart={false}
           isConnectableEnd
-          style={{ ...portStyle, width: NODE_PORT_SIZE, height: NODE_PORT_SIZE }}
+          style={portStyle}
         />
         <Handle
+          className={NODE_PORT_CLASSNAME}
           type="source"
           position={Position.Right}
-          id="out"
+          id={NODE_PORT_IDS.out}
           isConnectable
           isConnectableStart
           isConnectableEnd={false}
-          style={{ ...portStyle, width: NODE_PORT_SIZE, height: NODE_PORT_SIZE }}
+          style={portStyle}
         />
       </div>
 

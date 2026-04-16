@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { v4 as uuid } from 'uuid';
 import { isFunctionNode, type CanvasFile, type CanvasNode, type CanvasEdge } from '../core/canvas-model';
+import { buildFunctionExecutionPlan } from '../core/execution-plan';
 import { AIContent } from '../ai/provider';
 import { runFunctionNode, FunctionRunResult, cancelRunByNodeId } from '../ai/function-runner';
 import { readCanvas } from '../core/storage';
@@ -33,6 +34,28 @@ interface PipelineContext {
 
 // Active pipeline contexts (for pause/resume/cancel from outside)
 const activePipelines = new Map<string, PipelineContext>();
+
+function inferPipelineIssueKind(message: string): 'missing_input' | 'missing_config' | 'run_failed' {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('未配置') ||
+    lower.includes('配置缺失') ||
+    lower.includes('unknown tool') ||
+    lower.includes('api key') ||
+    lower.includes('apikey')
+  ) {
+    return 'missing_config';
+  }
+  if (
+    lower.includes('未连接') ||
+    lower.includes('输入缺失') ||
+    lower.includes('请填写') ||
+    lower.includes('需要输入')
+  ) {
+    return 'missing_input';
+  }
+  return 'run_failed';
+}
 
 export function pausePipeline(pipelineId: string): void {
   const ctx = activePipelines.get(pipelineId);
@@ -72,7 +95,7 @@ export async function runPipeline(
     return;
   }
 
-  const plan = buildPipelinePlan(triggerNodeId, canvas.nodes, canvas.edges);
+  const plan = buildPipelinePlan(triggerNodeId, canvas.nodes, canvas.edges, canvas.nodeGroups);
   if ('error' in plan) {
     webview.postMessage({ type: 'error', message: `Pipeline 构建失败: ${plan.error}` });
     return;
@@ -153,8 +176,8 @@ export async function runPipeline(
         if (ctx.nodeStatuses.get(nodeId) === 'skipped') { continue; }
 
         // Check if any upstream node failed → skip this node
-        const upstreamEdges = plan.pipelineEdges.filter(e => e.target === nodeId);
-        const hasFailedUpstream = upstreamEdges.some(e => ctx.nodeStatuses.get(e.source) === 'failed');
+        const dependencyNodeIds = plan.dependencyNodeIdsByNode[nodeId] ?? [];
+        const hasFailedUpstream = dependencyNodeIds.some(sourceId => ctx.nodeStatuses.get(sourceId) === 'failed');
         if (hasFailedUpstream) {
           ctx.nodeStatuses.set(nodeId, 'skipped');
           completedCount++;
@@ -163,6 +186,7 @@ export async function runPipeline(
             pipelineId,
             nodeId,
             reason: '上游节点执行失败',
+            issueKind: 'skipped',
           });
           continue;
         }
@@ -188,6 +212,7 @@ export async function runPipeline(
                 pipelineId,
                 nodeId,
                 error: result.errorMessage ?? 'Unknown error',
+                issueKind: inferPipelineIssueKind(result.errorMessage ?? 'Unknown error'),
               });
             }
           })
@@ -224,36 +249,33 @@ export async function runPipeline(
 async function runPipelineNode(
   ctx: PipelineContext,
   nodeId: string,
-  canvas: CanvasFile,
+  _canvas: CanvasFile,
   canvasUri: vscode.Uri,
   webview: vscode.Webview,
 ): Promise<FunctionRunResult> {
   ctx.nodeStatuses.set(nodeId, 'running');
   webview.postMessage({ type: 'pipelineNodeStart', pipelineId: ctx.pipelineId, nodeId });
 
-  // Build injected contents from upstream pipeline outputs.
-  // Key insight: pipeline_flow edges point from function-node-A → function-node-B,
-  // but function-node-B's upstream edges in the canvas reference A's ID.
-  // We need to inject content keyed by A's function-node ID, so that when
-  // extractContent is called for "upstream node A (a function node)", it
-  // finds the injected output instead of trying to extract from A's tool config.
-  const injectedContents = new Map<string, AIContent>();
-
-  // For each pipeline_flow edge pointing to this node, get the upstream's output
-  const incomingPipelineEdges = ctx.plan.pipelineEdges.filter(
-    e => e.target === nodeId && e.edge_type === 'pipeline_flow'
-  );
-
-  for (const edge of incomingPipelineEdges) {
-    const upstreamOutput = ctx.outputContents.get(edge.source);
-    if (upstreamOutput) {
-      // Key by the upstream FUNCTION node's ID — this is what the canvas edge points to
-      injectedContents.set(edge.source, upstreamOutput);
-    }
-  }
-
   // Re-read canvas for this node's run (may have been updated by earlier nodes)
   const freshCanvas = await readCanvas(canvasUri);
+  const executionPlan = buildFunctionExecutionPlan(nodeId, freshCanvas, ['data_flow', 'pipeline_flow']);
+  if ('error' in executionPlan) {
+    return {
+      success: false,
+      runId: uuid(),
+      errorMessage: executionPlan.error,
+    };
+  }
+
+  // Build injected contents from upstream pipeline outputs using the same input
+  // plan that single-node execution uses. This keeps "function input resolution"
+  // and "pipeline chaining resolution" aligned on one source of truth.
+  const injectedContents = new Map<string, AIContent>();
+  for (const sourceId of executionPlan.directPipelineSourceIds) {
+    const upstreamOutput = ctx.outputContents.get(sourceId);
+    if (!upstreamOutput) { continue; }
+    injectedContents.set(sourceId, upstreamOutput);
+  }
 
   const result = await runFunctionNode(nodeId, freshCanvas, canvasUri, webview, {
     injectedContents: injectedContents.size > 0 ? injectedContents : undefined,
@@ -305,6 +327,7 @@ function markDownstreamSkipped(
         pipelineId: ctx.pipelineId,
         nodeId: edge.target,
         reason: '上游节点执行失败',
+        issueKind: 'skipped',
       });
       queue.push(edge.target);
     }

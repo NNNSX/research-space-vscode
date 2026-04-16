@@ -3,7 +3,17 @@
   "label": "Image",
   "icon": "🖼️",
   "color": "var(--vscode-terminal-ansiMagenta)",
-  "extensions": ["png", "jpg", "jpeg", "gif", "webp"],
+  "extensions": [
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "webp",
+    "svg",
+    "bmp",
+    "avif",
+    "ico"
+  ],
   "previewType": "none",
   "watchContent": false,
   "contentExtractor": "image",

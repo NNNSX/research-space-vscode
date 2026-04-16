@@ -3,7 +3,17 @@
   "label": "Audio",
   "icon": "🎵",
   "color": "var(--vscode-terminal-ansiMagenta)",
-  "extensions": ["mp3", "wav", "opus", "aac", "flac", "m4a", "webm"],
+  "extensions": [
+    "mp3",
+    "wav",
+    "opus",
+    "aac",
+    "flac",
+    "m4a",
+    "webm",
+    "ogg",
+    "oga"
+  ],
   "previewType": "none",
   "watchContent": false,
   "contentExtractor": "audio",

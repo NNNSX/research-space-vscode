@@ -1,14 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
-import { Handle, Position } from '@xyflow/react';
-import type { CanvasNode, FnStatus, ParamDef } from '../../../../src/core/canvas-model';
+import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react';
+import type { CanvasNode, FnStatus, ParamDef, RunIssueKind } from '../../../../src/core/canvas-model';
 import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
 import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
-import { buildNodePortStyle } from '../../utils/node-port';
+import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import {
+  ensureNodeChromeStyles,
+  NODE_BORDER_WIDTH,
+  NODE_CONTENT_GUTTER,
+  NODE_HEADER_ICON_SIZE,
+  NODE_HEADER_TITLE_STYLE,
+  NODE_RADIUS,
+  NODE_SELECTED_BORDER_WIDTH,
+  withAlpha,
+} from '../../utils/node-chrome';
 import { NodeContextMenu } from './NodeContextMenu';
 
 interface FunctionNodeProps {
+  id: string;
   data: CanvasNode;
   selected: boolean;
 }
@@ -75,6 +86,17 @@ const NODE_TYPE_ICONS: Record<string, string> = {
   task:           '✅',
 };
 
+const RUN_ISSUE_LABELS: Record<RunIssueKind, string> = {
+  missing_input: '输入缺失',
+  missing_config: '配置缺失',
+  run_failed: '运行失败',
+  skipped: '已跳过',
+};
+
+const MIN_FUNCTION_NODE_HEIGHT = 220;
+const FUNCTION_NODE_PADDING = NODE_CONTENT_GUTTER;
+const FUNCTION_NODE_AUTO_HEIGHT_PADDING = Math.ceil(NODE_SELECTED_BORDER_WIDTH * 2);
+
 // ── Inject keyframe animations once ───────────────────────────────────────
 const FN_STYLE_ID = 'rs-fn-running-animations';
 function ensureFnAnimations() {
@@ -104,16 +126,20 @@ function ensureFnAnimations() {
 
 export const FunctionNode = memo(FunctionNodeInner);
 
-function FunctionNodeInner({ data, selected }: FunctionNodeProps) {
+function FunctionNodeInner({ id, data, selected }: FunctionNodeProps) {
   const status: FnStatus = data.meta?.fn_status ?? 'idle';
   const tool = data.meta?.ai_tool;
   const icon = tool ? (TOOL_ICONS[tool] ?? '⚡') : '⚡';
 
   // Inject CSS keyframes on first render
-  React.useEffect(() => { ensureFnAnimations(); }, []);
+  React.useEffect(() => {
+    ensureFnAnimations();
+    ensureNodeChromeStyles();
+  }, []);
 
   return (
     <FullFunctionNode
+      id={id}
       data={data}
       selected={selected}
       status={status}
@@ -123,17 +149,21 @@ function FunctionNodeInner({ data, selected }: FunctionNodeProps) {
 }
 
 function FullFunctionNode({
+  id,
   data,
   selected,
   status,
   icon,
 }: {
+  id: string;
   data: CanvasNode;
   selected: boolean;
   status: FnStatus;
   icon: string;
 }) {
+  const updateNodeInternals = useUpdateNodeInternals();
   const updateNodeParamValue = useCanvasStore(s => s.updateNodeParamValue);
+  const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
   const updateInputOrder = useCanvasStore(s => s.updateInputOrder);
   const getUpstreamNodes = useCanvasStore(s => s.getUpstreamNodes);
   const modelCache = useCanvasStore(s => s.modelCache);
@@ -144,6 +174,8 @@ function FullFunctionNode({
   const [promptOpen, setPromptOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // v2.0: Cycle error shake animation
   const cycleErrorNodeId = useCanvasStore(s => (s as any)._cycleErrorNodeId) as string | null;
@@ -155,6 +187,11 @@ function FullFunctionNode({
     if (!ps) { return null; }
     return ps.nodeStatuses[data.id] ?? null;
   }) as import('../../stores/canvas-store').PipelineNodeStatus | null;
+  const pipelineNodeIssue = useCanvasStore(s => {
+    const ps = s.pipelineState;
+    if (!ps) { return null; }
+    return ps.nodeIssues[data.id] ?? null;
+  });
 
   // Local draft for the system prompt textarea
   const [promptDraft, setPromptDraft] = useState<string>(
@@ -210,8 +247,6 @@ function FullFunctionNode({
   // Guard: ensure input_schema is always an array
   const inputSchema = Array.isArray(data.meta?.input_schema) ? data.meta!.input_schema : [];
   const schema = parseInputParams(inputSchema);
-
-  const width = data.size?.width ?? 280;
 
   // ── Provider change ────────────────────────────────────────────────────────
   const handleProviderChange = useCallback((newProvider: string) => {
@@ -436,7 +471,17 @@ function FullFunctionNode({
   const pipelineRunning = pipelineNodeStatus === 'running';
   const pipelineSkipped = pipelineNodeStatus === 'skipped';
   const pipelineWaiting = pipelineNodeStatus === 'waiting';
+  const nodeIssue = pipelineNodeIssue ?? (
+    data.meta?.fn_issue_kind && data.meta?.fn_issue_message
+      ? { kind: data.meta.fn_issue_kind, message: data.meta.fn_issue_message }
+      : null
+  );
+  const showIssueBanner = !!nodeIssue && (effectiveStatus === 'error' || pipelineFailed || pipelineSkipped);
   const showStopButton = isVisuallyRunning || countdown !== null;
+  const calmBorder = `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px solid ${selected ? effectiveStatusColor : 'var(--vscode-panel-border)'}`;
+  const calmBoxShadow = selected
+    ? `0 0 0 1px ${withAlpha(effectiveStatusColor, 0.18, 'transparent')}, 0 10px 24px ${withAlpha(effectiveStatusColor, 0.12, 'rgba(0,0,0,0.18)')}`
+    : '0 3px 10px rgba(0,0,0,0.18)';
 
   const badgeConfig = (() => {
     switch (pipelineNodeStatus) {
@@ -455,11 +500,61 @@ function FullFunctionNode({
     }
   })();
 
+  useEffect(() => {
+    updateNodeInternals(id);
+    const raf = window.requestAnimationFrame(() => updateNodeInternals(id));
+    return () => window.cancelAnimationFrame(raf);
+  }, [id, updateNodeInternals, promptOpen, inputsOpen, upstreamNodes.length, showIssueBanner, effectiveProgressText, pipelineNodeStatus, countdown]);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) { return; }
+    const raf = window.requestAnimationFrame(() => {
+      const currentWidth = data.size?.width ?? 280;
+      const currentHeight = data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT;
+      const contentHeight = Math.max(el.scrollHeight, el.clientHeight);
+      const requiredHeight = Math.max(
+        MIN_FUNCTION_NODE_HEIGHT,
+        Math.ceil(contentHeight + FUNCTION_NODE_AUTO_HEIGHT_PADDING),
+      );
+      if (Math.abs(requiredHeight - currentHeight) > 2) {
+        updateNodeSize(id, currentWidth, requiredHeight);
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [
+    countdown,
+    data.size?.height,
+    data.size?.width,
+    effectiveProgressText,
+    id,
+    inputsOpen,
+    pipelineNodeStatus,
+    promptOpen,
+    showIssueBanner,
+    tool,
+    updateNodeSize,
+    upstreamNodes.length,
+  ]);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') { return; }
+    const observer = new ResizeObserver(() => {
+      updateNodeInternals(id);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [id, updateNodeInternals]);
+
   return (
     <div
+      ref={rootRef}
+      className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
       style={{
-      width,
+      width: '100%',
+      height: '100%',
       background: 'var(--vscode-editor-background)',
       border: isVisuallyRunning
         ? '2px solid rgba(59,130,246,0.7)'
@@ -470,15 +565,14 @@ function FullFunctionNode({
             : pipelineFailed
               ? '2px solid var(--vscode-terminal-ansiRed)'
                 : pipelineSkipped
-                ? '2px dashed var(--vscode-disabledForeground)'
+                ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-disabledForeground)`
                 : pipelineWaiting
-                  ? '2px dashed var(--vscode-descriptionForeground)'
-                  : `2px solid ${selected ? effectiveStatusColor : 'var(--vscode-panel-border)'}`,
-      borderRadius: 8,
-      padding: 10,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
+                  ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-descriptionForeground)`
+                  : calmBorder,
+      borderRadius: NODE_RADIUS,
+      position: 'relative',
+      boxSizing: 'border-box',
+      minHeight: 0,
       opacity: pipelineSkipped ? 0.45 : 1,
       boxShadow: isVisuallyRunning
         ? '0 0 8px 2px rgba(59,130,246,0.4)'
@@ -488,7 +582,7 @@ function FullFunctionNode({
             ? '0 0 6px 1px rgba(34,197,94,0.3)'
             : pipelineFailed
             ? '0 0 6px 1px rgba(239,68,68,0.3)'
-              : undefined,
+              : calmBoxShadow,
       animation: isVisuallyRunning
         ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
         : isCycleError
@@ -496,11 +590,21 @@ function FullFunctionNode({
           : undefined,
       transition: 'border-color 0.3s, box-shadow 0.3s, opacity 0.3s',
     }}>
+      <div
+        ref={contentRef}
+        style={{
+          padding: FUNCTION_NODE_PADDING,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          boxSizing: 'border-box',
+        }}
+      >
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 18 }}>{icon}</span>
-        <span style={{ fontWeight: 700, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: NODE_HEADER_ICON_SIZE + 1, lineHeight: 1 }}>{icon}</span>
+        <span style={{ ...NODE_HEADER_TITLE_STYLE, flex: 1 }}>
           {data.title || '功能节点'}
         </span>
         <StatusBadge color={badgeConfig.color} label={badgeConfig.label} />
@@ -532,8 +636,32 @@ function FullFunctionNode({
         </div>
       )}
 
+      {showIssueBanner && nodeIssue && (
+        <div style={{
+          fontSize: 10,
+          color: pipelineSkipped
+            ? 'var(--vscode-descriptionForeground)'
+            : 'var(--vscode-inputValidation-errorForeground, #f48771)',
+          background: pipelineSkipped
+            ? 'var(--vscode-input-background)'
+            : 'var(--vscode-inputValidation-errorBackground, #5a1d1d)',
+          border: `1px solid ${pipelineSkipped
+            ? 'var(--vscode-panel-border)'
+            : 'var(--vscode-inputValidation-errorBorder, #be1100)'}`,
+          borderRadius: 4,
+          padding: '5px 7px',
+          lineHeight: 1.45,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          <strong>{RUN_ISSUE_LABELS[nodeIssue.kind] ?? '执行问题'}</strong>
+          {' · '}
+          {nodeIssue.message}
+        </div>
+      )}
+
       {/* Divider */}
-      <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: '0 -10px' }} />
+      <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
 
       {/* Provider / Model — only for LLM (text) tools */}
       {isMultimodal ? (
@@ -582,7 +710,7 @@ function FullFunctionNode({
       )}
 
       {/* Divider */}
-      <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: '0 -10px' }} />
+      <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
 
       {/* ── Chat UI ── */}
       {isChatMode ? (
@@ -654,7 +782,7 @@ function FullFunctionNode({
                   </div>
                 </div>
               )}
-              <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: '0 -10px' }} />
+              <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
             </>
           )}
 
@@ -795,7 +923,7 @@ function FullFunctionNode({
           {/* Optional tool params */}
           {schema.optional.length > 0 && (
             <>
-              <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: '0 -10px' }} />
+              <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {schema.optional.map(p => (
                   <ParamControl key={p.name} param={p} nodeData={data} globalDefaultModel={globalDefaultModel} isMultimodal={isMultimodal} />
@@ -807,7 +935,7 @@ function FullFunctionNode({
       )}
 
       {/* Run / Stop button */}
-      <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
         {showStopButton ? (
           <button
             onClick={handleCancel}
@@ -847,12 +975,29 @@ function FullFunctionNode({
           </>
         )}
       </div>
+      </div>
 
       {/* Handles */}
-      <Handle type="target" position={Position.Left} id="in-main"
-        style={buildNodePortStyle(effectiveStatusColor)} />
-      <Handle type="source" position={Position.Right} id="out"
-        style={buildNodePortStyle(effectiveStatusColor)} />
+      <Handle
+        className={NODE_PORT_CLASSNAME}
+        type="target"
+        position={Position.Left}
+        id={NODE_PORT_IDS.in}
+        isConnectable
+        isConnectableStart={false}
+        isConnectableEnd
+        style={buildNodePortStyle(effectiveStatusColor)}
+      />
+      <Handle
+        className={NODE_PORT_CLASSNAME}
+        type="source"
+        position={Position.Right}
+        id={NODE_PORT_IDS.out}
+        isConnectable
+        isConnectableStart
+        isConnectableEnd={false}
+        style={buildNodePortStyle(effectiveStatusColor)}
+      />
 
       {/* Context menu */}
       {ctxMenu && (

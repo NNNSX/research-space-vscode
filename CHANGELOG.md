@@ -2,6 +2,39 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [2.1.0-alpha.5] — 2026-04-17
+
+- **Office 模板 / 放映变体继续补齐** — 新增 `dot` / `dotx` / `dotm`、`xlt` / `xltx` / `xltm`、`pps` / `ppsx` / `ppsm`、`pot` / `potx` / `potm` 导入支持；对应 Note / Data 节点映射、Explorer 右键入口、文件监听和 fallback 识别已同步扩展
+- **Flat OpenDocument 首轮接入** — 新增 `fodt` / `fods` / `fodp` 支持：直接读取 XML 文本，不再只覆盖 zip 版 `odt/ods/odp`
+- **提取链路继续复用同类实现** — `dotx/dotm` 复用 Word OOXML 提取，`ppsx/ppsm/potx/potm` 复用 PowerPoint OOXML 提取，`xltx/xltm` 复用 Excel OOXML 提取；`dot` 走 `textutil`，`xlt/pps/pot` 继续走 legacy best-effort 文本抽取
+
+## [2.1.0-alpha.4] — 2026-04-17
+
+- **老 Office 格式首轮接入** — 新增 `doc` / `xls` / `ppt` 导入支持，不再只覆盖新 Office；其中 `doc` 归入 Note，`xls` 归入 Data，`ppt` 归入 Note
+- **第二批文档格式补齐** — 继续补入 `docm` / `xlsm` / `pptm`、`rtf`、`odt` / `ods` / `odp`、`epub`；对应导入入口、文件监听和 fallback 映射已同步扩展
+- **提取策略分层** — `doc/rtf` 优先走 macOS `textutil`，`docx/xlsx/pptx/docm/xlsm/pptm` 走 OOXML 解包，`odt/ods/odp/epub` 走 zip/XML/HTML 首轮提取，`xls/ppt` 走 best-effort 文本提取；当前目标是“可导入、可预览、可喂给 AI”，不是版式保真
+
+## [2.1.0-alpha.3] — 2026-04-17
+
+- **Office 文件首轮接入** — 新增 `docx` / `pptx` / `xlsx` 导入支持：Word 与 PowerPoint 会进入 Note 节点，Excel 会进入 Data 节点，不再只能卡在资源管理器里导不进画布
+- **OOXML 文本提取链路补齐** — Extension Host 对 `docx` / `pptx` / `xlsx` 增加首轮解包提取：`docx` 读取正文/页眉页脚文本，`pptx` 提取各页 slide 文本，`xlsx` 提取工作表单元格内容并转成制表文本，支持卡片预览、全文请求与 AI 输入
+- **说明与限制显式化** — 这一轮先支持现代 OOXML（`docx/xlsx/pptx`），暂不覆盖旧二进制 `doc/xls/ppt`；Office 提取目前属于“基础可读文本”级别，不等同于完整版式保真解析
+
+## [2.1.0-alpha.2] — 2026-04-17
+
+- **主流文件导入范围扩充** — 新增一批更常见的文本/代码/媒体格式映射：`markdown` / `mdown` / `mkd` / `rst` / `adoc`，`mjs` / `cjs` / `mts` / `cts` / `h` / `hpp` / `php` / `lua` / `ps1` / `vue` / `svelte` / `astro` / `ipynb` / `jsonl` / `ndjson` 等现在都可直接加入画布
+- **图片/音视频格式补齐** — Image 节点补充 `svg` / `bmp` / `avif` / `ico`，Audio 节点补充 `ogg` / `oga`，Video 节点补充 `m4v`，减少“常见文件拖不进来”的割裂感
+- **导入入口与文件监听同步放宽** — Explorer「Add to Canvas」菜单匹配范围、宿主文件监听 glob、硬编码后备映射与语言识别表已同步更新，避免“能识别但右键没有入口”或“导入后文件变化不刷新”的半支持状态
+
+## [2.1.0-alpha.1] — 2026-04-17
+
+- **收口版执行计划统一** — 单节点运行、批量运行与 Pipeline 运行进一步共享同一套 `execution-plan` 语义，Hub 展开、输入顺序、数据流 / 管道流依赖和下游注入不再各走各路
+- **执行错误可见性补齐** — 功能节点与 Pipeline 工具栏现在统一展示 `missing_input` / `missing_config` / `run_failed` / `skipped` 等结构化问题，减少“节点没跑但看不出来为什么”的假状态
+- **节点容器视觉统一** — 数据节点、功能节点、节点组统一了边框粗细、hover/selected 反馈、标题字号与端口外观，节点组更明确呈现为收口容器而不是另一张文件卡片
+- **首屏加载观察面建立** — 大画布加载期间新增节点数、媒体请求数、全文请求数、组边界重算次数、首轮渲染时间等观察信息，后续性能问题不再只能靠主观卡顿感猜
+- **高频更新源第一轮收口** — 搜索输入增加 debounce，媒体 URI / 节点预览改为按帧批量回填，相同内容不再重复写入 store，降低大画布和流式更新时的无效重渲染
+- **加载提示关闭条件更真实** — 首屏 loading notice 现在会等待首轮渲染就绪、媒体恢复和关键全文补载完成，而不再只因为初始 JSON 到达就过早消失
+
 ## [2.0.0-alpha.14] — 2026-04-16
 
 - **版本与发布资料统一到 alpha.14** — `package.json`、README、CHANGELOG 与 GitHub Release Note 全部同步到 `v2.0.0-alpha.14`，避免安装包、仓库说明与发布页文案出现版本错位

@@ -39,6 +39,7 @@ export interface SettingsSnapshot {
 export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data';
 export type NodeType = DataNodeType | 'function' | 'group_hub';
 export type FnStatus = 'idle' | 'running' | 'done' | 'error';
+export type RunIssueKind = 'missing_input' | 'missing_config' | 'run_failed' | 'skipped';
 export type AiTool = 'summarize' | 'polish' | 'review' | 'translate' | 'draw' | 'rag' | 'chat';
 export type EdgeType = 'data_flow' | 'pipeline_flow' | 'ai_generated' | 'reference' | 'hub_member';
 
@@ -72,6 +73,8 @@ export interface NodeMeta {
   input_order?: string[];        // user-defined ordering of upstream node IDs
   fn_status?: FnStatus;
   fn_progress?: string;
+  fn_issue_kind?: RunIssueKind;
+  fn_issue_message?: string;
   run_guard?: 'always' | 'on-change' | 'manual-confirm';  // F2: run condition
   input_hash?: string;           // F2: hash of last run's inputs (for on-change guard)
 
@@ -363,10 +366,10 @@ export type ExtensionMessage =
   | { type: 'nodeFileMoved'; nodeId: string; newFilePath: string; newTitle: string }
   | { type: 'nodeContentUpdate'; nodeId: string; preview: string; metaPatch?: Partial<NodeMeta> }
   | { type: 'toastError'; message: string }
-  | { type: 'fnStatusUpdate'; nodeId: string; status: FnStatus; progressText?: string }
+  | { type: 'fnStatusUpdate'; nodeId: string; status: FnStatus; progressText?: string; issueKind?: RunIssueKind; issueMessage?: string }
   | { type: 'aiChunk'; runId: string; chunk: string }
   | { type: 'aiDone'; runId: string; node: CanvasNode; edge: CanvasEdge }
-  | { type: 'aiError'; runId: string; message: string }
+  | { type: 'aiError'; runId: string; nodeId?: string; message: string; issueKind?: RunIssueKind }
   | { type: 'imageUri'; filePath: string; uri: string }
   | { type: 'modelList'; provider: string; models: ModelInfo[] }
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
@@ -376,8 +379,8 @@ export type ExtensionMessage =
   | { type: 'pipelineStarted'; pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number }
   | { type: 'pipelineNodeStart'; pipelineId: string; nodeId: string }
   | { type: 'pipelineNodeComplete'; pipelineId: string; nodeId: string; outputNodeId: string }
-  | { type: 'pipelineNodeError'; pipelineId: string; nodeId: string; error: string }
-  | { type: 'pipelineNodeSkipped'; pipelineId: string; nodeId: string; reason?: string }
+  | { type: 'pipelineNodeError'; pipelineId: string; nodeId: string; error: string; issueKind?: Exclude<RunIssueKind, 'skipped'> }
+  | { type: 'pipelineNodeSkipped'; pipelineId: string; nodeId: string; reason?: string; issueKind?: Extract<RunIssueKind, 'skipped'> }
   | { type: 'pipelineComplete'; pipelineId: string; totalNodes: number; completedNodes: number }
   | { type: 'pipelineValidationWarning'; pipelineId: string; nodeId: string; message: string };
 // ── Default node sizes ──────────────────────────────────────────────────────
@@ -393,5 +396,5 @@ export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> 
   group_hub:       { width: 220, height: 140 },
   task:            { width: 300, height: 240 },
   data:            { width: 320, height: 200 },
-  function:        { width: 280, height: 160 },
+  function:        { width: 280, height: 220 },
 };

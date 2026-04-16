@@ -3,7 +3,11 @@
   "label": "Video",
   "icon": "🎬",
   "color": "var(--vscode-terminal-ansiBlue)",
-  "extensions": ["mp4", "mov"],
+  "extensions": [
+    "mp4",
+    "mov",
+    "m4v"
+  ],
   "previewType": "none",
   "watchContent": false,
   "contentExtractor": "video",

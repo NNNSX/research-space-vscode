@@ -74,20 +74,25 @@ const EXT_TO_NODE_TYPE: Record<string, NodeType> = {
   // paper
   pdf: 'paper',
   // image
-  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image', bmp: 'image', avif: 'image', ico: 'image',
   // note
-  md: 'note', txt: 'note',
-  // code / data
-  py: 'code', js: 'code', ts: 'code', tsx: 'code', jsx: 'code',
-  rs: 'code', go: 'code', java: 'code', c: 'code', cpp: 'code',
-  cs: 'code', rb: 'code', swift: 'code', kt: 'code', r: 'code',
-  sh: 'code', bash: 'code', yaml: 'code', yml: 'code', json: 'code',
-  toml: 'code', tex: 'code',
-  xml: 'code', html: 'code', css: 'code', scss: 'code', less: 'code',
-  sql: 'code', graphql: 'code', proto: 'code', ini: 'code', cfg: 'code',
-  env: 'code', log: 'code', conf: 'code',
+  md: 'note', markdown: 'note', mdown: 'note', mkd: 'note', txt: 'note', text: 'note', rst: 'note', adoc: 'note', doc: 'note', dot: 'note', docx: 'note', docm: 'note', dotx: 'note', dotm: 'note', rtf: 'note', ppt: 'note', pps: 'note', pot: 'note', pptx: 'note', pptm: 'note', ppsx: 'note', ppsm: 'note', potx: 'note', potm: 'note', odt: 'note', odp: 'note', fodt: 'note', fodp: 'note', epub: 'note',
+  // code
+  py: 'code', js: 'code', mjs: 'code', cjs: 'code', ts: 'code', mts: 'code', cts: 'code', tsx: 'code', jsx: 'code',
+  rs: 'code', go: 'code', java: 'code', c: 'code', cc: 'code', cpp: 'code', cxx: 'code', cs: 'code',
+  h: 'code', hh: 'code', hpp: 'code', hxx: 'code', m: 'code', mm: 'code',
+  rb: 'code', swift: 'code', kt: 'code', r: 'code', php: 'code', phtml: 'code', lua: 'code', pl: 'code', pm: 'code',
+  scala: 'code', groovy: 'code', gradle: 'code', dart: 'code', jl: 'code', zig: 'code', nim: 'code',
+  sh: 'code', bash: 'code', zsh: 'code', fish: 'code', ps1: 'code', psm1: 'code', psd1: 'code', bat: 'code', cmd: 'code',
+  yaml: 'code', yml: 'code', json: 'code', jsonl: 'code', ndjson: 'code', toml: 'code', tex: 'code', bib: 'code', bst: 'code', ipynb: 'code',
+  xml: 'code', html: 'code', css: 'code', scss: 'code', less: 'code', vue: 'code', svelte: 'code', astro: 'code',
+  sql: 'code', graphql: 'code', proto: 'code', ini: 'code', cfg: 'code', env: 'code', log: 'code', conf: 'code',
   // data
-  csv: 'data', tsv: 'data',
+  csv: 'data', tsv: 'data', xls: 'data', xlt: 'data', xlsx: 'data', xlsm: 'data', xltx: 'data', xltm: 'data', ods: 'data', fods: 'data',
+  // audio
+  mp3: 'audio', wav: 'audio', opus: 'audio', aac: 'audio', flac: 'audio', m4a: 'audio', webm: 'audio', ogg: 'audio', oga: 'audio',
+  // video
+  mp4: 'video', mov: 'video', m4v: 'video',
 };
 
 export function fileExtToNodeType(ext: string): NodeType | null {
@@ -105,11 +110,16 @@ export function nodeTypeFromFilePath(filePath: string): NodeType | null {
 // ── Language detection for code nodes ──────────────────────────────────────
 
 const EXT_TO_LANGUAGE: Record<string, string> = {
-  py: 'python', js: 'javascript', ts: 'typescript', tsx: 'typescript',
-  jsx: 'javascript', rs: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
-  cs: 'csharp', rb: 'ruby', swift: 'swift', kt: 'kotlin', r: 'r',
-  sh: 'shell', bash: 'shell', yaml: 'yaml', yml: 'yaml', json: 'json',
-  toml: 'toml', tex: 'latex',
+  py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', mts: 'typescript', cts: 'typescript', tsx: 'typescript', jsx: 'javascriptreact',
+  rs: 'rust', go: 'go', java: 'java', c: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', cs: 'csharp',
+  h: 'c', hh: 'cpp', hpp: 'cpp', hxx: 'cpp', m: 'objective-c', mm: 'objective-cpp',
+  rb: 'ruby', swift: 'swift', kt: 'kotlin', r: 'r', php: 'php', phtml: 'php', lua: 'lua', pl: 'perl', pm: 'perl',
+  scala: 'scala', groovy: 'groovy', gradle: 'groovy', dart: 'dart', jl: 'julia', zig: 'zig', nim: 'nim',
+  sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell', ps1: 'powershell', psm1: 'powershell', psd1: 'powershell', bat: 'bat', cmd: 'bat',
+  yaml: 'yaml', yml: 'yaml', json: 'json', jsonl: 'json', ndjson: 'json', toml: 'toml', tex: 'latex', bib: 'bibtex', bst: 'bibtex', ipynb: 'json',
+  xml: 'xml', html: 'html', css: 'css', scss: 'scss', less: 'less', vue: 'vue', svelte: 'svelte', astro: 'astro', xls: 'plaintext', xlt: 'plaintext', xlsx: 'plaintext', xlsm: 'plaintext', xltx: 'plaintext', xltm: 'plaintext', ods: 'plaintext', fods: 'plaintext', doc: 'plaintext', dot: 'plaintext', docx: 'plaintext', docm: 'plaintext', dotx: 'plaintext', dotm: 'plaintext', rtf: 'plaintext', ppt: 'plaintext', pps: 'plaintext', pot: 'plaintext', pptx: 'plaintext', pptm: 'plaintext', ppsx: 'plaintext', ppsm: 'plaintext', potx: 'plaintext', potm: 'plaintext', odt: 'plaintext', odp: 'plaintext', fodt: 'plaintext', fodp: 'plaintext', epub: 'plaintext',
+  sql: 'sql', graphql: 'graphql', proto: 'protobuf', ini: 'ini', cfg: 'ini', env: 'properties', log: 'log', conf: 'properties',
 };
 
 export function detectLanguage(filePath: string): string {

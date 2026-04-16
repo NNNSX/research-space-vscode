@@ -12,6 +12,15 @@ export function SearchBar() {
   const prevSearchMatch = useCanvasStore(s => s.prevSearchMatch);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const [draftQuery, setDraftQuery] = React.useState(searchQuery);
+
+  useEffect(() => {
+    if (!searchOpen) {
+      setDraftQuery('');
+      return;
+    }
+    setDraftQuery(searchQuery);
+  }, [searchOpen, searchQuery]);
 
   useEffect(() => {
     if (!searchOpen) { return; }
@@ -21,6 +30,14 @@ export function SearchBar() {
     }, 0);
     return () => clearTimeout(t);
   }, [searchOpen]);
+
+  useEffect(() => {
+    if (!searchOpen) { return; }
+    const timer = window.setTimeout(() => {
+      setSearchQuery(draftQuery);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [draftQuery, searchOpen, setSearchQuery]);
 
   if (!searchOpen) { return null; }
 
@@ -47,9 +64,9 @@ export function SearchBar() {
     }}>
       <input
         ref={inputRef}
-        value={searchQuery}
+        value={draftQuery}
         placeholder="搜索节点标题或预览内容"
-        onChange={e => setSearchQuery(e.target.value)}
+        onChange={e => setDraftQuery(e.target.value)}
         onKeyDown={e => {
           if (e.key === 'Enter' && e.shiftKey) {
             e.preventDefault();

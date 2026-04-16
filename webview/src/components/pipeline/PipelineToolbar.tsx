@@ -2,6 +2,14 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useCanvasStore, type PipelineNodeStatus } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
+import type { RunIssueKind } from '../../../../src/core/canvas-model';
+
+const RUN_ISSUE_LABELS: Record<RunIssueKind, string> = {
+  missing_input: '输入缺失',
+  missing_config: '配置缺失',
+  run_failed: '运行失败',
+  skipped: '已跳过',
+};
 
 /**
  * Floating toolbar showing pipeline execution progress.
@@ -36,6 +44,7 @@ export function PipelineToolbar() {
     isRunning,
     isPaused,
     currentNodeId,
+    nodeIssues,
     validationWarnings,
   } = pipelineState;
 
@@ -58,6 +67,9 @@ export function PipelineToolbar() {
   const hasFailed = statusCounts.failed > 0;
   const allDone = !isRunning;
   const visibleWarnings = validationWarnings.slice(0, 2);
+  const visibleIssues = Object.entries(nodeIssues)
+    .slice(-2)
+    .map(([nodeId, issue]) => ({ nodeId, ...issue }));
 
   // Status text
   let statusLabel = '▶ Pipeline 运行中';
@@ -266,6 +278,37 @@ export function PipelineToolbar() {
               另有 {validationWarnings.length - visibleWarnings.length} 条提醒
             </span>
           )}
+        </div>
+      )}
+      {visibleIssues.length > 0 && (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          paddingTop: 2,
+          borderTop: '1px solid var(--vscode-panel-border)',
+        }}>
+          <span style={{
+            fontSize: 10,
+            color: 'var(--vscode-inputValidation-errorForeground, #f48771)',
+            fontWeight: 700,
+          }}>
+            节点问题
+          </span>
+          {visibleIssues.map((issue, index) => (
+            <span
+              key={`${issue.nodeId}-${index}`}
+              style={{
+                fontSize: 10,
+                color: issue.kind === 'skipped'
+                  ? 'var(--vscode-descriptionForeground)'
+                  : 'var(--vscode-inputValidation-errorForeground, #f48771)',
+                lineHeight: 1.4,
+              }}
+            >
+              {RUN_ISSUE_LABELS[issue.kind] ?? '执行问题'}：{issue.message}
+            </span>
+          ))}
         </div>
       )}
     </div>,

@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { CanvasFile, CanvasNode, CanvasEdge } from '../core/canvas-model';
+import { CanvasFile, CanvasNode, CanvasEdge, RunIssueKind } from '../core/canvas-model';
+import { buildFunctionExecutionPlan } from '../core/execution-plan';
 import { AIContent } from './provider';
 import { writeCanvas, ensureAiOutputDir, toRelPath, formatTimestamp } from '../core/storage';
 import { extractContent } from '../core/content-extractor';
-import { collectExpandedInputs } from '../core/hub-utils';
 import { getProvider } from './provider';
 import { ToolRegistry } from './tool-registry';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
@@ -52,6 +52,40 @@ export interface FunctionRunResult {
   errorMessage?: string;
 }
 
+function inferRunIssueKind(message: string, fallback: RunIssueKind = 'run_failed'): RunIssueKind {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('未配置') ||
+    lower.includes('配置缺失') ||
+    lower.includes('unknown tool') ||
+    lower.includes('api key') ||
+    lower.includes('apikey')
+  ) {
+    return 'missing_config';
+  }
+  if (
+    lower.includes('未连接') ||
+    lower.includes('输入缺失') ||
+    lower.includes('找不到目标节点') ||
+    lower.includes('找不到功能节点')
+  ) {
+    return 'missing_input';
+  }
+  return fallback;
+}
+
+function reportNodeIssue(
+  webview: vscode.Webview,
+  nodeId: string,
+  runId: string,
+  message: string,
+  issueKind?: RunIssueKind,
+): void {
+  const kind = issueKind ?? inferRunIssueKind(message);
+  webview.postMessage({ type: 'aiError', runId, nodeId, message, issueKind: kind });
+  webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: kind, issueMessage: message });
+}
+
 // ── Main executor ──────────────────────────────────────────────────────────
 
 export async function runFunctionNode(
@@ -65,7 +99,13 @@ export async function runFunctionNode(
   nodeToRunId.set(nodeId, runId);
   const fnNode = canvas.nodes.find(n => n.id === nodeId);
   if (!fnNode || !fnNode.meta?.ai_tool) {
-    webview.postMessage({ type: 'aiError', runId, message: '找不到功能节点或 ai_tool 配置' });
+    webview.postMessage({
+      type: 'aiError',
+      runId,
+      nodeId,
+      message: '找不到功能节点或 ai_tool 配置',
+      issueKind: 'missing_config',
+    });
     return { success: false, runId, errorMessage: '找不到功能节点或 ai_tool 配置' };
   }
 
@@ -73,7 +113,13 @@ export async function runFunctionNode(
   const toolId = fnNode.meta.ai_tool as string;
   const toolDef = registry.get(toolId);
   if (!toolDef) {
-    webview.postMessage({ type: 'aiError', runId, message: `Unknown tool: ${toolId}` });
+    webview.postMessage({
+      type: 'aiError',
+      runId,
+      nodeId,
+      message: `Unknown tool: ${toolId}`,
+      issueKind: 'missing_config',
+    });
     return { success: false, runId, errorMessage: `Unknown tool: ${toolId}` };
   }
 
@@ -83,8 +129,7 @@ export async function runFunctionNode(
   } catch (e: unknown) {
     activeRuns.delete(runId);
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }
@@ -101,13 +146,22 @@ export async function runBatchFunctionNode(
 ): Promise<void> {
   const fnNode = canvas.nodes.find(n => n.id === nodeId);
   if (!fnNode || !fnNode.meta?.ai_tool) {
-    webview.postMessage({ type: 'aiError', runId: uuid(), message: '找不到功能节点或 ai_tool 配置' });
+    webview.postMessage({ type: 'aiError', runId: uuid(), nodeId, message: '找不到功能节点或 ai_tool 配置', issueKind: 'missing_config' });
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: 'missing_config', issueMessage: '找不到功能节点或 ai_tool 配置' });
     return;
   }
 
-  const expandedInputs = collectExpandedInputs(nodeId, canvas, ['data_flow']);
+  const executionPlan = buildFunctionExecutionPlan(nodeId, canvas, ['data_flow']);
+  if ('error' in executionPlan) {
+    webview.postMessage({ type: 'aiError', runId: uuid(), nodeId, message: executionPlan.error, issueKind: 'missing_input' });
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: 'missing_input', issueMessage: executionPlan.error });
+    return;
+  }
+
+  const expandedInputs = executionPlan.expandedInputs;
   if (expandedInputs.length === 0) {
-    webview.postMessage({ type: 'aiError', runId: uuid(), message: '批量运行：未连接任何输入数据节点。' });
+    webview.postMessage({ type: 'aiError', runId: uuid(), nodeId, message: '批量运行：未连接任何输入数据节点。', issueKind: 'missing_input' });
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: 'missing_input', issueMessage: '批量运行：未连接任何输入数据节点。' });
     return;
   }
 
@@ -197,19 +251,19 @@ async function _runFunctionNodeInner(
   // 1. Running status
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: '采集输入中…' });
 
-  // 2. Collect upstream data nodes (data_flow AND pipeline_flow edges), respecting user-defined input_order
-  const expandedInputs = collectExpandedInputs(nodeId, canvas, ['data_flow', 'pipeline_flow']);
-  const upstreamNodes = expandedInputs.map(ref => ref.node);
-  const nodeRoleMap = new Map<string, string | undefined>();
-  for (const ref of expandedInputs) {
-    if (!nodeRoleMap.has(ref.node.id)) {
-      nodeRoleMap.set(ref.node.id, ref.role);
-    }
+  // 2. Build a shared execution/input plan. Single-node run, batch run, and
+  // pipeline chaining all resolve upstream inputs through the same expansion
+  // rules (edge filtering, hub expansion, and input_order sorting).
+  const executionPlan = buildFunctionExecutionPlan(nodeId, canvas, ['data_flow', 'pipeline_flow']);
+  if ('error' in executionPlan) {
+    reportNodeIssue(webview, nodeId, runId, executionPlan.error, 'missing_input');
+    return { success: false, runId, errorMessage: executionPlan.error };
   }
+  const upstreamNodes = executionPlan.upstreamNodes;
+  const nodeRoleMap = executionPlan.nodeRoleMap;
 
   if (upstreamNodes.length === 0 && toolId !== 'rag' && toolId !== 'chat' && aiType === 'chat') {
-    webview.postMessage({ type: 'aiError', runId, message: '未连接任何输入数据节点（数据流边）。' });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, '未连接任何输入数据节点（数据流边）。', 'missing_input');
     return { success: false, runId, errorMessage: '未连接任何输入节点。' };
   }
 
@@ -287,8 +341,7 @@ async function _runFunctionNodeInner(
     const chatPrompt = (fnNode.meta.param_values?.['_chatPrompt'] as string)?.trim() ?? '';
     if (!chatPrompt) {
       const msg = 'Chat 对话需要输入 Prompt，请在 Chat 节点中输入消息。';
-      webview.postMessage({ type: 'aiError', runId, message: msg });
-      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+      reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
       return { success: false, runId, errorMessage: msg };
     }
     const atRefs = [...chatPrompt.matchAll(/@([\w.\-]+)/g)].map(m => m[1].toLowerCase());
@@ -315,8 +368,7 @@ async function _runFunctionNodeInner(
     const query = (fnNode.meta.param_values?.['query'] as string)?.trim() ?? '';
     if (!query) {
       const msg = '文档问答需要输入问题，请填写节点上的「问题」字段。';
-      webview.postMessage({ type: 'aiError', runId, message: msg });
-      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+      reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
       return { success: false, runId, errorMessage: msg };
     }
     if (contents.length === 0) {
@@ -432,8 +484,7 @@ async function _runFunctionNodeInner(
     provider = await getProvider(nodeProvider);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -481,8 +532,7 @@ async function _runFunctionNodeInner(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
   activeRuns.delete(runId);
@@ -575,8 +625,7 @@ async function runImageGen(
 
   if (!apiKey) {
     const msg = '未配置 AIHubMix API Key，请前往「设置 → 多模态工具 (AIHubMix)」填写。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -586,8 +635,7 @@ async function runImageGen(
 
   if (!prompt.trim()) {
     const msg = '图像生成需要文字描述，请连接笔记节点或在「风格提示」参数中输入。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -703,8 +751,7 @@ async function runImageGenGemini(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }
@@ -729,16 +776,14 @@ async function runTts(
 
   if (!apiKey) {
     const msg = '未配置 AIHubMix API Key，请前往「设置 → 多模态工具 (AIHubMix)」填写。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
   const inputText = contents.filter(c => c.type === 'text').map(c => c.text).join('\n\n').slice(0, 4096);
   if (!inputText.trim()) {
     const msg = '文字转语音需要连接笔记或 AI 输出节点作为文本输入。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -806,8 +851,7 @@ async function runTts(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }
@@ -829,8 +873,7 @@ async function runStt(
 
   if (!apiKey) {
     const msg = '未配置 AIHubMix API Key，请前往「设置 → 多模态工具 (AIHubMix)」填写。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -841,17 +884,20 @@ async function runStt(
   const canvas = activeDoc?.data;
   if (!canvas) {
     const msg = '无法访问画布文档，STT 初始化失败。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
-  const upstreamIds = canvas.edges.filter(e => e.target === nodeId && e.edge_type === 'data_flow').map(e => e.source);
-  const audioNode = canvas.nodes.find(n => upstreamIds.includes(n.id) && n.node_type === 'audio');
+  const executionPlan = buildFunctionExecutionPlan(nodeId, canvas, ['data_flow']);
+  if ('error' in executionPlan) {
+    reportNodeIssue(webview, nodeId, runId, executionPlan.error, 'missing_input');
+    return { success: false, runId, errorMessage: executionPlan.error };
+  }
+
+  const audioNode = executionPlan.expandedInputs.find(ref => ref.node.node_type === 'audio')?.node;
   if (!audioNode?.file_path) {
     const msg = '语音转文字需要连接音频节点（通过数据流边）。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -939,8 +985,7 @@ async function runStt(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }
@@ -963,8 +1008,7 @@ async function runVideoGen(
 
   if (!apiKey) {
     const msg = '未配置 AIHubMix API Key，请前往「设置 → 多模态工具 (AIHubMix)」填写。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -983,8 +1027,7 @@ async function runVideoGen(
 
   if (!effectivePrompt && !isImageToVideo) {
     const msg = '视频生成需要文字描述（连接笔记节点）或参考图像（连接图像节点实现图生视频）。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -1124,8 +1167,7 @@ async function runVideoGen(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }
@@ -1179,16 +1221,14 @@ async function runImageEdit(
 
   if (!apiKey) {
     const msg = '未配置 AIHubMix API Key，请前往「设置 → 多模态工具 (AIHubMix)」填写。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
   const imageContent = contents.find(c => c.type === 'image');
   if (!imageContent || imageContent.type !== 'image') {
     const msg = '图像编辑需要连接图像节点作为参考图。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -1198,8 +1238,7 @@ async function runImageEdit(
 
   if (!prompt) {
     const msg = '图像编辑需要编辑指令，请在「编辑指令」参数中输入，或连接笔记节点。';
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
@@ -1302,8 +1341,7 @@ async function runImageEdit(
       return { success: false, runId, errorMessage: 'Cancelled' };
     }
     const msg = e instanceof Error ? e.message : String(e);
-    webview.postMessage({ type: 'aiError', runId, message: msg });
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error' });
+    reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 }

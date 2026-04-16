@@ -246,7 +246,7 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const watcher = vscode.workspace.createFileSystemWatcher(
-    '**/*.{md,txt,py,js,ts,tsx,jsx,pdf,png,jpg,jpeg,gif,webp,rs,go,java,csv,tsv}'
+    '**/*.{pdf,md,markdown,mdown,mkd,txt,text,rst,adoc,doc,dot,docx,docm,dotx,dotm,rtf,ppt,pps,pot,pptx,pptm,ppsx,ppsm,potx,potm,odt,odp,fodt,fodp,epub,py,js,mjs,cjs,ts,mts,cts,tsx,jsx,rs,go,java,c,cc,cpp,cxx,cs,h,hh,hpp,hxx,m,mm,rb,swift,kt,r,php,phtml,lua,pl,pm,scala,groovy,gradle,dart,jl,zig,nim,sh,bash,zsh,fish,ps1,psm1,psd1,bat,cmd,yaml,yml,json,jsonl,ndjson,toml,tex,bib,bst,ipynb,xml,html,css,scss,less,vue,svelte,astro,sql,graphql,proto,ini,cfg,env,log,conf,csv,tsv,xls,xlt,xlsx,xlsm,xltx,xltm,ods,fods,png,jpg,jpeg,gif,webp,svg,bmp,avif,ico,mp3,wav,opus,aac,flac,m4a,ogg,oga,mp4,mov,webm,m4v}'
   );
 
   // ── File changed: update content_preview ──────────────────────────────────

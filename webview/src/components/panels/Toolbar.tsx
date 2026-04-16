@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { BoardDropdown } from './BoardDropdown';
@@ -21,13 +21,6 @@ export function Toolbar() {
   const saveNow = useCanvasStore(s => s.saveNow);
   const canvasFile = useCanvasStore(s => s.canvasFile);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    if (saveState !== 'pending') { return; }
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [saveState]);
 
   const handleAddFiles = () => {
     postMessage({ type: 'addFiles' });
@@ -39,27 +32,39 @@ export function Toolbar() {
 
   const saveLabel = useMemo(() => {
     if (!canvasFile) { return '未打开画布'; }
-    if (saveState === 'saving') { return '保存中…'; }
+    if (saveState === 'saving') { return '保存中'; }
+    if (saveState === 'error') { return '保存失败'; }
+    if (saveState === 'pending' && saveDueAt) {
+      return `自动保存将于 ${new Date(saveDueAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })} 执行`;
+    }
+    if (saveState === 'pending') { return '未保存'; }
+    return '已保存';
+  }, [canvasFile, saveDueAt, saveState]);
+
+  const saveTitle = useMemo(() => {
+    if (!canvasFile) { return '当前未打开画布'; }
     if (saveState === 'error') {
-      return `保存失败${saveError ? ` · ${saveError}` : ''}`;
+      return saveError ? `保存失败：${saveError}` : '保存失败';
     }
     if (saveState === 'pending' && saveDueAt) {
-      const remainMs = Math.max(0, saveDueAt - now);
-      const totalSeconds = Math.ceil(remainMs / 1000);
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `未保存 · ${minutes}:${String(seconds).padStart(2, '0')} 后自动保存`;
+      return `自动保存将于 ${new Date(saveDueAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })} 执行`;
     }
-    if (saveState === 'pending') {
-      return '未保存';
+    if (lastSavedAt) {
+      return `上次保存时间：${new Date(lastSavedAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })}`;
     }
-    if (!lastSavedAt) { return '已保存'; }
-    return `已保存 · ${new Date(lastSavedAt).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })}`;
-  }, [canvasFile, lastSavedAt, now, saveDueAt, saveError, saveState]);
+    return saveLabel;
+  }, [canvasFile, lastSavedAt, saveDueAt, saveError, saveLabel, saveState]);
 
   return (
     <>
@@ -88,7 +93,7 @@ export function Toolbar() {
         </ToolbarButton>
 
         <div
-          title={saveLabel}
+          title={saveTitle}
           style={{
             marginLeft: 8,
             fontSize: 11,

@@ -675,6 +675,10 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
             const { extractPdfText } = await import('../core/content-extractor');
             content = await extractPdfText(Buffer.from(bytes));
             language = 'text';
+          } else if (['doc', 'dot', 'docx', 'docm', 'dotx', 'dotm', 'ppt', 'pps', 'pot', 'pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'xls', 'xlt', 'xlsx', 'xlsm', 'xltx', 'xltm', 'rtf', 'odt', 'ods', 'odp', 'fodt', 'fods', 'fodp', 'epub'].includes(ext)) {
+            const { extractStructuredTextFile } = await import('../core/content-extractor');
+            content = await extractStructuredTextFile(absPath, ext);
+            language = 'text';
           } else {
             const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
             content = Buffer.from(bytes).toString('utf-8');
@@ -706,7 +710,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         if (!nodeId) { break; }
         const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'nodeId');
         runFunctionNode(targetNode.id, canvas, document.uri, webview).catch(e => {
-          webview.postMessage({ type: 'aiError', runId: targetNode.id, message: String(e) });
+          webview.postMessage({ type: 'aiError', runId: targetNode.id, nodeId: targetNode.id, message: String(e), issueKind: 'run_failed' });
         });
         break;
       }
@@ -716,7 +720,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         if (!nodeId) { break; }
         const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'nodeId');
         runBatchFunctionNode(targetNode.id, canvas, document.uri, webview).catch(e => {
-          webview.postMessage({ type: 'aiError', runId: targetNode.id, message: String(e) });
+          webview.postMessage({ type: 'aiError', runId: targetNode.id, nodeId: targetNode.id, message: String(e), issueKind: 'run_failed' });
         });
         break;
       }
@@ -1011,7 +1015,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           node_type: 'function',
           title: fnTitle || fnToolDef?.name || fnToolId,
           position: { x: 100, y: 100 },
-          size: { width: 280, height: 120 },
+          size: { width: 280, height: 220 },
           meta: {
             ai_tool: fnToolId,
             param_values: { ...(paramValues ?? {}) },

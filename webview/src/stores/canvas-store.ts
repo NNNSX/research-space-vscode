@@ -14,6 +14,7 @@ import type {
   CanvasEdge,
   NodeGroup,
   FnStatus,
+  RunIssueKind,
   AiTool,
   ModelInfo,
   SettingsSnapshot,
@@ -22,9 +23,11 @@ import type {
   ParamDef,
   Board,
 } from '../../../src/core/canvas-model';
+import { DEFAULT_SIZES } from '../../../src/core/canvas-model';
 import { collectExpandedInputs, getGroupByHubNodeId } from '../../../src/core/hub-utils';
 import { postMessage } from '../bridge';
 import { wouldCreateCycle } from '../utils/graph-utils';
+import { normalizeNodePortId } from '../utils/node-port';
 import { usePetStore } from './pet-store';
 
 // ── ReactFlow node/edge shapes ──────────────────────────────────────────────
@@ -74,6 +77,7 @@ export interface PipelineState {
   pipelineId: string;
   triggerNodeId: string;
   nodeStatuses: Record<string, PipelineNodeStatus>;
+  nodeIssues: Record<string, { kind: RunIssueKind; message: string }>;
   totalNodes: number;
   completedNodes: number;
   isRunning: boolean;
@@ -84,14 +88,47 @@ export interface PipelineState {
 
 export type CanvasSaveState = 'saved' | 'pending' | 'saving' | 'error';
 
+export interface InitialCanvasLoadStats {
+  sessionId: number;
+  nodeCount: number;
+  mediaRequestCount: number;
+  fullContentRequestCount: number;
+  groupBoundsRecalcCount: number;
+  startedAt: number;
+  renderReadyAt: number | null;
+  finishedAt: number | null;
+  renderReadyMs: number | null;
+  totalMs: number | null;
+  finishedByTimeout: boolean;
+}
+
 const INITIAL_CANVAS_LOAD_NODE_THRESHOLD = 18;
 const INITIAL_CANVAS_LOAD_MIN_MS = 1200;
 const INITIAL_CANVAS_LOAD_MAX_MS = 12000;
+const CARD_HYDRATABLE_NODE_TYPES = new Set<CanvasNode['node_type']>(['note', 'ai_output', 'code', 'data']);
 
 let initialCanvasLoadStartedAt = 0;
 let initialCanvasLoadHideTimer: ReturnType<typeof setTimeout> | undefined;
 let initialCanvasLoadSafetyTimer: ReturnType<typeof setTimeout> | undefined;
 const initialCanvasLoadPendingKeys = new Set<string>();
+let nextInitialCanvasLoadSessionId = 0;
+
+function updateCurrentInitialCanvasLoadStats(
+  updater: (stats: InitialCanvasLoadStats) => InitialCanvasLoadStats
+) {
+  const state = useCanvasStore.getState();
+  const currentStats = state.currentInitialCanvasLoadStats;
+  if (!currentStats) { return; }
+  useCanvasStore.setState({ currentInitialCanvasLoadStats: updater(currentStats) });
+}
+
+function bumpInitialCanvasGroupBoundsRecalc(count = 1) {
+  if (count <= 0) { return; }
+  updateCurrentInitialCanvasLoadStats(stats => ({
+    ...stats,
+    groupBoundsRecalcCount: stats.groupBoundsRecalcCount + count,
+  }));
+}
 
 function clearInitialCanvasLoadTimers() {
   if (initialCanvasLoadHideTimer) {
@@ -104,8 +141,9 @@ function clearInitialCanvasLoadTimers() {
   }
 }
 
-function finishInitialCanvasLoad(force = false) {
+function finishInitialCanvasLoad(force = false, reason: 'ready' | 'min_delay' | 'timeout' = 'ready') {
   const state = useCanvasStore.getState();
+  if (!state.currentInitialCanvasLoadStats) { return; }
   if (!state.initialCanvasLoadActive) { return; }
   if (!force && initialCanvasLoadPendingKeys.size > 0) { return; }
   if (!force && !state.initialCanvasRenderReady) { return; }
@@ -115,7 +153,7 @@ function finishInitialCanvasLoad(force = false) {
     if (!initialCanvasLoadHideTimer) {
       initialCanvasLoadHideTimer = setTimeout(() => {
         initialCanvasLoadHideTimer = undefined;
-        finishInitialCanvasLoad(true);
+        finishInitialCanvasLoad(true, 'min_delay');
       }, remaining);
     }
     return;
@@ -123,10 +161,37 @@ function finishInitialCanvasLoad(force = false) {
 
   clearInitialCanvasLoadTimers();
   initialCanvasLoadPendingKeys.clear();
+  const currentStats = useCanvasStore.getState().currentInitialCanvasLoadStats;
+  const finishedAt = Date.now();
   useCanvasStore.setState({
     initialCanvasLoadActive: false,
     initialCanvasLoadPending: 0,
+    currentInitialCanvasLoadStats: null,
+    lastInitialCanvasLoadStats: currentStats ? {
+      ...currentStats,
+      finishedAt,
+      totalMs: Math.max(0, finishedAt - currentStats.startedAt),
+      finishedByTimeout: reason === 'timeout',
+    } : null,
   });
+}
+
+function resolveCardContentModeForLoad(node: CanvasNode): 'preview' | 'full' | undefined {
+  if (!CARD_HYDRATABLE_NODE_TYPES.has(node.node_type)) { return undefined; }
+  const defaultSize = DEFAULT_SIZES[node.node_type];
+  const nextWidth = node.size?.width ?? defaultSize.width;
+  const nextHeight = node.size?.height ?? defaultSize.height;
+  const expandedEnough =
+    nextHeight >= defaultSize.height + 60 ||
+    nextWidth >= defaultSize.width + 80;
+  return expandedEnough ? 'full' : 'preview';
+}
+
+function shouldTrackInitialFullContentLoad(node: CanvasNode, hiddenNodeIds: Set<string>): boolean {
+  if (hiddenNodeIds.has(node.id)) { return false; }
+  if (!node.file_path || node.meta?.file_missing) { return false; }
+  const desiredMode = node.meta?.card_content_mode ?? resolveCardContentModeForLoad(node);
+  return desiredMode === 'full';
 }
 
 interface CanvasState {
@@ -173,9 +238,11 @@ interface CanvasState {
   initialCanvasLoadActive: boolean;
   initialCanvasLoadPending: number;
   initialCanvasRenderReady: boolean;
+  currentInitialCanvasLoadStats: InitialCanvasLoadStats | null;
+  lastInitialCanvasLoadStats: InitialCanvasLoadStats | null;
 
   initCanvas(data: CanvasFile, workspaceRoot: string): void;
-  beginInitialCanvasLoad(nodeCount: number): void;
+  beginInitialCanvasLoad(summary: { nodeCount: number; mediaRequestCount: number; fullContentRequestCount: number }): void;
   trackInitialCanvasLoadRequest(key: string): void;
   resolveInitialCanvasLoadRequest(key: string): void;
   resolveInitialCanvasLoadRequests(keys: string[]): void;
@@ -186,15 +253,17 @@ interface CanvasState {
   confirmConnection(role: string | undefined): void;
   _createEdge(connection: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }, role: string | undefined, edgeType?: CanvasEdge['edge_type']): void;
   cancelConnection(): void;
-  updateNodeStatus(nodeId: string, status: FnStatus, progressText?: string): void;
+  updateNodeStatus(nodeId: string, status: FnStatus, progressText?: string, issueKind?: RunIssueKind, issueMessage?: string): void;
   updateBpChildStatus(bpId: string, childId: string, status: FnStatus): void;
   appendAiChunk(runId: string, chunk: string, title?: string): void;
   finishAiRun(runId: string, node: CanvasNode, edge: CanvasEdge): void;
   setImageUri(filePath: string, uri: string): void;
+  setImageUris(entries: Array<{ filePath: string; uri: string }>): void;
   addNode(node: CanvasNode): void;
   setNodeFileMissing(nodeId: string, missing: boolean): void;
   updateNodeFilePath(nodeId: string, newFilePath: string, newTitle: string): void;
   updateNodePreview(nodeId: string, preview: string, metaPatch?: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
+  updateNodePreviews(entries: Array<{ nodeId: string; preview: string; metaPatch?: Partial<import('../../../src/core/canvas-model').NodeMeta> }>): void;
   setFullContent(nodeId: string, content: string): void;
   setFullContents(entries: Array<{ nodeId: string; content: string }>): void;
   addToStaging(nodes: CanvasNode[]): void;
@@ -260,6 +329,7 @@ interface CanvasState {
   // ── Pipeline state methods ──
   setPipelineState(state: PipelineState | null): void;
   updatePipelineNodeStatus(nodeId: string, status: PipelineNodeStatus): void;
+  setPipelineNodeIssue(nodeId: string, issue: { kind: RunIssueKind; message: string } | null): void;
   incrementPipelineCompleted(): void;
   setPipelinePaused(paused: boolean): void;
   addPipelineWarning(nodeId: string, message: string): void;
@@ -426,6 +496,7 @@ function getNodeSize(n: FlowNode): { width: number; height: number } {
 }
 
 function calcGroupBounds(nodes: FlowNode[], nodeIds: string[], fallback?: NodeGroup['bounds']): NodeGroup['bounds'] {
+  bumpInitialCanvasGroupBoundsRecalc();
   const idSet = new Set(nodeIds);
   const members = nodes.filter(n => idSet.has(n.id));
   if (members.length === 0) {
@@ -627,8 +698,8 @@ function canvasToFlow(
       id: e.id,
       source: e.source,
       target: e.target,
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
+      sourceHandle: normalizeNodePortId(e.sourceHandle),
+      targetHandle: normalizeNodePortId(e.targetHandle),
       type: e.edge_type === 'pipeline_flow' ? 'pipeline' : 'custom',
       data: { edge_type: e.edge_type, label: e.label, role: e.role },
       animated: e.edge_type === 'ai_generated',
@@ -660,8 +731,8 @@ function flowToCanvas(
       id: fe.id,
       source: fe.source,
       target: fe.target,
-      sourceHandle: fe.sourceHandle,
-      targetHandle: fe.targetHandle,
+      sourceHandle: normalizeNodePortId(fe.sourceHandle),
+      targetHandle: normalizeNodePortId(fe.targetHandle),
       edge_type: fe.data?.edge_type ?? 'reference',
       label: fe.data?.label,
       role: fe.data?.role,
@@ -716,10 +787,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   initialCanvasLoadActive: false,
   initialCanvasLoadPending: 0,
   initialCanvasRenderReady: true,
+  currentInitialCanvasLoadStats: null,
+  lastInitialCanvasLoadStats: null,
 
-  beginInitialCanvasLoad(nodeCount) {
+  beginInitialCanvasLoad(summary) {
     clearInitialCanvasLoadTimers();
     initialCanvasLoadPendingKeys.clear();
+    const { nodeCount, mediaRequestCount, fullContentRequestCount } = summary;
 
     const shouldShow = nodeCount >= INITIAL_CANVAS_LOAD_NODE_THRESHOLD;
     if (!shouldShow) {
@@ -727,6 +801,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         initialCanvasLoadActive: false,
         initialCanvasLoadPending: 0,
         initialCanvasRenderReady: true,
+        currentInitialCanvasLoadStats: null,
       });
       return;
     }
@@ -734,16 +809,29 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     initialCanvasLoadStartedAt = Date.now();
     initialCanvasLoadSafetyTimer = setTimeout(() => {
       initialCanvasLoadSafetyTimer = undefined;
-      finishInitialCanvasLoad(true);
+      finishInitialCanvasLoad(true, 'timeout');
     }, INITIAL_CANVAS_LOAD_MAX_MS);
 
     set({
       initialCanvasLoadActive: true,
       initialCanvasLoadPending: 0,
       initialCanvasRenderReady: false,
+      currentInitialCanvasLoadStats: {
+        sessionId: ++nextInitialCanvasLoadSessionId,
+        nodeCount,
+        mediaRequestCount,
+        fullContentRequestCount,
+        groupBoundsRecalcCount: 0,
+        startedAt: initialCanvasLoadStartedAt,
+        renderReadyAt: null,
+        finishedAt: null,
+        renderReadyMs: null,
+        totalMs: null,
+        finishedByTimeout: false,
+      },
     });
 
-    finishInitialCanvasLoad();
+    finishInitialCanvasLoad(false, 'ready');
   },
 
   trackInitialCanvasLoadRequest(key) {
@@ -762,7 +850,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
     initialCanvasLoadPendingKeys.delete(key);
     set({ initialCanvasLoadPending: initialCanvasLoadPendingKeys.size });
-    finishInitialCanvasLoad();
+    finishInitialCanvasLoad(false, 'ready');
   },
 
   resolveInitialCanvasLoadRequests(keys) {
@@ -782,28 +870,47 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
 
     set({ initialCanvasLoadPending: initialCanvasLoadPendingKeys.size });
-    finishInitialCanvasLoad();
+    finishInitialCanvasLoad(false, 'ready');
   },
 
   markInitialCanvasRenderReady(ready) {
+    if (ready) {
+      updateCurrentInitialCanvasLoadStats(stats => {
+        if (stats.renderReadyAt) { return stats; }
+        const renderReadyAt = Date.now();
+        return {
+          ...stats,
+          renderReadyAt,
+          renderReadyMs: Math.max(0, renderReadyAt - stats.startedAt),
+        };
+      });
+    }
     if (get().initialCanvasRenderReady === ready) {
-      if (ready) { finishInitialCanvasLoad(); }
+      if (ready) { finishInitialCanvasLoad(false, 'ready'); }
       return;
     }
     set({ initialCanvasRenderReady: ready });
     if (ready) {
-      finishInitialCanvasLoad();
+      finishInitialCanvasLoad(false, 'ready');
     }
   },
 
   initCanvas(data, workspaceRoot) {
     const normalized = normalizeNodeGroups(data);
     const nodeGroups = normalized.nodeGroups ?? [];
+    const hiddenNodeIds = new Set<string>();
+    for (const group of nodeGroups) {
+      if (!group.collapsed) { continue; }
+      for (const nodeId of group.nodeIds) {
+        hiddenNodeIds.add(nodeId);
+      }
+    }
     resetAutosaveWindow();
     inFlightSavePayloads.clear();
     const { flowNodes, flowEdges } = canvasToFlow(normalized.nodes ?? [], normalized.edges ?? []);
     const syncedFlowNodes = syncGroupHubNodes(flowNodes, nodeGroups);
-    get().beginInitialCanvasLoad(normalized.nodes?.length ?? 0);
+    const initialMediaRequests: string[] = [];
+    const initialFullContentKeys: string[] = [];
 
     // Migrate legacy summaryGroups → boards
     let boards = normalized.boards ?? [];
@@ -819,9 +926,25 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     for (const n of normalized.nodes ?? []) {
       if ((n.node_type === 'image' && n.meta?.display_mode !== 'mermaid' || n.node_type === 'video' || n.node_type === 'audio' || n.node_type === 'paper') && n.file_path) {
-        get().trackInitialCanvasLoadRequest(`media:${n.file_path}`);
-        postMessage({ type: 'requestImageUri', filePath: n.file_path });
+        initialMediaRequests.push(n.file_path);
       }
+      if (shouldTrackInitialFullContentLoad(n, hiddenNodeIds)) {
+        initialFullContentKeys.push(`file:${n.id}`);
+      }
+    }
+
+    get().beginInitialCanvasLoad({
+      nodeCount: normalized.nodes?.length ?? 0,
+      mediaRequestCount: initialMediaRequests.length,
+      fullContentRequestCount: initialFullContentKeys.length,
+    });
+
+    for (const filePath of initialMediaRequests) {
+      get().trackInitialCanvasLoadRequest(`media:${filePath}`);
+      postMessage({ type: 'requestImageUri', filePath });
+    }
+    for (const key of initialFullContentKeys) {
+      get().trackInitialCanvasLoadRequest(key);
     }
 
     const normalizedCanvasFile: CanvasFile = { ...normalized, boards, nodeGroups, summaryGroups: undefined };
@@ -1125,8 +1248,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         id: uuid(),
         source: connection.source,
         target: connection.target,
-        sourceHandle: connection.sourceHandle ?? undefined,
-        targetHandle: connection.targetHandle ?? undefined,
+        sourceHandle: normalizeNodePortId(connection.sourceHandle),
+        targetHandle: normalizeNodePortId(connection.targetHandle),
         type: edgeType === 'pipeline_flow' ? 'pipeline' : 'custom',
         data: { edge_type: edgeType, role },
       };
@@ -1142,11 +1265,35 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({ pendingConnection: null });
   },
 
-  updateNodeStatus(nodeId, status, progressText) {
+  updateNodeStatus(nodeId, status, progressText, issueKind, issueMessage) {
     set(state => ({
       nodes: state.nodes.map(n =>
         n.id === nodeId
-          ? { ...n, data: { ...n.data, meta: { ...n.data.meta, fn_status: status, fn_progress: progressText } } }
+          ? (() => {
+              const nextIssueKind = status === 'error' ? issueKind : undefined;
+              const nextIssueMessage = status === 'error' ? issueMessage : undefined;
+              if (
+                n.data.meta?.fn_status === status &&
+                n.data.meta?.fn_progress === progressText &&
+                n.data.meta?.fn_issue_kind === nextIssueKind &&
+                n.data.meta?.fn_issue_message === nextIssueMessage
+              ) {
+                return n;
+              }
+              return {
+                ...n,
+                data: {
+                  ...n.data,
+                  meta: {
+                    ...n.data.meta,
+                    fn_status: status,
+                    fn_progress: progressText,
+                    fn_issue_kind: nextIssueKind,
+                    fn_issue_message: nextIssueMessage,
+                  },
+                },
+              };
+            })()
           : n
       ),
     }));
@@ -1207,8 +1354,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setImageUri(filePath, uri) {
-    get().resolveInitialCanvasLoadRequest(`media:${filePath}`);
-    set(state => ({ imageUriMap: { ...state.imageUriMap, [filePath]: uri } }));
+    get().setImageUris([{ filePath, uri }]);
+  },
+
+  setImageUris(entries) {
+    if (!entries.length) { return; }
+    get().resolveInitialCanvasLoadRequests(entries.map(entry => `media:${entry.filePath}`));
+    set(state => {
+      let changed = false;
+      const imageUriMap = { ...state.imageUriMap };
+      for (const { filePath, uri } of entries) {
+        if (!filePath || !uri || imageUriMap[filePath] === uri) { continue; }
+        imageUriMap[filePath] = uri;
+        changed = true;
+      }
+      if (!changed) { return {}; }
+      return { imageUriMap };
+    });
   },
 
   addNode(node) {
@@ -1307,29 +1469,53 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateNodePreview(nodeId, preview, metaPatch) {
+    get().updateNodePreviews([{ nodeId, preview, metaPatch }]);
+  },
+
+  updateNodePreviews(entries) {
+    if (!entries.length) { return; }
     set(state => {
       if (!state.canvasFile) { return {}; }
-      // Invalidate fullContentCache so lazy-load re-fetches fresh content
+      const entryMap = new Map(entries.filter(entry => entry.nodeId).map(entry => [entry.nodeId, entry] as const));
+      if (entryMap.size === 0) { return {}; }
+
+      let changed = false;
       const newCache = { ...state.fullContentCache };
-      delete newCache[nodeId];
-      const applyPatch = (meta: typeof state.nodes[number]['data']['meta']) => ({
-        ...meta,
-        content_preview: preview,
-        file_missing: false,
-        ...(metaPatch ?? {}),
+      const updatedNodes = state.nodes.map(n => {
+        const entry = entryMap.get(n.id);
+        if (!entry) { return n; }
+        const nextMeta = {
+          ...n.data.meta,
+          content_preview: entry.preview,
+          file_missing: false,
+          ...(entry.metaPatch ?? {}),
+        };
+        const samePreview = n.data.meta?.content_preview === entry.preview;
+        const sameMissing = n.data.meta?.file_missing === nextMeta.file_missing;
+        const samePatch = Object.entries(entry.metaPatch ?? {}).every(([key, value]) => n.data.meta?.[key as keyof typeof nextMeta] === value);
+        if (samePreview && sameMissing && samePatch && !(n.id in newCache)) {
+          return n;
+        }
+        delete newCache[n.id];
+        changed = true;
+        return { ...n, data: { ...n.data, meta: nextMeta } };
       });
-      const updatedNodes = state.nodes.map(n =>
-        n.id === nodeId
-          ? { ...n, data: { ...n.data, meta: applyPatch(n.data.meta) } }
-          : n
-      );
+      if (!changed) { return {}; }
       const canvasFile: CanvasFile = {
         ...state.canvasFile,
-        nodes: state.canvasFile.nodes.map(cn =>
-          cn.id === nodeId
-            ? { ...cn, meta: applyPatch(cn.meta) }
-            : cn
-        ),
+        nodes: state.canvasFile.nodes.map(cn => {
+          const entry = entryMap.get(cn.id);
+          if (!entry) { return cn; }
+          return {
+            ...cn,
+            meta: {
+              ...cn.meta,
+              content_preview: entry.preview,
+              file_missing: false,
+              ...(entry.metaPatch ?? {}),
+            },
+          };
+        }),
       };
       markPersistedFromExternal(canvasFile);
       return {
@@ -1354,12 +1540,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     set(state => {
       const fullContentCache = { ...state.fullContentCache };
+      let changed = false;
 
       for (const { nodeId, content } of entries) {
         if (!content) { continue; }
+        if (fullContentCache[nodeId] === content) { continue; }
         fullContentCache[nodeId] = content;
+        changed = true;
       }
 
+      if (!changed) { return {}; }
       return { fullContentCache };
     });
   },
@@ -1460,7 +1650,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       node_type: 'function',
       title: toolName,
       position,
-      size: { width: 280, height: 180 },
+      size: { width: 280, height: 220 },
       meta: {
         ai_tool: tool as AiTool,
         fn_status: 'idle',
@@ -1749,6 +1939,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   setSearchQuery(query) {
     set(state => {
+      if (state.searchQuery === query) { return {}; }
       const matches = state.canvasFile ? calcSearchMatches(state.canvasFile.nodes ?? [], query) : [];
       return {
         searchQuery: query,
@@ -2092,6 +2283,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           ...s.pipelineState,
           nodeStatuses: { ...s.pipelineState.nodeStatuses, [nodeId]: status },
           currentNodeId: nextCurrentNodeId,
+        },
+      };
+    });
+  },
+
+  setPipelineNodeIssue(nodeId, issue) {
+    set(s => {
+      if (!s.pipelineState) { return {}; }
+      const nextIssues = { ...s.pipelineState.nodeIssues };
+      if (issue) {
+        nextIssues[nodeId] = issue;
+      } else {
+        delete nextIssues[nodeId];
+      }
+      return {
+        pipelineState: {
+          ...s.pipelineState,
+          nodeIssues: nextIssues,
         },
       };
     });

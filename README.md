@@ -6,13 +6,13 @@
 
 ## 当前发布状态
 
-`v2.0.0-alpha.14` 当前属于 **开发预览版**，已经可以安装和体验，但**稳定性仍弱于 `v1.2.2` 稳定版**。
+`v2.1.0-alpha.5` 当前属于 **收口版开发预览**，已经可以安装和体验，但**稳定性仍弱于 `v1.2.2` 稳定版**。
 
-- 适合：提前体验 Pipeline、节点组、保存状态、可读元数据等新链路
+- 适合：体验节点组、Pipeline、保存状态、加载提示与执行错误可见性等已收口的新链路
 - 不适合：唯一生产环境、不可回退的重要工作区
 - 建议：先备份工作区，再在副本中试用；重要项目建议继续保留 `v1.2.2`
 
-如果你准备从 GitHub Releases 下载这一版，请把它当作“可测试的 alpha 开发版”，而不是最终稳定版。
+如果你准备从 GitHub Releases 下载这一版，请把它当作“可测试的 alpha 收口版”，而不是最终稳定版。
 
 ---
 
@@ -45,13 +45,13 @@
 | 图标 | 类型 | 来源文件 | 双击行为 |
 |------|------|---------|---------|
 | 📄 | Paper | `.pdf` | 系统 PDF 阅读器 |
-| 📝 | Note | `.md` `.txt` | VSCode 编辑器 |
-| `</>` | Code | `.py` `.js` `.ts` 等 | VSCode 编辑器（语法高亮） |
-| 🖼 | Image | `.png` `.jpg` `.gif` `.webp` | VSCode 图片预览 |
+| 📝 | Note | `.md` `.markdown` `.txt` `.rst` `.adoc` `.doc/.dot/.docx/.docm/.dotx/.dotm` `.ppt/.pps/.pot/.pptx/.pptm/.ppsx/.ppsm/.potx/.potm` `.rtf` `.odt/.fodt` `.odp/.fodp` `.epub` 等 | VSCode 编辑器 |
+| `</>` | Code | `.py` `.js` `.ts` `.vue` `.svelte` `.php` `.ipynb` 等 | VSCode 编辑器（语法高亮） |
+| 🖼 | Image | `.png` `.jpg` `.gif` `.webp` `.svg` `.bmp` `.avif` 等 | VSCode 图片预览 |
 | 🤖 | AI Output | `.md`（在 `outputs/`） | VSCode 编辑器 |
-| 🎵 | Audio | `.mp3` `.wav` 等（v0.5.0） | 系统播放器 |
-| 🎬 | Video | `.mp4` `.mov`（v0.5.0） | 系统播放器 |
-| 📊 | Data | `.csv` `.tsv` | VSCode 编辑器（表格预览） |
+| 🎵 | Audio | `.mp3` `.wav` `.ogg` `.m4a` `.flac` 等 | 系统播放器 |
+| 🎬 | Video | `.mp4` `.mov` `.m4v` | 系统播放器 |
+| 📊 | Data | `.csv` `.tsv` `.xls/.xlt/.xlsx/.xlsm/.xltx/.xltm` `.ods/.fods` | VSCode 编辑器（表格预览） |
 | 🧪 | Experiment Log | `.md`（在 `notes/`） | 内联编辑（自动同步文件） |
 | ✅ | Task | `.md`（在 `notes/`） | 内联编辑（自动同步文件） |
 
@@ -136,11 +136,11 @@
 
 **画布搜索**：输入关键词后，匹配节点高亮，非匹配节点自动变淡；按 Enter / Shift+Enter 在匹配项间跳转，ESC 关闭并恢复。
 
-**节点组（Node Group）**：选中 2 个及以上数据节点后可在浮动工具栏点击「📦 创建节点组」。节点组现在以原生 `group_hub` 节点实现：组框支持折叠/展开、重命名、删除和整组拖拽，左右双通道与普通节点一致；组内成员会通过隐藏的 `hub_member` 边汇聚到 hub，因此对外只需要一根可见连线，就能稳定表示“这一批节点作为一个整体输入/输出”。
+**节点组（Node Group）**：选中 2 个及以上数据节点后可在浮动工具栏点击「📦 创建节点组」。节点组现在以原生 `group_hub` 节点实现：组框支持折叠/展开、重命名、删除和整组拖拽，左右双通道与普通节点一致；默认保持透明底，只保留标题栏、轮廓线、选中反馈与通道，避免误看成另一张文件卡片；组内成员会通过隐藏的 `hub_member` 边汇聚到 hub，因此对外只需要一根可见连线，就能稳定表示“这一批节点作为一个整体输入/输出”。
 
 **节点调整大小**：选中节点后拖拽边角可自由缩放，内容自动适应新尺寸。
 
-**拖拽导入**：从 VSCode 资源管理器或系统文件管理器直接拖拽文件到画布（自动添加到暂存架）。按住 `Shift` 拖拽可直接放入画布。
+**拖拽导入**：从 VSCode 资源管理器或系统文件管理器直接拖拽文件到画布（自动添加到暂存架）。当前已扩展到更多主流文本/代码/图片/音视频格式，例如 `markdown` / `rst` / `adoc`、`doc/docx/docm/dot/dotx/dotm`、`ppt/pptx/pptm/pps/ppsx/ppsm/pot/potx/potm`、`xls/xlsx/xlsm/xlt/xltx/xltm`、`odt/ods/odp/fodt/fods/fodp`、`rtf`、`epub`、`mjs` / `cjs` / `vue` / `svelte` / `php` / `ipynb`、`svg` / `bmp` / `avif`、`ogg` / `m4a` / `flac`、`m4v`。按住 `Shift` 拖拽可直接放入画布。
 
 **画板/工作区**：工具栏「📋 画板」下拉管理画板。画板是半透明彩色矩形区域，用于物理分区隔离节点。移动画板时内部节点跟随移动，8 个控制点可调整大小。新建画板进入暂存架，拖到画布放置。右键画板可编辑名称/颜色或删除。
 
@@ -234,7 +234,7 @@ my-workspace/
 
 ## 版本历史
 
-当前版本：**v2.0.0-alpha.14**（2026-04-16）
+当前版本：**v2.1.0-alpha.5**（2026-04-17）
 
 完整版本历史请查看 [CHANGELOG](CHANGELOG.md)。
 

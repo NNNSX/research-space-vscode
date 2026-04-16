@@ -3,11 +3,18 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.0.0-alpha.14",
+  "version": "2.1.0-alpha.5",
   "icon": "resources/icon.png",
-  "repository": { "type": "git", "url": "https://github.com/research-space-dev/research-space" },
-  "engines": { "vscode": "^1.93.0" },
-  "categories": ["Other"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/research-space-dev/research-space"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "workspaceContains:**/*.rsws",
     "onView:researchSpace.explorer"
@@ -18,7 +25,11 @@
       {
         "viewType": "researchSpace.canvas",
         "displayName": "Research Canvas",
-        "selector": [{ "filenamePattern": "*.rsws" }],
+        "selector": [
+          {
+            "filenamePattern": "*.rsws"
+          }
+        ],
         "priority": "default"
       }
     ],
@@ -44,7 +55,7 @@
         {
           "command": "researchSpace.addToCanvas",
           "group": "researchSpace@1",
-          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|txt|py|js|ts|tsx|jsx|png|jpg|jpeg|gif|webp|rs|go|java|c|cpp|cs|rb|swift|kt|r|sh|bash|yaml|yml|json|toml|tex|bib|bst|xml|html|css|scss|less|sql|graphql|proto|ini|cfg|env|log|conf|csv|tsv|mp3|wav|opus|aac|flac|m4a|webm|mp4|mov)$/"
+          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|markdown|mdown|mkd|txt|text|rst|adoc|doc|dot|docx|docm|dotx|dotm|rtf|ppt|pps|pot|pptx|pptm|ppsx|ppsm|potx|potm|odt|odp|fodt|fodp|epub|py|js|mjs|cjs|ts|mts|cts|tsx|jsx|rs|go|java|c|cc|cpp|cxx|cs|h|hh|hpp|hxx|m|mm|rb|swift|kt|r|php|phtml|lua|pl|pm|scala|groovy|gradle|dart|jl|zig|nim|sh|bash|zsh|fish|ps1|psm1|psd1|bat|cmd|yaml|yml|json|jsonl|ndjson|toml|tex|bib|bst|ipynb|xml|html|css|scss|less|vue|svelte|astro|sql|graphql|proto|ini|cfg|env|log|conf|csv|tsv|xls|xlt|xlsx|xlsm|xltx|xltm|ods|fods|png|jpg|jpeg|gif|webp|svg|bmp|avif|ico|mp3|wav|opus|aac|flac|m4a|ogg|oga|webm|mp4|mov|m4v)$/"
         }
       ],
       "view/item/context": [
@@ -75,12 +86,30 @@
         }
       ],
       "commandPalette": [
-        { "command": "researchSpace.addToCanvas", "when": "false" },
-        { "command": "researchSpace.tree.openFile", "when": "false" },
-        { "command": "researchSpace.tree.removeFromCanvas", "when": "false" },
-        { "command": "researchSpace.tree.runNode", "when": "false" },
-        { "command": "researchSpace.tree.openCanvas", "when": "false" },
-        { "command": "researchSpace.tree.deleteCanvas", "when": "false" }
+        {
+          "command": "researchSpace.addToCanvas",
+          "when": "false"
+        },
+        {
+          "command": "researchSpace.tree.openFile",
+          "when": "false"
+        },
+        {
+          "command": "researchSpace.tree.removeFromCanvas",
+          "when": "false"
+        },
+        {
+          "command": "researchSpace.tree.runNode",
+          "when": "false"
+        },
+        {
+          "command": "researchSpace.tree.openCanvas",
+          "when": "false"
+        },
+        {
+          "command": "researchSpace.tree.deleteCanvas",
+          "when": "false"
+        }
       ]
     },
     "commands": [
@@ -146,7 +175,11 @@
       "properties": {
         "researchSpace.ai.provider": {
           "type": "string",
-          "enum": ["copilot", "anthropic", "ollama"],
+          "enum": [
+            "copilot",
+            "anthropic",
+            "ollama"
+          ],
           "default": "copilot",
           "description": "Preferred AI provider (falls back automatically if unavailable)"
         },
@@ -163,7 +196,11 @@
         "researchSpace.ai.anthropicModel": {
           "type": "string",
           "default": "claude-sonnet-4-5",
-          "enum": ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+          "enum": [
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "claude-haiku-4-5"
+          ],
           "description": "Anthropic model to use"
         },
         "researchSpace.ai.ollamaBaseUrl": {
@@ -190,7 +227,9 @@
           "type": "array",
           "default": [],
           "description": "Custom OpenAI-compatible AI providers (e.g. AIHubMix). Each item: { id, name, baseUrl, apiKey, defaultModel }",
-          "items": { "type": "object" }
+          "items": {
+            "type": "object"
+          }
         },
         "researchSpace.ai.aiHubMixApiKey": {
           "type": "string",
@@ -229,7 +268,15 @@
         },
         "researchSpace.pet.type": {
           "type": "string",
-          "enum": ["dog", "fox", "rubber-duck", "turtle", "crab", "clippy", "cockatiel"],
+          "enum": [
+            "dog",
+            "fox",
+            "rubber-duck",
+            "turtle",
+            "crab",
+            "clippy",
+            "cockatiel"
+          ],
           "default": "dog",
           "description": "Pet type"
         },
@@ -250,7 +297,14 @@
         },
         "researchSpace.pet.groundTheme": {
           "type": "string",
-          "enum": ["none", "forest", "castle", "autumn", "beach", "winter"],
+          "enum": [
+            "none",
+            "forest",
+            "castle",
+            "autumn",
+            "beach",
+            "winter"
+          ],
           "default": "forest",
           "description": "Pet panel background theme"
         },

@@ -1,4 +1,5 @@
-import { isFunctionNode, type CanvasNode, type CanvasEdge } from '../core/canvas-model';
+import { isFunctionNode, type CanvasNode, type CanvasEdge, type NodeGroup } from '../core/canvas-model';
+import { buildFunctionExecutionPlan, type FunctionExecutionPlan } from '../core/execution-plan';
 
 // ── Pipeline Engine (v2.0) ─────────────────────────────────────────────────
 // Responsible for analyzing a pipeline's topology and producing an execution plan.
@@ -10,20 +11,24 @@ export interface PipelineLayer {
 export interface PipelinePlan {
   layers: PipelineLayer[];
   pipelineNodeIds: string[];   // All function node IDs in execution order
-  pipelineEdges: CanvasEdge[]; // Edges within the pipeline subgraph
+  pipelineEdges: CanvasEdge[]; // pipeline_flow edges within the pipeline subgraph
+  nodeExecutionPlans: Record<string, FunctionExecutionPlan>;
+  dependencyNodeIdsByNode: Record<string, string[]>;
 }
 
 /**
  * Build a pipeline execution plan starting from the trigger node.
  *
  * 1. BFS downstream from triggerNodeId following pipeline_flow edges to function nodes
- * 2. Also include data_flow edges from function nodes to function nodes
- * 3. Topologically sort into layers for parallel execution
+ * 2. For every pipeline function node, build the same function execution plan used
+ *    by single-node execution (input expansion / hub semantics / edge typing)
+ * 3. Topologically sort by pipeline_flow dependencies into layers for parallel execution
  */
 export function buildPipelinePlan(
   triggerNodeId: string,
   allNodes: CanvasNode[],
-  allEdges: CanvasEdge[]
+  allEdges: CanvasEdge[],
+  allNodeGroups?: NodeGroup[],
 ): PipelinePlan | { error: string } {
   const nodeMap = new Map(allNodes.map(n => [n.id, n]));
   const triggerNode = nodeMap.get(triggerNodeId);
@@ -54,24 +59,42 @@ export function buildPipelinePlan(
 
   const pipelineNodeIds = Array.from(downstream);
 
-  // Step 2: Collect all edges within the pipeline subgraph
+  // Step 2: Build the per-node execution plan with the same resolver used by
+  // single-node / batch execution. This keeps hub expansion and edge semantics
+  // on one shared source of truth.
+  const nodeExecutionPlans: Record<string, FunctionExecutionPlan> = {};
+  const dependencyNodeIdsByNode: Record<string, string[]> = {};
+  for (const nodeId of pipelineNodeIds) {
+    const nodePlan = buildFunctionExecutionPlan(nodeId, {
+      nodes: allNodes,
+      edges: allEdges,
+      nodeGroups: allNodeGroups,
+    }, ['data_flow', 'pipeline_flow']);
+    if ('error' in nodePlan) {
+      return { error: `节点「${nodeMap.get(nodeId)?.title ?? nodeId}」执行计划构建失败：${nodePlan.error}` };
+    }
+    nodeExecutionPlans[nodeId] = nodePlan;
+    dependencyNodeIdsByNode[nodeId] = nodePlan.directPipelineSourceIds.filter(sourceId => downstream.has(sourceId));
+  }
+
+  // Step 3: Collect only the explicit pipeline dependency edges inside the subgraph
   const pipelineEdges = allEdges.filter(
     e => downstream.has(e.source) && downstream.has(e.target) &&
-         (e.edge_type === 'pipeline_flow' || e.edge_type === 'data_flow')
+         e.edge_type === 'pipeline_flow'
   );
 
-  // Step 3: Kahn's algorithm — topological sort into layers
+  // Step 4: Kahn's algorithm — topological sort into layers
   const inDegree = new Map<string, number>();
   const adj = new Map<string, string[]>();
   for (const id of pipelineNodeIds) {
-    inDegree.set(id, 0);
+    inDegree.set(id, dependencyNodeIdsByNode[id]?.length ?? 0);
     adj.set(id, []);
   }
 
-  for (const edge of pipelineEdges) {
-    if (!downstream.has(edge.source) || !downstream.has(edge.target)) { continue; }
-    adj.get(edge.source)!.push(edge.target);
-    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+  for (const [targetId, sourceIds] of Object.entries(dependencyNodeIdsByNode)) {
+    for (const sourceId of sourceIds) {
+      adj.get(sourceId)?.push(targetId);
+    }
   }
 
   const layers: PipelineLayer[] = [];
@@ -108,5 +131,7 @@ export function buildPipelinePlan(
     layers,
     pipelineNodeIds: orderedIds,
     pipelineEdges,
+    nodeExecutionPlans,
+    dependencyNodeIdsByNode,
   };
 }

@@ -8,6 +8,11 @@ import { onMessage, postMessage } from './bridge';
 
 import '@xyflow/react/dist/style.css';
 
+function formatLoadMetricMs(ms: number | null | undefined): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) { return '—'; }
+  return `${Math.max(0, Math.round(ms))}ms`;
+}
+
 // ── Error classification ─────────────────────────────────────────────────────
 
 type ErrorKind = 'api_key' | 'network' | 'file_missing' | 'generic';
@@ -126,6 +131,7 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
 function InitialCanvasLoadingNotice() {
   const active = useCanvasStore(s => s.initialCanvasLoadActive);
   const pending = useCanvasStore(s => s.initialCanvasLoadPending);
+  const stats = useCanvasStore(s => s.currentInitialCanvasLoadStats);
 
   if (!active) { return null; }
 
@@ -169,6 +175,23 @@ function InitialCanvasLoadingNotice() {
           正在恢复预览、全文和节点信息。大型画布初次打开可能短暂卡顿，提示消失后说明首轮加载基本完成。
           {pending > 0 ? ` 当前仍有 ${pending} 项内容待载入。` : ''}
         </div>
+        {stats && (
+          <div style={{
+            marginTop: 6,
+            fontSize: 10,
+            color: 'var(--vscode-descriptionForeground)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 10,
+            rowGap: 4,
+          }}>
+            <span>节点 {stats.nodeCount}</span>
+            <span>媒体 {stats.mediaRequestCount}</span>
+            <span>全文 {stats.fullContentRequestCount}</span>
+            <span>组框重算 {stats.groupBoundsRecalcCount}</span>
+            <span>首轮渲染 {formatLoadMetricMs(stats.renderReadyMs)}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -206,11 +229,11 @@ export function App() {
   const updateNodeStatus = useCanvasStore(s => s.updateNodeStatus);
   const appendAiChunk = useCanvasStore(s => s.appendAiChunk);
   const finishAiRun = useCanvasStore(s => s.finishAiRun);
-  const setImageUri = useCanvasStore(s => s.setImageUri);
+  const setImageUris = useCanvasStore(s => s.setImageUris);
   const addNode = useCanvasStore(s => s.addNode);
   const setNodeFileMissing = useCanvasStore(s => s.setNodeFileMissing);
   const updateNodeFilePath = useCanvasStore(s => s.updateNodeFilePath);
-  const updateNodePreview = useCanvasStore(s => s.updateNodePreview);
+  const updateNodePreviews = useCanvasStore(s => s.updateNodePreviews);
   const addToStaging = useCanvasStore(s => s.addToStaging);
   const setFullContents = useCanvasStore(s => s.setFullContents);
   const setError = useCanvasStore(s => s.setError);
@@ -222,19 +245,26 @@ export function App() {
   const setNodeDefs = useCanvasStore(s => s.setNodeDefs);
   const setPipelineState = useCanvasStore(s => s.setPipelineState);
   const updatePipelineNodeStatus = useCanvasStore(s => s.updatePipelineNodeStatus);
+  const setPipelineNodeIssue = useCanvasStore(s => s.setPipelineNodeIssue);
   const incrementPipelineCompleted = useCanvasStore(s => s.incrementPipelineCompleted);
   const setPipelinePaused = useCanvasStore(s => s.setPipelinePaused);
   const addPipelineWarning = useCanvasStore(s => s.addPipelineWarning);
   const runAutosaveCheck = useCanvasStore(s => s.runAutosaveCheck);
   const markSaveSuccess = useCanvasStore(s => s.markSaveSuccess);
   const markSaveError = useCanvasStore(s => s.markSaveError);
+  const lastInitialCanvasLoadStats = useCanvasStore(s => s.lastInitialCanvasLoadStats);
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
   const aiChunkBufferRef = useRef(new Map<string, string>());
   const aiChunkFlushRafRef = useRef<number | null>(null);
+  const imageUriBufferRef = useRef(new Map<string, string>());
+  const imageUriFlushRafRef = useRef<number | null>(null);
+  const nodePreviewBufferRef = useRef(new Map<string, { preview: string; metaPatch?: Partial<import('../../src/core/canvas-model').NodeMeta> }>());
+  const nodePreviewFlushRafRef = useRef<number | null>(null);
   const fileContentBufferRef = useRef(new Map<string, string>());
   const fileContentFlushRafRef = useRef<number | null>(null);
   const isAliveRef = useRef(true);
+  const lastLoggedInitialLoadSessionRef = useRef<number | null>(null);
 
   useEffect(() => {
     isAliveRef.current = true;
@@ -268,6 +298,48 @@ export function App() {
     aiChunkBufferRef.current.set(runId, current + chunk);
     if (aiChunkFlushRafRef.current !== null) { return; }
     aiChunkFlushRafRef.current = window.requestAnimationFrame(flushAiChunks);
+  };
+
+  const flushImageUris = () => {
+    imageUriFlushRafRef.current = null;
+    if (!isAliveRef.current) { return; }
+    const buffered = imageUriBufferRef.current;
+    if (buffered.size === 0) { return; }
+    imageUriBufferRef.current = new Map();
+    setImageUris(Array.from(buffered.entries()).map(([filePath, uri]) => ({ filePath, uri })));
+  };
+
+  const enqueueImageUri = (filePath: string, uri: string) => {
+    if (!isAliveRef.current) { return; }
+    imageUriBufferRef.current.set(filePath, uri);
+    if (imageUriFlushRafRef.current !== null) { return; }
+    imageUriFlushRafRef.current = window.requestAnimationFrame(flushImageUris);
+  };
+
+  const flushNodePreviews = () => {
+    nodePreviewFlushRafRef.current = null;
+    if (!isAliveRef.current) { return; }
+    const buffered = nodePreviewBufferRef.current;
+    if (buffered.size === 0) { return; }
+    nodePreviewBufferRef.current = new Map();
+    updateNodePreviews(
+      Array.from(buffered.entries()).map(([nodeId, entry]) => ({
+        nodeId,
+        preview: entry.preview,
+        metaPatch: entry.metaPatch,
+      }))
+    );
+  };
+
+  const enqueueNodePreview = (
+    nodeId: string,
+    preview: string,
+    metaPatch?: Partial<import('../../src/core/canvas-model').NodeMeta>
+  ) => {
+    if (!isAliveRef.current) { return; }
+    nodePreviewBufferRef.current.set(nodeId, { preview, metaPatch });
+    if (nodePreviewFlushRafRef.current !== null) { return; }
+    nodePreviewFlushRafRef.current = window.requestAnimationFrame(flushNodePreviews);
   };
 
   const flushFileContents = () => {
@@ -311,12 +383,45 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [runAutosaveCheck]);
 
+  useEffect(() => {
+    if (!lastInitialCanvasLoadStats) { return; }
+    if (lastLoggedInitialLoadSessionRef.current === lastInitialCanvasLoadStats.sessionId) { return; }
+    lastLoggedInitialLoadSessionRef.current = lastInitialCanvasLoadStats.sessionId;
+
+    const payload = {
+      nodeCount: lastInitialCanvasLoadStats.nodeCount,
+      mediaRequestCount: lastInitialCanvasLoadStats.mediaRequestCount,
+      fullContentRequestCount: lastInitialCanvasLoadStats.fullContentRequestCount,
+      groupBoundsRecalcCount: lastInitialCanvasLoadStats.groupBoundsRecalcCount,
+      renderReadyMs: lastInitialCanvasLoadStats.renderReadyMs,
+      totalMs: lastInitialCanvasLoadStats.totalMs,
+      finishedByTimeout: lastInitialCanvasLoadStats.finishedByTimeout,
+    };
+
+    if (lastInitialCanvasLoadStats.finishedByTimeout) {
+      console.warn('[ResearchSpace] initial canvas load timed out', payload);
+      return;
+    }
+
+    console.info('[ResearchSpace] initial canvas load', payload);
+  }, [lastInitialCanvasLoadStats]);
+
   useEffect(() => () => {
     if (aiChunkFlushRafRef.current !== null) {
       window.cancelAnimationFrame(aiChunkFlushRafRef.current);
       aiChunkFlushRafRef.current = null;
     }
     aiChunkBufferRef.current.clear();
+    if (imageUriFlushRafRef.current !== null) {
+      window.cancelAnimationFrame(imageUriFlushRafRef.current);
+      imageUriFlushRafRef.current = null;
+    }
+    imageUriBufferRef.current.clear();
+    if (nodePreviewFlushRafRef.current !== null) {
+      window.cancelAnimationFrame(nodePreviewFlushRafRef.current);
+      nodePreviewFlushRafRef.current = null;
+    }
+    nodePreviewBufferRef.current.clear();
     if (fileContentFlushRafRef.current !== null) {
       window.cancelAnimationFrame(fileContentFlushRafRef.current);
       fileContentFlushRafRef.current = null;
@@ -365,7 +470,7 @@ export function App() {
         }
         case 'fnStatusUpdate':
           if (msg.nodeId && msg.status) {
-            updateNodeStatus(msg.nodeId, msg.status, msg.progressText);
+            updateNodeStatus(msg.nodeId, msg.status, msg.progressText, msg.issueKind, msg.issueMessage);
           }
           break;
         case 'aiChunk':
@@ -385,6 +490,9 @@ export function App() {
             if (msg.runId) {
               flushAiChunksForRun(msg.runId);
             }
+            if (msg.nodeId) {
+              updateNodeStatus(msg.nodeId, 'error', undefined, msg.issueKind ?? 'run_failed', msg.message as string);
+            }
             setError(msg.message as string);
             usePetStore.getState().notifyCanvasEvent('aiError');
           }
@@ -401,7 +509,7 @@ export function App() {
           break;
         case 'imageUri':
           if (msg.filePath && msg.uri) {
-            setImageUri(msg.filePath, msg.uri);
+            enqueueImageUri(msg.filePath, msg.uri);
           }
           break;
         case 'stageNodes':
@@ -429,7 +537,7 @@ export function App() {
           break;
         case 'nodeContentUpdate':
           if (msg.nodeId && msg.preview !== undefined) {
-            updateNodePreview(msg.nodeId, msg.preview as string, msg.metaPatch);
+            enqueueNodePreview(msg.nodeId, msg.preview as string, msg.metaPatch);
           }
           break;
         case 'toastError':
@@ -471,6 +579,7 @@ export function App() {
             pipelineId: pm.pipelineId,
             triggerNodeId: pm.triggerNodeId,
             nodeStatuses: statuses,
+            nodeIssues: {},
             totalNodes: pm.totalNodes,
             completedNodes: 0,
             isRunning: true,
@@ -482,6 +591,7 @@ export function App() {
         }
         case 'pipelineNodeStart': {
           const pm = msg as { pipelineId: string; nodeId: string };
+          setPipelineNodeIssue(pm.nodeId, null);
           updatePipelineNodeStatus(pm.nodeId, 'running');
           break;
         }
@@ -492,14 +602,24 @@ export function App() {
           break;
         }
         case 'pipelineNodeError': {
-          const pm = msg as { pipelineId: string; nodeId: string; error: string };
+          const pm = msg as { pipelineId: string; nodeId: string; error: string; issueKind?: import('../../src/core/canvas-model').RunIssueKind };
           updatePipelineNodeStatus(pm.nodeId, 'failed');
+          setPipelineNodeIssue(pm.nodeId, {
+            kind: pm.issueKind ?? 'run_failed',
+            message: pm.error,
+          });
           incrementPipelineCompleted();
           break;
         }
         case 'pipelineNodeSkipped': {
-          const pm = msg as { pipelineId: string; nodeId: string; reason?: string };
+          const pm = msg as { pipelineId: string; nodeId: string; reason?: string; issueKind?: import('../../src/core/canvas-model').RunIssueKind };
           updatePipelineNodeStatus(pm.nodeId, 'skipped');
+          if (pm.reason) {
+            setPipelineNodeIssue(pm.nodeId, {
+              kind: pm.issueKind ?? 'skipped',
+              message: pm.reason,
+            });
+          }
           incrementPipelineCompleted();
           break;
         }

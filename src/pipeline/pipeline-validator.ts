@@ -36,21 +36,16 @@ export function validatePipeline(
     const node = nodeMap.get(nodeId);
     if (!node) { continue; }
 
-    // Count incoming edges (both data_flow from data nodes and pipeline_flow from upstream fn nodes)
-    const incomingEdges = allEdges.filter(
-      e => e.target === nodeId &&
-        (e.edge_type === 'data_flow' || e.edge_type === 'pipeline_flow')
-    );
+    const nodePlan = plan.nodeExecutionPlans[nodeId];
+    const incomingEdges = nodePlan?.inputEdges ?? [];
+    const dataInputs = nodePlan?.directDataSourceIds ?? [];
+    const pipelineInputs = plan.dependencyNodeIdsByNode[nodeId] ?? [];
 
     if (incomingEdges.length === 0) {
       // The trigger node (first in pipeline) is allowed to have no pipeline inputs
       // but should still have data inputs
       const isHead = plan.layers[0]?.nodeIds.includes(nodeId);
       if (isHead) {
-        // Head nodes should have data inputs
-        const dataInputs = allEdges.filter(
-          e => e.target === nodeId && e.edge_type === 'data_flow'
-        );
         if (dataInputs.length === 0) {
           errors.push({
             nodeId,
@@ -82,6 +77,25 @@ export function validatePipeline(
           severity: 'warning',
         });
       }
+    } else if (tool === 'rag') {
+      const query = (node.meta?.param_values?.['query'] as string) ?? '';
+      if (!query.trim()) {
+        errors.push({
+          nodeId,
+          nodeTitle: node.title,
+          message: `「${node.title}」的问题为空`,
+          severity: 'warning',
+        });
+      }
+    }
+
+    if (!(plan.layers[0]?.nodeIds.includes(nodeId)) && incomingEdges.length > 0 && pipelineInputs.length === 0) {
+      errors.push({
+        nodeId,
+        nodeTitle: node.title,
+        message: `「${node.title}」缺少上游 Pipeline 依赖`,
+        severity: 'error',
+      });
     }
   }
 
