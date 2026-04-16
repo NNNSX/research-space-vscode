@@ -1,6 +1,6 @@
 import React from 'react';
 import { v4 as uuid } from 'uuid';
-import type { CanvasNode } from '../../../../../src/core/canvas-model';
+import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { BoardDropdown } from './BoardDropdown';
@@ -9,8 +9,17 @@ export function Toolbar() {
     settingsPanelOpen, setSettingsPanelOpen,
     selectionMode, setSelectionMode,
     undo, redo, undoStack, redoStack,
+    saveState, saveDueAt, lastSavedAt, saveError,
+    saveNow, canvasFile,
   } = useCanvasStore();
   const [helpOpen, setHelpOpen] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (saveState !== 'pending') { return; }
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [saveState]);
 
   const handleAddFiles = () => {
     postMessage({ type: 'addFiles' });
@@ -19,6 +28,30 @@ export function Toolbar() {
   const handleNewNote = () => {
     postMessage({ type: 'newNote', title: '' });
   };
+
+  const saveLabel = useMemo(() => {
+    if (!canvasFile) { return '未打开画布'; }
+    if (saveState === 'saving') { return '保存中…'; }
+    if (saveState === 'error') {
+      return `保存失败${saveError ? ` · ${saveError}` : ''}`;
+    }
+    if (saveState === 'pending' && saveDueAt) {
+      const remainMs = Math.max(0, saveDueAt - now);
+      const totalSeconds = Math.ceil(remainMs / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `未保存 · ${minutes}:${String(seconds).padStart(2, '0')} 后自动保存`;
+    }
+    if (saveState === 'pending') {
+      return '未保存';
+    }
+    if (!lastSavedAt) { return '已保存'; }
+    return `已保存 · ${new Date(lastSavedAt).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })}`;
+  }, [canvasFile, lastSavedAt, now, saveDueAt, saveError, saveState]);
 
   return (
     <>
@@ -46,7 +79,32 @@ export function Toolbar() {
           ↪
         </ToolbarButton>
 
+        <div
+          title={saveLabel}
+          style={{
+            marginLeft: 8,
+            fontSize: 11,
+            fontWeight: 600,
+            color: saveState === 'error'
+              ? 'var(--vscode-errorForeground, var(--vscode-titleBar-activeForeground))'
+              : 'var(--vscode-titleBar-activeForeground)',
+            maxWidth: 320,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {saveLabel}
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+        <ToolbarButton
+          onClick={saveNow}
+          title="立即保存当前画布 (Ctrl/Cmd+S)"
+          disabled={!canvasFile || saveState === 'saving'}
+        >
+          ↓ 保存
+        </ToolbarButton>
         <ToolbarButton onClick={handleAddFiles} title="从工作区添加文件">
           + 📄 文件
         </ToolbarButton>
@@ -168,51 +226,61 @@ const STEPS: { icon: string; title: string; desc: string }[] = [
   {
     icon: '🔗',
     title: '5. 连线并运行',
-    desc: '从数据节点右侧连接点拖到功能节点左侧连接点。若工具定义了输入槽（slots），连线时会弹出角色选择。点击功能节点的「▶ 运行」，AI 生成的输出将作为新节点出现在画布上。',
+    desc: '从数据节点右侧连接点拖到功能节点左侧连接点。若工具定义了输入槽（slots），连线时会弹出角色选择。点击功能节点的「▶ 运行」，AI 生成的输出将作为新节点出现在画布上；多选功能节点后可从外部工具栏运行 Pipeline。',
+  },
+  {
+    icon: '◫',
+    title: '6. 节点组',
+    desc: '选中 2 个及以上数据节点后，会在外部浮动工具栏出现「创建节点组」。节点组现在是一个真实的 hub 节点：左右双通道与普通节点一致，对外通常只保留一条显式连线，内部成员关系由隐藏汇聚边维护；组框支持重命名、折叠、删除和整组拖拽。',
   },
   {
     icon: '🤖',
-    title: 'AI 服务商',
+    title: '7. AI 服务商',
     desc: '支持 GitHub Copilot（零配置推荐）、Anthropic Claude、Ollama（本地离线）及自定义 OpenAI 兼容服务商（如 AIHubMix，支持图像分析）。可在「⚙ 设置」面板全局配置，也可在每个功能节点上单独覆盖。',
   },
   {
     icon: '🎨',
-    title: '多模态工具',
+    title: '8. 多模态工具',
     desc: '图像生成 / 图像编辑 / 文字转语音 / 语音转文字 / 视频生成 / 图生视频 — 通过 AIHubMix API 调用，需在设置中配置 AIHubMix API Key。功能节点上会显示蓝色输入提示。',
   },
   {
     icon: '✏️',
-    title: '系统 Prompt 自定义',
+    title: '9. 系统 Prompt 自定义',
     desc: '每个 LLM 功能节点可展开「编辑系统 Prompt」面板查看并覆盖默认提示词。修改后标签变黄提示已启用，可随时「恢复默认」。Chat 工具支持自由 Prompt 和 @文件 引用。',
   },
   {
     icon: '📋',
-    title: '画板/工作区',
+    title: '10. 画板/工作区',
     desc: '点击工具栏「📋 画板」打开画板管理下拉。新建画板：输入名称、选择颜色，确认后进入暂存架，拖到画布放置。画板是半透明的彩色矩形区域，节点放在上面，移动画板时内部节点跟随移动。8 个控制点可调整画板大小。右键画板可编辑名称/颜色或删除。画板列表点击可快速跳转到对应区域。',
   },
   {
     icon: '↩',
-    title: '撤销与重做',
+    title: '11. 撤销与重做',
     desc: 'Ctrl+Z（Mac: Cmd+Z）撤销，Ctrl+Shift+Z 重做。覆盖节点增删、边操作、拖拽移动、连线、归纳等操作，最多保留 50 步。',
   },
   {
     icon: '🖱',
-    title: '右键菜单与快捷键',
+    title: '12. 右键菜单与快捷键',
     desc: '右键任意节点：删除、复制；笔记节点可重命名（同步文件）。选中节点后 Delete / Backspace 快速删除。数据节点标题栏「预览」按钮在 VSCode 原生查看器中打开文件。',
   },
   {
+    icon: '⏳',
+    title: '13. 大型画布加载',
+    desc: '当画布节点较多时，初次打开会先恢复媒体预览、文件全文和节点内容，这段时间顶部会出现“正在加载画布内容”的提醒。期间可能短暂卡顿，提示消失后说明首轮恢复基本完成。',
+  },
+  {
     icon: '🔧',
-    title: '自定义工具',
+    title: '14. 自定义工具',
     desc: '在 AI 工具面板底部点击「✨ AI 编排提示词」获取工具定义 JSON 规范。将其粘贴到 AI 助手，描述功能即可生成自定义工具 JSON，通过「↑ 导入工具」使用。',
   },
   {
     icon: '🐾',
-    title: '宠物伴侣',
+    title: '15. 宠物伴侣',
     desc: '在设置中开启宠物伴侣，画布中会出现可拖拽的浮动宠物窗口。7 种像素宠物按等级解锁，支持成长、心情、对话（AI 驱动）、休息提醒和每日总结。宠物可感知画布操作并即时反应。',
   },
   {
     icon: '📤',
-    title: '导出',
+    title: '16. 导出',
     desc: '通过命令面板（Ctrl+Shift+P）执行「Export as Markdown」或「Export as JSON」，将画布内容导出为文件。',
   },
 ];

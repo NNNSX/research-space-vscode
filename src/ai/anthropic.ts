@@ -51,6 +51,14 @@ export class AnthropicProvider implements AIProvider {
     }
   }
 
+  async resolveModel(modelOverride?: string): Promise<string | undefined> {
+    const config = vscode.workspace.getConfiguration('researchSpace.ai');
+    const configured = config.get<string>('anthropicModel', 'claude-sonnet-4-5');
+    return (modelOverride && modelOverride !== 'auto')
+      ? modelOverride
+      : (configured || 'claude-sonnet-4-5');
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
@@ -59,9 +67,7 @@ export class AnthropicProvider implements AIProvider {
     const config = vscode.workspace.getConfiguration('researchSpace.ai');
     const apiKey = this.apiKey;
     // Per-node model override > global setting
-    const model = (opts?.model && opts.model !== 'auto')
-      ? opts.model
-      : config.get<string>('anthropicModel', 'claude-sonnet-4-5');
+    const model = await this.resolveModel(opts?.model);
 
     if (!apiKey) {
       throw new Error('Anthropic API key is not configured');

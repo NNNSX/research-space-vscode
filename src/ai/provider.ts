@@ -22,6 +22,7 @@ export interface AIProvider {
   supportsImages: boolean;
   isAvailable(): Promise<boolean>;
   listModels(): Promise<ModelInfo[]>;
+  resolveModel(modelOverride?: string): Promise<string | undefined>;
   stream(
     systemPrompt: string,
     contents: AIContent[],

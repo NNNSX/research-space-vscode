@@ -2,6 +2,126 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [2.0.0-alpha.13] — 2026-04-16
+
+- **发布定位明确为开发预览版** — 这次 GitHub 同步面向 `2.0` 新链路试用，不作为稳定版替代；README 与发布说明都会明确提醒“稳定性弱，慎重使用，建议先备份工作区”
+- **AI 流式输出改为分帧缓冲** — Webview 侧对 `aiChunk` 更新增加按帧合并，避免多节点 Pipeline 连续运行时因流式文本过密触发 React 嵌套更新风暴，缓解“第一个节点完成、第二个节点启动即崩溃”的问题
+- **文件节点刷新与画布保存解耦** — 新增 `canvasStateSync` 轻量消息，画布当前内存态会实时同步到 Extension Host，而不必等待手动保存或 3 分钟自动保存；新创建节点在文件保存后即可命中文件监听并刷新卡片信息
+- **文件监听优先使用活动画布内存态** — 文件变更、删除、重命名时，监听器优先读取当前打开画布的 `document.data`，不再只依赖磁盘上的旧 `.rsws` 快照，避免“节点已在画布中，但扩展侧还不知道它存在”的状态错位
+- **节点元数据回写链路收口** — 文件监听刷新 `content_preview`、`ai_readable_chars`、缺失状态等元数据后，会同步更新活动文档内存态并写回 `.rsws`，减少“刷新了 UI 但下次保存又被旧数据覆盖”的问题
+
+## [2.0.0-alpha.12] — 2026-04-15
+
+- **节点组引擎回归原生节点** — 废弃 `overlay + 外挂 port 节点` 的试错方案，节点组改回原生 `NodeGroupNode` 渲染，组框、标题栏、折叠态和左右双通道统一挂在同一个 React Flow 节点实体上
+- **节点组语义改为 hub 收口** — 节点组不再在连线时临时展开为多条外部边，而是持久化一个真实 `group_hub` 节点，并用隐藏的 `hub_member` 边把成员节点汇聚到 hub；对外连线始终只有一条显式边，执行时再展开为成员输入
+- **节点组主体改为指针穿透** — 节点组主体区域不再拦截组内文件节点的鼠标交互，只让标题栏、菜单与左右端口接管交互，避免再次出现“组能显示但把成员都挡住”的回归
+- **节点组双通道补齐** — 节点组恢复与普通节点一致的左入右出双通道，右侧用于整组批量输出，左侧用于整组批量接入，为后续“爆炸/蓝图”能力保留一致心智模型
+- **节点组拖拽命中区修正** — 标题栏整体都作为整组拖拽句柄，底层复用原生节点拖拽链路，再由 store 把 hub 位移翻译成成员位移，避免出现“点中标题栏却拖不动”或“只移动框不移动成员”的交互错觉
+- **节点组通道交互显式化** — 左右通道都由原生句柄本体负责命中与连线，并继续跟随组框颜色，避免再出现“看起来像通道、实际只是装饰”的问题
+
+## [2.0.0-alpha.11] — 2026-04-15
+
+- **节点组通道可见性回修** — `GroupPortNode` 改回“真实句柄自身就是可见圆点”的实现，避免组通道只剩偏移 `Handle` 导致在组框边缘看起来像消失
+- **节点组通道定位微调** — 展开态与折叠态的组通道锚点重新对齐到组框右侧，保持“看得见即可拖拽连线”的直觉
+
+## [2.0.0-alpha.10] — 2026-04-15
+
+- **保存脏状态去伪存真** — 自动保存只会由真正改变 `.rsws` 内容的操作触发；选中节点、ReactFlow 内部尺寸/选择回报等瞬时 UI 变化不再反复把顶栏状态打回“未保存”
+- **保存提示收口** — 顶栏保存状态改为纯文字提醒，不再带底色和边框；保存按钮改成与其他按钮一致的普通样式与单色图标
+- **文本节点可读元数据统一** — `ai_output`、`note` 等文本节点的 `ai_readable_chars` 现在由统一链路维护：AI 生成输出时写入全文长度，文件变更监听也会同步刷新预览和全文长度
+- **AI 输出提示不再假装全文 300 字** — 当只有预览、没有全文长度元数据时，底部提示会明确显示“已载入预览”，避免把 300 字预览误报成全文长度
+
+## [2.0.0-alpha.9] — 2026-04-15
+
+- **保存状态可见化** — 顶栏新增画布保存状态提示，明确显示 `已保存` / `未保存` / `几秒后自动保存` / `保存中` / `保存失败`
+- **手动保存入口** — 顶栏新增 `💾 保存` 按钮，并支持 `Ctrl/Cmd+S`，与自动保存共用同一条宿主写盘链路
+- **保存回执补齐** — Extension Host 在自动保存和手动保存完成后主动回传 `canvasSaveStatus`，前端不再依赖“猜测是否已经写盘成功”
+
+## [2.0.0-alpha.8] — 2026-04-15
+
+- **Pipeline 入口条件收紧** — `▶▶ Pipeline` 只在多选/选区工具栏中出现，不再因单独选中一个节点而显示，保持“外部入口”语义并与蓝图入口一致
+- **文件节点底部信息固定** — 数据节点改为“头部固定 + 正文滚动 + 底部元信息固定”，`AiReadabilityBadge` 与文件路径/模型标签不再在缩高时被压扁
+- **节点组通道去装饰化** — 移除组框上的假圆点，仅保留真实的 `GroupPortNode` 句柄；连接校验同步支持节点组 → 功能节点，恢复可拖拽连线
+- **执行前画布强制同步** — `runFunction` / `runBatchFunction` / `runPipeline` 现在携带当前画布快照并在宿主侧立即写回，修复“删除旧功能节点后仍触发旧节点”与 `找不到功能节点或 ai_tool 配置` 的时序问题
+
+## [2.0.0-alpha.7] — 2026-04-15
+
+### Fixed
+- **Pipeline 入口回归** — 移除 FunctionNode 内部的 `▶▶ Pipeline` 按钮，恢复为外部入口，避免多节点场景下入口语义混乱，并保持与后续蓝图设计兼容
+- **数据节点缩放布局** — 调整 DataNode 结构，标题栏与预览按钮改为固定头部区域，仅正文滚动，节点调节高度时不再把头部一起压缩
+- **节点组通道恢复** — 恢复节点组右侧通道的可见提示与可连线行为，组框与折叠卡片重新显示独立圆点，通道节点层级上移避免被外框覆盖
+- **画布高 CPU 回归** — 优化 `Canvas` 的 `displayNodes` 构造逻辑，非搜索/非折叠场景下复用原始节点对象，减少打开画布后因内容更新导致的整画布重建与高频重渲染
+
+---
+
+## [2.0.0-alpha.6] — 2026-04-15
+
+### Fixed
+- **Pipeline 启动异常** — 修复 `pipelineStarted` 消息在 `totalCount` 定义前读取变量的问题，避免 Pipeline 启动阶段直接失败
+- **Pipeline warning 丢失** — 校验 warning 现在在 `pipelineStarted` 之后发送，Webview 能正确接收并在 `PipelineToolbar` 中展示
+- **Pipeline 跳过状态不一致** — 新增 `pipelineNodeSkipped` 消息，跳过节点现在会正确更新进度统计和节点视觉状态，不再停留在 waiting
+- **Pipeline 等待态误显示为运行中** — 启动 Pipeline 时改为清理旧的 `fn_status`，等待节点由 Pipeline 专属状态驱动，避免所有节点一开始都显示“运行中”
+- **菜单入口范围偏窄** — Explorer “Add to Canvas” 与树菜单 “Open File” 现在覆盖数据、音视频、BibTeX、CSV/TSV 等已支持类型
+
+---
+
+## [2.0.0-alpha.4] — 2026-04-15
+
+### Added
+- **Pipeline 执行前校验** — `pipeline-validator.ts` 在 Pipeline 启动前检查所有节点：缺失输入连接、空 prompt 等问题自动检测，分为 error（阻止执行）和 warning（允许继续）两级
+- **Pipeline 进度工具栏** — `PipelineToolbar` 浮动工具栏：进度条、暂停/恢复/取消按钮、当前执行节点名称、完成节点统计
+- **Pipeline 状态机** — Zustand `PipelineState`：`nodeStatuses` / `completedNodes` / `isPaused` / `currentNodeId` / `validationWarnings` 完整状态管理
+- **Pipeline 节点视觉状态** — FunctionNode 在 Pipeline 运行中显示不同状态：waiting 虚线边框、running 蓝色脉冲动画、done 绿色 ✅、failed 红色 ❌、skipped 灰色 ⊘
+- **Pipeline 边动态着色** — `PipelineEdge` 根据执行状态动态变色：flowing 蓝色动画 → done 绿色 → failed 红色
+- **BibTeX 文件支持** — code 节点新增 `.bib` / `.bst` 文件类型识别
+
+### Changed
+- `pipelineStarted` 消息携带完整元数据（节点列表、执行顺序、层级信息），UI 端一次初始化所有状态
+
+---
+
+## [2.0.0-alpha.3] — 2026-04-15
+
+### Added
+- **Pipeline 执行引擎** — `pipeline-engine.ts` 实现 BFS 下游节点发现 + Kahn 算法拓扑分层；`pipeline-runner.ts` 逐层执行、同层并行、中间结果通过 `injectedContents` 传递到下一层
+- **Pipeline 运行按钮** — FunctionNode 新增 ▶▶ Pipeline 按钮，点击后从当前节点开始执行整条管道
+- **Pipeline 消息链路** — `pipelineNodeStart` / `pipelineNodeComplete` / `pipelineNodeError` / `pipelineComplete` 消息类型，实时推送各节点执行进度
+
+### Changed
+- `function-runner.ts` 新增 `injectedContents` 参数，Pipeline 模式下跳过文件读取，直接使用上游节点的输出内容
+
+---
+
+## [2.0.0-alpha.2] — 2026-04-15
+
+### Added
+- **Pipeline 功能节点互连** — 功能节点之间现在可以用 `pipeline_flow` 边连接，构建多步骤 AI 处理管道
+- **环路检测** — `graph-utils.ts` 新增 `wouldCreateCycle` 检测和 `topologicalSort` 拓扑排序，连线时实时阻止环路
+- **Pipeline 边样式** — `PipelineEdge.tsx` 虚线紫色管道边，与普通 `data_flow` 边视觉区分
+- **连接校验** — Canvas `isValidConnection` 实时校验连接合法性（类型检查 + 环路检测）
+
+### Changed
+- `EdgeType` 新增 `pipeline_flow` 类型
+- `_createEdge` 重构为 `edgeType` 参数化，支持创建不同类型的边
+
+---
+
+## [2.0.0-alpha.1] — 2026-04-15
+
+### Added
+- **AI 内容理解度指示器** — `AiReadabilityBadge` 组件，在数据节点上显示 AI 对该内容的可读性评估：
+  - PDF：显示可提取字符数 + 页数，检测到图表/公式时警告"含不可读内容"
+  - Note / Code / AI Output：显示字符数，标注"完全可读"
+  - Image：标注"需要多模态模型"
+  - Audio / Video：标注转录需求
+  - CSV：显示行列数
+- **PDF 图表检测** — `content-extractor` 新增正则检测 PDF 中的 Figure / Table / Chart / Equation 引用，提示用户 AI 可能无法理解这些内容
+
+### Changed
+- `NodeMeta` 新增字段：`ai_readable_chars` / `pages` / `has_unreadable_content` / `unreadable_hint` / `csv_rows` / `csv_cols`
+
+---
+
 ## [1.2.2] — 2026-04-14
 
 ### Fixed

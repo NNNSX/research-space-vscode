@@ -9,7 +9,7 @@ export const DRAG_TOOL_KEY = 'application/rs-tool';
 
 type ToolCategory = 'text' | 'research' | 'multimodal' | 'project' | 'general';
 
-const CATEGORY_ORDER: ToolCategory[] = ['text', 'research', 'multimodal', 'project', 'general'];
+const CATEGORY_ORDER: ToolCategory[] = ['general', 'text', 'research', 'multimodal', 'project'];
 
 const CATEGORY_META: Record<ToolCategory, { icon: string; label: string }> = {
   text:        { icon: '✏️', label: '文本处理' },

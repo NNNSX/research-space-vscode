@@ -37,10 +37,10 @@ export interface SettingsSnapshot {
 
 // ── Node types ─────────────────────────────────────────────────────────────
 export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data';
-export type NodeType = DataNodeType | 'function';
+export type NodeType = DataNodeType | 'function' | 'group_hub';
 export type FnStatus = 'idle' | 'running' | 'done' | 'error';
 export type AiTool = 'summarize' | 'polish' | 'review' | 'translate' | 'draw' | 'rag' | 'chat';
-export type EdgeType = 'data_flow' | 'ai_generated' | 'reference';
+export type EdgeType = 'data_flow' | 'pipeline_flow' | 'ai_generated' | 'reference' | 'hub_member';
 
 // ── Parameter definitions ───────────────────────────────────────────────────
 export interface ParamDef {
@@ -83,6 +83,17 @@ export interface NodeMeta {
 
   // PM1: Task node
   task_items?: Array<{ id: string; label: string; done: boolean }>;
+
+  // v2.0: AI content understanding indicator
+  ai_readable_chars?: number;       // Total AI-readable character count
+  ai_readable_pages?: number;       // AI-readable page count (PDF)
+  has_unreadable_content?: boolean;  // True if content has elements AI cannot read (charts, formulas in images)
+  unreadable_hint?: string;          // Human-readable hint, e.g. "检测到 12 个图表引用，图片内容未识别"
+  csv_rows?: number;                 // CSV/TSV row count (excluding header)
+  csv_cols?: number;                 // CSV/TSV column count
+
+  // Group hub metadata
+  hub_group_id?: string;             // visual node-group container id
 }
 
 // ── Canvas node ─────────────────────────────────────────────────────────────
@@ -166,6 +177,35 @@ export interface OutputHistoryEntry {
   isCurrent: boolean;  // true if this matches the current node's file_path
 }
 
+export interface PetChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export type GroundThemeId = 'none' | 'forest' | 'castle' | 'autumn' | 'beach' | 'winter';
+export type PetTypeId = 'dog' | 'fox' | 'rubber-duck' | 'turtle' | 'crab' | 'clippy' | 'cockatiel';
+
+export interface PetState {
+  petType: PetTypeId;
+  petName: string;
+  mood: number;
+  energy: number;
+  exp: number;
+  level: number;
+  totalWorkMinutes: number;
+  currentSessionStart: string;
+  lastInteraction: string;
+  unlockedPets: PetTypeId[];
+  streakDays: number;
+  widgetAnchor?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  widgetOffsetX?: number;
+  widgetOffsetY?: number;
+  widgetLeft?: number;
+  widgetTop?: number;
+}
+
+export type PetSettingsKey = 'pet.enabled' | 'pet.groundTheme' | 'pet.restReminder';
+
 // ── Canvas file (.rsws) ─────────────────────────────────────────────────────
 
 /** @deprecated Use Board instead — kept for migration only */
@@ -185,6 +225,18 @@ export interface Board {
   bounds: { x: number; y: number; width: number; height: number };
 }
 
+export interface NodeGroup {
+  id: string;
+  name: string;
+  hubNodeId: string;
+  sourceNodeId?: string;
+  nodeIds: string[];
+  color?: string;
+  borderColor?: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  collapsed: boolean;
+}
+
 export interface CanvasFile {
   version: '1.0';
   nodes: CanvasNode[];
@@ -198,6 +250,7 @@ export interface CanvasFile {
   stagingNodes?: CanvasNode[];  // Nodes waiting to be placed on canvas (persisted)
   summaryGroups?: SummaryGroup[];  // @deprecated — migrated to boards on load
   boards?: Board[];
+  nodeGroups?: NodeGroup[];
 }
 
 // ── Type guards ─────────────────────────────────────────────────────────────
@@ -220,10 +273,12 @@ export function isDataNode(node: CanvasNode): boolean {
 // ── Webview ↔ Extension message protocol ───────────────────────────────────
 export type WebviewMessage =
   | { type: 'ready' }
-  | { type: 'canvasChanged'; data: CanvasFile }
+  | { type: 'canvasStateSync'; data: CanvasFile }
+  | { type: 'canvasChanged'; data: CanvasFile; requestId?: number }
+  | { type: 'saveCanvas'; data: CanvasFile; requestId?: number }
   | { type: 'openFile'; filePath: string }
-  | { type: 'runFunction'; nodeId: string }
-  | { type: 'runBatchFunction'; nodeId: string }
+  | { type: 'runFunction'; nodeId: string; canvas?: CanvasFile }
+  | { type: 'runBatchFunction'; nodeId: string; canvas?: CanvasFile }
   | { type: 'cancelAI'; runId: string }
   | { type: 'requestImageUri'; filePath: string }
   | { type: 'requestModels'; provider: string }
@@ -243,10 +298,35 @@ export type WebviewMessage =
   | { type: 'requestOutputHistory'; nodeId: string; filePath: string }
   | { type: 'restoreOutputVersion'; filePath: string }
   | { type: 'requestFileContent'; filePath: string; requestId: string }
-  | { type: 'previewFile'; filePath: string };
+  | { type: 'previewFile'; filePath: string }
+  | { type: 'runPipeline'; triggerNodeId: string; canvas?: CanvasFile }
+  | { type: 'pipelinePause'; pipelineId: string }
+  | { type: 'pipelineResume'; pipelineId: string }
+  | { type: 'pipelineCancel'; pipelineId: string }
+  | { type: 'petSettingChanged'; key: PetSettingsKey; value: boolean | number | GroundThemeId }
+  | { type: 'savePetState'; state: PetState }
+  | { type: 'petSaveMemory'; content: string }
+  | {
+      type: 'petAiChat';
+      requestId: string;
+      petName: string;
+      personality: string;
+      messages: PetChatMessage[];
+      mode: 'chat' | 'suggestion';
+    };
 
 export type ExtensionMessage =
   | { type: 'init'; data: CanvasFile; workspaceRoot: string }
+  | { type: 'canvasSaveStatus'; status: 'saved' | 'error'; savedAt?: number; message?: string; mode?: 'auto' | 'manual'; requestId?: number }
+  | {
+      type: 'petInit';
+      petState: PetState | null;
+      petEnabled: boolean;
+      restReminderMin: number;
+      groundTheme?: GroundThemeId;
+    }
+  | { type: 'petAssetsBase'; uri: string }
+  | { type: 'petAiChatResponse'; requestId: string; text: string; success: boolean }
   | { type: 'toolDefs'; tools: JsonToolDef[] }
   | { type: 'toolDefError'; message: string }
   | { type: 'nodeDefs'; defs: DataNodeDef[] }
@@ -254,7 +334,8 @@ export type ExtensionMessage =
   | { type: 'stageNodes'; nodes: CanvasNode[] }
   | { type: 'nodeFileStatus'; nodeId: string; missing: boolean }
   | { type: 'nodeFileMoved'; nodeId: string; newFilePath: string; newTitle: string }
-  | { type: 'nodeContentUpdate'; nodeId: string; preview: string }
+  | { type: 'nodeContentUpdate'; nodeId: string; preview: string; metaPatch?: Partial<NodeMeta> }
+  | { type: 'toastError'; message: string }
   | { type: 'fnStatusUpdate'; nodeId: string; status: FnStatus; progressText?: string }
   | { type: 'aiChunk'; runId: string; chunk: string }
   | { type: 'aiDone'; runId: string; node: CanvasNode; edge: CanvasEdge }
@@ -264,7 +345,14 @@ export type ExtensionMessage =
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
   | { type: 'outputHistory'; nodeId: string; entries: OutputHistoryEntry[] }
   | { type: 'fileContent'; requestId: string; content: string; language?: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'pipelineStarted'; pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number }
+  | { type: 'pipelineNodeStart'; pipelineId: string; nodeId: string }
+  | { type: 'pipelineNodeComplete'; pipelineId: string; nodeId: string; outputNodeId: string }
+  | { type: 'pipelineNodeError'; pipelineId: string; nodeId: string; error: string }
+  | { type: 'pipelineNodeSkipped'; pipelineId: string; nodeId: string; reason?: string }
+  | { type: 'pipelineComplete'; pipelineId: string; totalNodes: number; completedNodes: number }
+  | { type: 'pipelineValidationWarning'; pipelineId: string; nodeId: string; message: string };
 // ── Default node sizes ──────────────────────────────────────────────────────
 export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> = {
   paper:           { width: 280, height: 160 },
@@ -275,6 +363,7 @@ export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> 
   audio:           { width: 240, height: 120 },
   video:           { width: 280, height: 180 },
   experiment_log:  { width: 320, height: 300 },
+  group_hub:       { width: 220, height: 140 },
   task:            { width: 300, height: 240 },
   data:            { width: 320, height: 200 },
   function:        { width: 280, height: 160 },

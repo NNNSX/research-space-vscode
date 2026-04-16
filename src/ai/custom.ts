@@ -50,6 +50,12 @@ export class CustomProvider implements AIProvider {
     }
   }
 
+  async resolveModel(modelOverride?: string): Promise<string | undefined> {
+    return (modelOverride && modelOverride !== 'auto')
+      ? modelOverride
+      : (this.config.defaultModel || undefined);
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
@@ -59,9 +65,7 @@ export class CustomProvider implements AIProvider {
       throw new Error(`Provider "${this.name}" is not configured (missing API key or base URL).`);
     }
 
-    const resolvedModel = (opts?.model && opts.model !== 'auto')
-      ? opts.model
-      : (this.config.defaultModel || '');
+    const resolvedModel = await this.resolveModel(opts?.model) || '';
 
     if (!resolvedModel) {
       throw new Error(`Provider "${this.name}": no model selected. Set a default model in Settings.`);

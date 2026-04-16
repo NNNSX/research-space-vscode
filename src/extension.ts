@@ -6,6 +6,7 @@ import { registerAddToCanvas } from './commands/add-to-canvas';
 import { registerNewCanvas } from './commands/new-canvas';
 import { readCanvas, writeCanvas } from './core/storage';
 import { toAbsPath, toRelPath } from './core/storage';
+import { extractPreviewWithMeta } from './core/content-extractor';
 
 export function activate(context: vscode.ExtensionContext): void {
   // ── Custom Editor Provider ────────────────────────────────────────────────
@@ -216,6 +217,17 @@ export function deactivate(): void {
 
 // ── File watcher ──────────────────────────────────────────────────────────
 
+async function getCanvasState(canvasUri: vscode.Uri): Promise<{
+  canvas: import('./core/canvas-model').CanvasFile;
+  document: import('./providers/CanvasEditorProvider').CanvasDocument | undefined;
+}> {
+  const document = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
+  if (document) {
+    return { canvas: document.data, document };
+  }
+  return { canvas: await readCanvas(canvasUri), document: undefined };
+}
+
 function setupFileWatcher(context: vscode.ExtensionContext): void {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -230,16 +242,18 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
       const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
       for (const canvasUri of rswsFiles) {
         const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
-        if (!webview) { continue; }
         try {
-          const canvas = await readCanvas(canvasUri);
+          const { canvas, document } = await getCanvasState(canvasUri);
           const canvasDir = path.dirname(canvasUri.fsPath);
           // Compute path relative to canvas directory (not workspace root)
           const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+          let changed = false;
           for (const node of canvas.nodes) {
             if (node.file_path !== relPath) { continue; }
             // Clear missing flag
-            webview.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+            node.meta = { ...node.meta, file_missing: false };
+            webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+            changed = true;
             // Refresh content preview for text-based nodes (ai_output, note, code, data, etc.)
             // Use node type to decide: ai_output has watchContent=true but no extensions,
             // so check the node's own type definition rather than relying solely on extension lookup.
@@ -248,17 +262,29 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
             const shouldWatch = nodeDef?.watchContent ?? CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext) ?? false;
             if (shouldWatch) {
               try {
-                const bytes = await vscode.workspace.fs.readFile(uri);
-                const preview = Buffer.from(bytes).toString('utf-8').slice(0, 300);
-                // Persist to canvas file
-                node.meta = { ...node.meta, content_preview: preview, file_missing: false };
-                webview.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview });
+                const result = await extractPreviewWithMeta(uri, node.node_type);
+                const preview = result.preview;
+                const metaPatch = {
+                  ai_readable_chars: result.ai_readable_chars,
+                  ai_readable_pages: result.ai_readable_pages,
+                  has_unreadable_content: result.has_unreadable_content,
+                  unreadable_hint: result.unreadable_hint,
+                  csv_rows: result.csv_rows,
+                  csv_cols: result.csv_cols,
+                };
+                node.meta = { ...node.meta, content_preview: preview, file_missing: false, ...metaPatch };
+                webview?.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview, metaPatch });
+                changed = true;
               } catch { /* ignore read errors */ }
             }
           }
-          // Persist updated previews back to disk
-          CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
-          await writeCanvas(canvasUri, canvas);
+          if (changed) {
+            if (document) {
+              document.data = canvas;
+            }
+            CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+            await writeCanvas(canvasUri, canvas);
+          }
         } catch { /* ignore */ }
       }
     }, 800);
@@ -272,16 +298,25 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
       const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
       for (const canvasUri of rswsFiles) {
         const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
-        if (!webview) { continue; }
         try {
-          const canvas = await readCanvas(canvasUri);
+          const { canvas, document } = await getCanvasState(canvasUri);
           const canvasDir = path.dirname(canvasUri.fsPath);
           const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
           if (relPath.startsWith('outputs/')) { continue; }
+          let changed = false;
           for (const node of canvas.nodes) {
             if (node.file_path === relPath) {
-              webview.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
+              node.meta = { ...node.meta, file_missing: true };
+              webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
+              changed = true;
             }
+          }
+          if (changed) {
+            if (document) {
+              document.data = canvas;
+            }
+            CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+            await writeCanvas(canvasUri, canvas);
           }
         } catch { /* ignore */ }
       }
@@ -296,7 +331,8 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
       const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
       for (const canvasUri of rswsFiles) {
         let canvas;
-        try { canvas = await readCanvas(canvasUri); } catch { continue; }
+        let document;
+        try { ({ canvas, document } = await getCanvasState(canvasUri)); } catch { continue; }
         const canvasDir = path.dirname(canvasUri.fsPath);
 
         let changed = false;
@@ -324,6 +360,9 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
         }
 
         if (changed) {
+          if (document) {
+            document.data = canvas;
+          }
           CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
           await writeCanvas(canvasUri, canvas);
         }

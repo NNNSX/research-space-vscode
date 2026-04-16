@@ -137,6 +137,7 @@ function nodeTypeToIcon(type: NodeType): string {
     case 'code':      return 'code';
     case 'image':     return 'file-media';
     case 'function':  return 'zap';
+    case 'group_hub': return 'symbol-array';
     case 'ai_output': return 'sparkle';
     default:          return 'file';
   }

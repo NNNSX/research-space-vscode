@@ -5,12 +5,13 @@ import remarkGfm from 'remark-gfm';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-expect-error — Vite ?raw import returns file content as string
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?raw';
-import type { CanvasNode } from '../../../../../src/core/canvas-model';
+import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { NodeContextMenu } from './NodeContextMenu';
 import { ExperimentLogBody } from './ExperimentLogBody';
 import { TaskBody } from './TaskBody';
+import { AiReadabilityBadge } from './AiReadabilityBadge';
 
 // Create blob worker URL from inlined source (CSP: worker-src blob:)
 const workerBlob = new Blob([pdfjsWorkerSrc], { type: 'application/javascript' });
@@ -50,7 +51,7 @@ const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'aud
 export const DataNode = memo(DataNodeInner);
 
 function DataNodeInner({ data, selected }: DataNodeProps) {
-  const { imageUriMap, nodeDefs, updateNodeSize, openPreview } = useCanvasStore();
+  const { imageUriMap, nodeDefs, previewNodeSize, updateNodeSize, openPreview, trackInitialCanvasLoadRequest } = useCanvasStore();
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
 
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
@@ -71,6 +72,10 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // ── Resize handler — persist new size to canvas store ──
+  const handleResize = useCallback((_event: unknown, params: { width: number; height: number }) => {
+    previewNodeSize(data.id, params.width, params.height);
+  }, [data.id, previewNodeSize]);
+
   const handleResizeEnd = useCallback((_event: unknown, params: { width: number; height: number }) => {
     updateNodeSize(data.id, params.width, params.height);
   }, [data.id, updateNodeSize]);
@@ -81,8 +86,9 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     if (fullContent !== undefined) { return; }
     if (!data.file_path || data.meta?.file_missing) { return; }
     if (data.node_type === 'paper') { return; }
+    trackInitialCanvasLoadRequest(`file:${data.id}`);
     postMessage({ type: 'requestFileContent', filePath: data.file_path, requestId: data.id });
-  }, [data.id, data.file_path, data.meta?.file_missing, data.node_type, fullContent]);
+  }, [data.id, data.file_path, data.meta?.file_missing, data.node_type, fullContent, trackInitialCanvasLoadRequest]);
 
   // Preview button click → open in-canvas modal preview
   const handlePreviewClick = useCallback((e: React.MouseEvent) => {
@@ -127,17 +133,26 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       <NodeResizer
         isVisible={selected}
         minWidth={160}
-        minHeight={60}
+        minHeight={120}
         color={accentColor}
+        onResize={handleResize}
         onResizeEnd={handleResizeEnd}
       />
       {/* Left accent bar */}
       <div style={{ width: 4, background: accentColor, flexShrink: 0, borderRadius: '8px 0 0 8px' }} />
 
-      {/* Content — overflow auto so content adapts to node size */}
-      <div style={{ flex: 1, padding: '8px 10px', minWidth: 0, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+      {/* Content */}
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {/* Header — fixed, never scrolls with content */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          overflow: 'hidden',
+          flexShrink: 0,
+          background: 'var(--vscode-editor-background)',
+          padding: '8px 10px 6px',
+        }}>
           <span style={{ fontSize: 14 }}>{nodeIcon}</span>
           <span style={{
             fontSize: 13, fontWeight: 600,
@@ -177,116 +192,145 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           )}
         </div>
 
-        {/* Experiment log UI */}
-        {data.node_type === 'experiment_log' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <ExperimentLogBody node={data} />
-          </div>
-        )}
+        {/* Body — the only scrollable area inside the node */}
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflow: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          padding: '0 10px 6px',
+        }}>
 
-        {/* Task list UI */}
-        {data.node_type === 'task' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <TaskBody node={data} />
-          </div>
-        )}
+          {/* Experiment log UI */}
+          {data.node_type === 'experiment_log' && (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <ExperimentLogBody node={data} />
+            </div>
+          )}
 
-        {/* Image preview */}
-        {data.node_type === 'image' && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-            <ImagePreview node={data} imageUriMap={imageUriMap} />
-          </div>
-        )}
+          {/* Task list UI */}
+          {data.node_type === 'task' && (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <TaskBody node={data} />
+            </div>
+          )}
 
-        {/* Paper/PDF first page preview */}
-        {data.node_type === 'paper' && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-            <PdfPreview node={data} imageUriMap={imageUriMap} />
-          </div>
-        )}
+          {/* Image preview */}
+          {data.node_type === 'image' && (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              <ImagePreview node={data} imageUriMap={imageUriMap} />
+            </div>
+          )}
 
-        {/* Audio preview — waveform + click to play */}
-        {data.node_type === 'audio' && (
-          <AudioPreview node={data} imageUriMap={imageUriMap} />
-        )}
+          {/* Paper/PDF first page preview */}
+          {data.node_type === 'paper' && (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              <PdfPreview node={data} imageUriMap={imageUriMap} />
+            </div>
+          )}
 
-        {/* Video preview — thumbnail + modal */}
-        {data.node_type === 'video' && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-            <VideoPreview node={data} imageUriMap={imageUriMap} />
-          </div>
-        )}
+          {/* Audio preview — waveform + click to play */}
+          {data.node_type === 'audio' && (
+            <AudioPreview node={data} imageUriMap={imageUriMap} />
+          )}
 
-        {/* Data/CSV table preview */}
-        {data.node_type === 'data' && displayContent && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <TablePreview source={displayContent as string} />
-          </div>
-        )}
+          {/* Video preview — thumbnail + modal */}
+          {data.node_type === 'video' && (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              <VideoPreview node={data} imageUriMap={imageUriMap} />
+            </div>
+          )}
 
-        {/* Text preview — skip node types that have dedicated body renderers or media previews */}
-        {data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
-          <div style={{
-            fontSize: 11,
-            color: 'var(--vscode-descriptionForeground)',
-            overflow: 'auto',
-            flex: 1,
-            minHeight: 0,
-            lineHeight: 1.4,
-          }}>
-            {data.node_type === 'code' ? (
-              <CodePreview source={displayContent as string} filePath={data.file_path} />
-            ) : previewType === 'markdown' ? (
-              <MarkdownPreview source={displayContent as string} />
-            ) : (
-              <span style={{
-                display: 'block',
-                overflow: 'hidden',
-              }}>
-                {displayContent}
-              </span>
-            )}
-          </div>
-        )}
+          {/* Data/CSV table preview */}
+          {data.node_type === 'data' && displayContent && (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <TablePreview source={displayContent as string} />
+            </div>
+          )}
 
-        {/* File path hint */}
-        {data.file_path && (
-          <div style={{
-            fontSize: 10,
-            color: 'var(--vscode-descriptionForeground)', opacity: 0.6,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {data.file_path}
-          </div>
-        )}
+          {/* Text preview — skip node types that have dedicated body renderers or media previews */}
+          {data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
+            <div style={{
+              fontSize: 11,
+              color: 'var(--vscode-descriptionForeground)',
+              overflow: 'auto',
+              flex: 1,
+              minHeight: 0,
+              lineHeight: 1.4,
+            }}>
+              {data.node_type === 'code' ? (
+                <CodePreview source={displayContent as string} filePath={data.file_path} />
+              ) : previewType === 'markdown' ? (
+                <MarkdownPreview source={displayContent as string} />
+              ) : (
+                <span style={{
+                  display: 'block',
+                  overflow: 'hidden',
+                }}>
+                  {displayContent}
+                </span>
+              )}
+            </div>
+          )}
 
-        {/* AI model/provider tag — shown on ai_output nodes */}
-        {data.node_type === 'ai_output' && (data.meta?.ai_provider || data.meta?.ai_model) && (
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
-            {data.meta.ai_provider && (
-              <span style={{
-                fontSize: 9, padding: '1px 5px',
-                background: 'var(--vscode-badge-background)',
-                color: 'var(--vscode-badge-foreground)',
-                borderRadius: 10, fontWeight: 600, whiteSpace: 'nowrap',
-              }}>
-                {data.meta.ai_provider as string}
-              </span>
-            )}
-            {data.meta.ai_model && (
-              <span style={{
-                fontSize: 9, padding: '1px 5px',
-                background: 'var(--vscode-inputOption-activeBackground, var(--vscode-input-background))',
-                color: 'var(--vscode-descriptionForeground)',
-                border: '1px solid var(--vscode-panel-border)',
-                borderRadius: 10, whiteSpace: 'nowrap',
-                overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
-              }}>
-                {data.meta.ai_model as string}
-              </span>
-            )}
-          </div>
-        )}
+        </div>
+
+        {/* Footer — fixed metadata area, never shrinks with the content body */}
+        <div style={{
+          flexShrink: 0,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          padding: '6px 10px 8px',
+          borderTop: '1px solid var(--vscode-panel-border)',
+          background: 'var(--vscode-editor-background)',
+        }}>
+          {data.file_path && (
+            <div style={{
+              fontSize: 10,
+              color: 'var(--vscode-descriptionForeground)',
+              opacity: 0.6,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {data.file_path}
+            </div>
+          )}
+
+          {data.node_type === 'ai_output' && (data.meta?.ai_provider || data.meta?.ai_model) && (
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {data.meta.ai_provider && (
+                <span style={{
+                  fontSize: 9, padding: '1px 5px',
+                  background: 'var(--vscode-badge-background)',
+                  color: 'var(--vscode-badge-foreground)',
+                  borderRadius: 10, fontWeight: 600, whiteSpace: 'nowrap',
+                }}>
+                  {data.meta.ai_provider as string}
+                </span>
+              )}
+              {data.meta.ai_model && (
+                <span style={{
+                  fontSize: 9, padding: '1px 5px',
+                  background: 'var(--vscode-inputOption-activeBackground, var(--vscode-input-background))',
+                  color: 'var(--vscode-descriptionForeground)',
+                  border: '1px solid var(--vscode-panel-border)',
+                  borderRadius: 10, whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+                }}>
+                  {data.meta.ai_model as string}
+                </span>
+              )}
+            </div>
+          )}
+
+          <AiReadabilityBadge data={data} />
+        </div>
       </div>
 
       {/* Handles */}

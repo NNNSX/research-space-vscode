@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { ReactFlowProvider } from '@xyflow/react';
+import React, { useEffect, useRef } from 'react';
+import { ReactFlowProvider, useNodesInitialized } from '@xyflow/react';
 import { Canvas } from './components/canvas/Canvas';
 import { PetWidget } from './components/pet/PetWidget';
 import { useCanvasStore } from './stores/canvas-store';
@@ -123,6 +123,82 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
   );
 }
 
+function InitialCanvasLoadingNotice() {
+  const active = useCanvasStore(s => s.initialCanvasLoadActive);
+  const pending = useCanvasStore(s => s.initialCanvasLoadPending);
+
+  if (!active) { return null; }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 56,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 9998,
+        pointerEvents: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        borderRadius: 10,
+        background: 'color-mix(in srgb, var(--vscode-editor-background) 88%, transparent)',
+        border: '1px solid var(--vscode-panel-border)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+        backdropFilter: 'blur(6px)',
+        maxWidth: 'min(620px, calc(100vw - 32px))',
+      }}
+    >
+      <div
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: '50%',
+          background: 'var(--vscode-progressBar-background, var(--vscode-button-background))',
+          boxShadow: '0 0 0 6px color-mix(in srgb, var(--vscode-progressBar-background, var(--vscode-button-background)) 18%, transparent)',
+          animation: 'rsInitialLoadPulse 1.2s ease-in-out infinite',
+          flexShrink: 0,
+        }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vscode-foreground)' }}>
+          正在加载画布内容
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+          正在恢复预览、全文和节点信息。大型画布初次打开可能短暂卡顿，提示消失后说明首轮加载基本完成。
+          {pending > 0 ? ` 当前仍有 ${pending} 项内容待载入。` : ''}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InitialCanvasRenderBridge() {
+  const active = useCanvasStore(s => s.initialCanvasLoadActive);
+  const markInitialCanvasRenderReady = useCanvasStore(s => s.markInitialCanvasRenderReady);
+  const nodesInitialized = useNodesInitialized({ includeHiddenNodes: false });
+
+  useEffect(() => {
+    if (!active) {
+      markInitialCanvasRenderReady(true);
+      return;
+    }
+
+    if (!nodesInitialized) {
+      markInitialCanvasRenderReady(false);
+      return;
+    }
+
+    const raf = window.requestAnimationFrame(() => {
+      markInitialCanvasRenderReady(true);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [active, markInitialCanvasRenderReady, nodesInitialized]);
+
+  return null;
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 export function App() {
@@ -133,9 +209,69 @@ export function App() {
     addToStaging, setFullContent,
     setError, clearError, lastError, setModelCache,
     setSettings, setToolDefs, setNodeDefs,
+    setPipelineState, updatePipelineNodeStatus,
+    incrementPipelineCompleted, setPipelinePaused,
+    addPipelineWarning, runAutosaveCheck, markSaveSuccess, markSaveError,
   } = useCanvasStore();
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
+  const aiChunkBufferRef = useRef(new Map<string, string>());
+  const aiChunkFlushRafRef = useRef<number | null>(null);
+
+  const flushAiChunks = () => {
+    aiChunkFlushRafRef.current = null;
+    const buffered = aiChunkBufferRef.current;
+    if (buffered.size === 0) { return; }
+    aiChunkBufferRef.current = new Map();
+    for (const [runId, chunk] of buffered.entries()) {
+      appendAiChunk(runId, chunk);
+    }
+  };
+
+  const flushAiChunksForRun = (runId: string) => {
+    const chunk = aiChunkBufferRef.current.get(runId);
+    if (!chunk) { return; }
+    aiChunkBufferRef.current.delete(runId);
+    appendAiChunk(runId, chunk);
+  };
+
+  const enqueueAiChunk = (runId: string, chunk: string) => {
+    const current = aiChunkBufferRef.current.get(runId) ?? '';
+    aiChunkBufferRef.current.set(runId, current + chunk);
+    if (aiChunkFlushRafRef.current !== null) { return; }
+    aiChunkFlushRafRef.current = window.requestAnimationFrame(flushAiChunks);
+  };
+
+  useEffect(() => {
+    const styleId = 'rs-initial-load-style';
+    if (document.getElementById(styleId)) { return; }
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes rsInitialLoadPulse {
+        0% { transform: scale(0.9); opacity: 0.7; }
+        50% { transform: scale(1.08); opacity: 1; }
+        100% { transform: scale(0.9); opacity: 0.7; }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => style.remove();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      runAutosaveCheck();
+    }, 3 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [runAutosaveCheck]);
+
+  useEffect(() => () => {
+    if (aiChunkFlushRafRef.current !== null) {
+      window.cancelAnimationFrame(aiChunkFlushRafRef.current);
+      aiChunkFlushRafRef.current = null;
+    }
+    aiChunkBufferRef.current.clear();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onMessage(msg => {
@@ -145,24 +281,30 @@ export function App() {
             initCanvas(msg.data, msg.workspaceRoot);
           }
           break;
+        case 'canvasSaveStatus':
+          if (msg.status === 'saved') {
+            markSaveSuccess(msg.savedAt, msg.requestId);
+          } else if (msg.status === 'error') {
+            markSaveError(msg.message ?? '未知保存错误', msg.requestId);
+          }
+          break;
         // ── Pet messages ──
         case 'petInit':
           petInit(
-            (msg as any).petState ?? null,
-            !!(msg as any).petEnabled,
-            (msg as any).restReminderMin ?? 45,
-            (msg as any).groundTheme ?? 'forest',
+            msg.petState ?? null,
+            !!msg.petEnabled,
+            msg.restReminderMin ?? 45,
+            msg.groundTheme ?? 'forest',
           );
           break;
         case 'petAssetsBase':
-          petSetAssets((msg as any).uri ?? '');
+          petSetAssets(msg.uri ?? '');
           break;
         case 'petAiChatResponse': {
           // Handle AI suggestion responses (auto-triggered, not user chat)
-          const resp = msg as any;
-          if (resp.requestId?.startsWith('suggest-') && resp.text) {
+          if (msg.requestId?.startsWith('suggest-') && msg.text) {
             const petStore = usePetStore.getState();
-            petStore.showBubble(resp.text, 10000);
+            petStore.showBubble(msg.text, 10000);
             petStore.addExp(5);
             usePetStore.setState({ waitingForAi: false });
           }
@@ -176,29 +318,33 @@ export function App() {
           break;
         case 'aiChunk':
           if (msg.runId && msg.chunk !== undefined) {
-            appendAiChunk(msg.runId, msg.chunk);
+            enqueueAiChunk(msg.runId, msg.chunk);
           }
           break;
         case 'aiDone':
           if (msg.runId && msg.node && msg.edge) {
+            flushAiChunksForRun(msg.runId);
             finishAiRun(msg.runId, msg.node, msg.edge);
             usePetStore.getState().notifyCanvasEvent('aiDone');
           }
           break;
         case 'aiError':
           if (msg.message) {
+            if (msg.runId) {
+              flushAiChunksForRun(msg.runId);
+            }
             setError(msg.message as string);
             usePetStore.getState().notifyCanvasEvent('aiError');
           }
           break;
         case 'modelList':
           if (msg.provider && Array.isArray(msg.models)) {
-            setModelCache(msg.provider as string, msg.models as import('../../../src/core/canvas-model').ModelInfo[]);
+            setModelCache(msg.provider as string, msg.models as import('../../src/core/canvas-model').ModelInfo[]);
           }
           break;
         case 'settingsSnapshot':
           if (msg.settings) {
-            setSettings(msg.settings as import('../../../src/core/canvas-model').SettingsSnapshot);
+            setSettings(msg.settings as import('../../src/core/canvas-model').SettingsSnapshot);
           }
           break;
         case 'imageUri':
@@ -208,14 +354,14 @@ export function App() {
           break;
         case 'stageNodes':
           if (Array.isArray(msg.nodes)) {
-            addToStaging(msg.nodes as import('../../../src/core/canvas-model').CanvasNode[]);
+            addToStaging(msg.nodes as import('../../src/core/canvas-model').CanvasNode[]);
             usePetStore.getState().notifyCanvasEvent('nodeAdded');
           }
           break;
         case 'nodeAdded':
           // Legacy: redirect to staging area
           if (msg.node) {
-            addToStaging([msg.node as import('../../../src/core/canvas-model').CanvasNode]);
+            addToStaging([msg.node as import('../../src/core/canvas-model').CanvasNode]);
             usePetStore.getState().notifyCanvasEvent('nodeAdded');
           }
           break;
@@ -231,7 +377,12 @@ export function App() {
           break;
         case 'nodeContentUpdate':
           if (msg.nodeId && msg.preview !== undefined) {
-            updateNodePreview(msg.nodeId, msg.preview as string);
+            updateNodePreview(msg.nodeId, msg.preview as string, msg.metaPatch);
+          }
+          break;
+        case 'toastError':
+          if (msg.message) {
+            setError(msg.message as string);
           }
           break;
         case 'error':
@@ -239,7 +390,7 @@ export function App() {
           break;
         case 'toolDefs':
           if (Array.isArray((msg as { tools?: unknown }).tools)) {
-            setToolDefs((msg as { tools: import('../../../src/core/canvas-model').JsonToolDef[] }).tools);
+            setToolDefs((msg as { tools: import('../../src/core/canvas-model').JsonToolDef[] }).tools);
           }
           break;
         case 'toolDefError':
@@ -249,7 +400,7 @@ export function App() {
           break;
         case 'nodeDefs':
           if (Array.isArray((msg as { defs?: unknown }).defs)) {
-            setNodeDefs((msg as { defs: import('../../../src/core/canvas-model').DataNodeDef[] }).defs);
+            setNodeDefs((msg as { defs: import('../../src/core/canvas-model').DataNodeDef[] }).defs);
           }
           break;
         case 'fileContent': {
@@ -257,6 +408,71 @@ export function App() {
           if (fc.requestId && fc.content !== undefined) {
             setFullContent(fc.requestId, fc.content);
           }
+          break;
+        }
+        // ── Pipeline progress messages ──
+        case 'pipelineStarted': {
+          const pm = msg as { pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number };
+          const statuses: Record<string, 'waiting'> = {};
+          for (const id of pm.nodeIds) { statuses[id] = 'waiting'; }
+          setPipelineState({
+            pipelineId: pm.pipelineId,
+            triggerNodeId: pm.triggerNodeId,
+            nodeStatuses: statuses,
+            totalNodes: pm.totalNodes,
+            completedNodes: 0,
+            isRunning: true,
+            isPaused: false,
+            currentNodeId: null,
+            validationWarnings: [],
+          });
+          break;
+        }
+        case 'pipelineNodeStart': {
+          const pm = msg as { pipelineId: string; nodeId: string };
+          updatePipelineNodeStatus(pm.nodeId, 'running');
+          break;
+        }
+        case 'pipelineNodeComplete': {
+          const pm = msg as { pipelineId: string; nodeId: string; outputNodeId: string };
+          updatePipelineNodeStatus(pm.nodeId, 'done');
+          incrementPipelineCompleted();
+          break;
+        }
+        case 'pipelineNodeError': {
+          const pm = msg as { pipelineId: string; nodeId: string; error: string };
+          updatePipelineNodeStatus(pm.nodeId, 'failed');
+          incrementPipelineCompleted();
+          break;
+        }
+        case 'pipelineNodeSkipped': {
+          const pm = msg as { pipelineId: string; nodeId: string; reason?: string };
+          updatePipelineNodeStatus(pm.nodeId, 'skipped');
+          incrementPipelineCompleted();
+          break;
+        }
+        case 'pipelineComplete': {
+          const pm = msg as { pipelineId: string; totalNodes: number; completedNodes: number };
+          // Update final state and schedule cleanup after 5s
+          const finalPs = useCanvasStore.getState().pipelineState;
+          if (finalPs) {
+            setPipelineState({
+              ...finalPs,
+              totalNodes: pm.totalNodes,
+              completedNodes: pm.completedNodes,
+              isRunning: false,
+              currentNodeId: null,
+            });
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+              setPipelineState(null);
+            }, 5000);
+          }
+          break;
+        }
+        case 'pipelineValidationWarning': {
+          const pm = msg as { nodeId: string; message: string };
+          addPipelineWarning(pm.nodeId, pm.message);
           break;
         }
       }
@@ -274,9 +490,11 @@ export function App() {
       <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <ReactFlowProvider>
+            <InitialCanvasRenderBridge />
             <Canvas />
           </ReactFlowProvider>
         </div>
+        <InitialCanvasLoadingNotice />
         {lastError && <ErrorToast message={lastError} onClose={clearError} />}
       </div>
       <PetWidget />

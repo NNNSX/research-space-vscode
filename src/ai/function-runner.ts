@@ -5,6 +5,7 @@ import { CanvasFile, CanvasNode, CanvasEdge } from '../core/canvas-model';
 import { AIContent } from './provider';
 import { writeCanvas, ensureAiOutputDir, toRelPath, formatTimestamp } from '../core/storage';
 import { extractContent } from '../core/content-extractor';
+import { collectExpandedInputs } from '../core/hub-utils';
 import { getProvider } from './provider';
 import { ToolRegistry } from './tool-registry';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
@@ -40,7 +41,8 @@ export function cancelRunByNodeId(nodeId: string): void {
 // ── Options type ────────────────────────────────────────────────────────────
 
 export interface RunFunctionOpts {
-  // reserved for future use
+  /** Pre-built content to inject instead of extracting from disk (pipeline chaining) */
+  injectedContents?: Map<string, AIContent>;
 }
 
 export interface FunctionRunResult {
@@ -103,27 +105,32 @@ export async function runBatchFunctionNode(
     return;
   }
 
-  // Collect upstream data nodes (data_flow edges only)
-  const upstreamEdges = canvas.edges.filter(e => e.target === nodeId && e.edge_type === 'data_flow');
-  if (upstreamEdges.length === 0) {
+  const expandedInputs = collectExpandedInputs(nodeId, canvas, ['data_flow']);
+  if (expandedInputs.length === 0) {
     webview.postMessage({ type: 'aiError', runId: uuid(), message: '批量运行：未连接任何输入数据节点。' });
     return;
   }
 
-  const total = upstreamEdges.length;
+  const total = expandedInputs.length;
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: `批量运行 0/${total}…` });
 
   let completed = 0;
   let failed = 0;
 
   // Run sequentially to avoid API rate-limit issues
-  for (const edge of upstreamEdges) {
+  for (const input of expandedInputs) {
     // Build a shallow-cloned canvas that has only this one upstream edge
     const singleCanvas: CanvasFile = {
       ...canvas,
       edges: [
         ...canvas.edges.filter(e => !(e.target === nodeId && e.edge_type === 'data_flow')),
-        edge,
+        {
+          id: uuid(),
+          source: input.node.id,
+          target: nodeId,
+          edge_type: 'data_flow',
+          role: input.role,
+        },
       ],
     };
 
@@ -190,23 +197,15 @@ async function _runFunctionNodeInner(
   // 1. Running status
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: '采集输入中…' });
 
-  // 2. Collect upstream data nodes (data_flow edges), respecting user-defined input_order
-  const upstreamEdges = canvas.edges.filter(e => e.target === nodeId && e.edge_type === 'data_flow');
-  const upstreamIds = upstreamEdges.map(e => e.source);
-  const allUpstream = canvas.nodes.filter(n => upstreamIds.includes(n.id));
-  const inputOrder = fnNode.meta.input_order ?? [];
-  const allUpstreamOrdered = [
-    ...inputOrder.map(id => allUpstream.find(n => n.id === id)).filter((n): n is CanvasNode => !!n),
-    ...allUpstream.filter(n => !inputOrder.includes(n.id)),
-  ];
-
-  // Build a map from node id → role (from edge.role)
-  const nodeRoleMap = new Map<string, string | undefined>(
-    upstreamEdges.map(e => [e.source, e.role])
-  );
-
-  // 2b. All upstream nodes go to content extraction
-  const upstreamNodes = allUpstreamOrdered;
+  // 2. Collect upstream data nodes (data_flow AND pipeline_flow edges), respecting user-defined input_order
+  const expandedInputs = collectExpandedInputs(nodeId, canvas, ['data_flow', 'pipeline_flow']);
+  const upstreamNodes = expandedInputs.map(ref => ref.node);
+  const nodeRoleMap = new Map<string, string | undefined>();
+  for (const ref of expandedInputs) {
+    if (!nodeRoleMap.has(ref.node.id)) {
+      nodeRoleMap.set(ref.node.id, ref.role);
+    }
+  }
 
   if (upstreamNodes.length === 0 && toolId !== 'rag' && toolId !== 'chat' && aiType === 'chat') {
     webview.postMessage({ type: 'aiError', runId, message: '未连接任何输入数据节点（数据流边）。' });
@@ -214,9 +213,10 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: '未连接任何输入节点。' };
   }
 
-  // 3. Extract content — use allSettled so one bad file doesn't abort the whole run
+  // 3. Extract content — use injectedContents for pipeline chaining, allSettled for resilience
+  const injected = opts?.injectedContents;
   const contentResults = await Promise.allSettled(
-    upstreamNodes.map(n => extractContent(n, canvasUri))
+    upstreamNodes.map(n => extractContent(n, canvasUri, injected))
   );
   const contents: AIContent[] = [];
 
@@ -229,14 +229,14 @@ async function _runFunctionNodeInner(
   // 3c. If any upstream edge carries a role, regroup contents with semantic headers.
   // Nodes with a role get grouped under "## <role label>" headers.
   // Nodes without a role retain the existing concatenation behaviour.
-  const hasAnyRole = allUpstreamOrdered.some(n => nodeRoleMap.get(n.id));
+  const hasAnyRole = upstreamNodes.some(n => nodeRoleMap.get(n.id));
   if (hasAnyRole && toolId !== 'chat' && toolId !== 'rag') {
     // Group contents by role
     const roleGroups = new Map<string, AIContent[]>();
     const noRoleContents: AIContent[] = [];
 
-    for (let i = 0; i < allUpstreamOrdered.length; i++) {
-      const node = allUpstreamOrdered[i];
+    for (let i = 0; i < upstreamNodes.length; i++) {
+      const node = upstreamNodes[i];
       const role = nodeRoleMap.get(node.id);
       const content = contents[i];
       if (!content) { continue; }
@@ -449,13 +449,14 @@ async function _runFunctionNodeInner(
   activeRuns.set(runId, controller);
 
   const nodeModel = fnNode.meta.param_values?.['_model'] as string | undefined;
+  const effectiveModel = await provider.resolveModel(nodeModel);
 
   let fullText = '';
   let lastProgressUpdate = 0;
   try {
     const stream = provider.stream(systemPrompt, filteredContents, {
       signal: controller.signal,
-      model: (nodeModel && nodeModel !== 'auto') ? nodeModel : undefined,
+      model: effectiveModel,
     });
     for await (const chunk of stream) {
       fullText += chunk;
@@ -502,9 +503,6 @@ async function _runFunctionNodeInner(
   const outSize = { width: 280, height: 160 };
   const outPos = calcOutputPosition(fnNode, outSize, canvas.nodes);
 
-  // Determine the model label for display in the output node
-  const effectiveModel = (nodeModel && nodeModel !== 'auto') ? nodeModel : undefined;
-
   const outNode: CanvasNode = {
     id: uuid(),
     node_type: 'ai_output',
@@ -514,6 +512,7 @@ async function _runFunctionNodeInner(
     file_path: relPath,
     meta: {
       content_preview: processed.slice(0, 300),
+      ai_readable_chars: processed.length,
       ai_provider: provider.name,
       ai_model: effectiveModel || undefined,
     },
@@ -913,7 +912,7 @@ async function runStt(
       position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
       size: { width: 280, height: 160 },
       file_path: relPath,
-      meta: { content_preview: transcriptText.slice(0, 300) },
+      meta: { content_preview: transcriptText.slice(0, 300), ai_readable_chars: transcriptText.length },
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 

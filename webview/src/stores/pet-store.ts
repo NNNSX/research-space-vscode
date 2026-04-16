@@ -9,6 +9,7 @@ import {
   type EngineState, type TickResult,
 } from '../pet/pet-engine';
 import { postMessage } from '../bridge';
+import type { PetChatMessage, PetState as SharedPetState } from '../../../src/core/canvas-model';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -299,7 +300,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
         personality: getPetType(s.pet.petType).personality,
         messages: [{ role: 'user', text: '请基于画布内容给我一些研究建议或鼓励' }],
         mode: 'suggestion',
-      } as any);
+      });
     }
 
     // Update work minutes (~0.05 per 3s tick)
@@ -406,7 +407,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
   savePetState() {
     const { pet, widgetLeft, widgetTop } = get();
-    const stateToSave = {
+    const stateToSave: SharedPetState = {
       ...pet,
       widgetLeft,
       widgetTop,
@@ -451,9 +452,9 @@ export const usePetStore = create<PetStore>((set, get) => ({
       requestId: `chat-${Date.now()}`,
       petName: s.pet.petName,
       personality: typeDef.personality,
-      messages: newMessages.map(m => ({ role: m.role, text: m.text })),
+      messages: newMessages.map<PetChatMessage>(m => ({ role: m.role, text: m.text })),
       mode: 'chat',
-    } as any);
+    });
   },
 
   addChatResponse(text) {

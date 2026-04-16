@@ -45,17 +45,32 @@ export class CopilotProvider implements AIProvider {
     return COPILOT_STATIC_MODELS;
   }
 
+  async resolveModel(modelOverride?: string): Promise<string | undefined> {
+    const globalModel = vscode.workspace
+      .getConfiguration('researchSpace.ai')
+      .get<string>('copilotModel', '');
+    const preferredModel = (modelOverride && modelOverride !== 'auto')
+      ? modelOverride
+      : (globalModel || undefined);
+
+    const selector: vscode.LanguageModelChatSelector = { vendor: 'copilot' };
+    if (preferredModel) {
+      (selector as Record<string, string>)['id'] = preferredModel;
+    }
+
+    const models = await vscode.lm.selectChatModels(selector);
+    if (models.length === 0) {
+      throw new Error('No Copilot model available');
+    }
+    return models[0].id;
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
     opts?: { signal?: AbortSignal; maxTokens?: number; model?: string }
   ): AsyncIterable<string> {
-    // Priority: per-node model override > global copilotModel setting > no selector (let Copilot choose)
-    const globalModel = vscode.workspace
-      .getConfiguration('researchSpace.ai')
-      .get<string>('copilotModel', '');
-    const resolvedModel = (opts?.model && opts.model !== 'auto') ? opts.model : (globalModel || undefined);
-
+    const resolvedModel = await this.resolveModel(opts?.model);
     const selector: vscode.LanguageModelChatSelector = { vendor: 'copilot' };
     if (resolvedModel) { (selector as Record<string, string>)['id'] = resolvedModel; }
 

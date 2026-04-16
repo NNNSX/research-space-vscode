@@ -4,7 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { readCanvas, writeCanvas, toRelPath, fileExtToNodeType, calcNewNodePosition, detectLanguage } from '../core/storage';
 import { DEFAULT_SIZES } from '../core/canvas-model';
 import { CanvasNode } from '../core/canvas-model';
-import { extractPreview, getPdfPageCount } from '../core/content-extractor';
+import { extractPreview, extractPreviewWithMeta, getPdfPageCount } from '../core/content-extractor';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
 
 // Re-export so CanvasEditorProvider can use it
@@ -64,8 +64,27 @@ async function addToCanvas(
         const relPath = toRelPath(uri.fsPath, target!);
         let preview = '';
         let pageCount: number | undefined;
-        try { preview = await extractPreview(uri, nodeType); } catch { /* ignore */ }
-        try { pageCount = await getPdfPageCount(uri); } catch { /* ignore */ }
+        let aiReadableChars: number | undefined;
+        let aiReadablePages: number | undefined;
+        let hasUnreadableContent: boolean | undefined;
+        let unreadableHint: string | undefined;
+        let csvRows: number | undefined;
+        let csvCols: number | undefined;
+
+        try {
+          const result = await extractPreviewWithMeta(uri, nodeType);
+          preview = result.preview;
+          aiReadableChars = result.ai_readable_chars;
+          aiReadablePages = result.ai_readable_pages;
+          hasUnreadableContent = result.has_unreadable_content;
+          unreadableHint = result.unreadable_hint;
+          csvRows = result.csv_rows;
+          csvCols = result.csv_cols;
+          if (aiReadablePages) { pageCount = aiReadablePages; }
+        } catch { /* ignore */ }
+        if (!pageCount) {
+          try { pageCount = await getPdfPageCount(uri); } catch { /* ignore */ }
+        }
 
         const node: CanvasNode = {
           id: uuid(),
@@ -78,6 +97,12 @@ async function addToCanvas(
             content_preview: preview || undefined,
             page_count: pageCount,
             language: nodeType === 'code' ? detectLanguage(uri.fsPath) : undefined,
+            ai_readable_chars: aiReadableChars,
+            ai_readable_pages: aiReadablePages,
+            has_unreadable_content: hasUnreadableContent || undefined,
+            unreadable_hint: unreadableHint,
+            csv_rows: csvRows,
+            csv_cols: csvCols,
           },
         };
 

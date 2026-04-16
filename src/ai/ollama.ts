@@ -55,15 +55,19 @@ export class OllamaProvider implements AIProvider {
     }
   }
 
+  async resolveModel(modelOverride?: string): Promise<string | undefined> {
+    return (modelOverride && modelOverride !== 'auto')
+      ? modelOverride
+      : (this.defaultModel || 'llama3.2');
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
     opts?: { signal?: AbortSignal; maxTokens?: number; model?: string }
   ): AsyncIterable<string> {
     // Per-node model override > global setting
-    const model = (opts?.model && opts.model !== 'auto')
-      ? opts.model
-      : this.defaultModel;
+    const model = await this.resolveModel(opts?.model);
 
     // Build messages array.
     // Ollama multimodal API: each message can have an optional `images` field

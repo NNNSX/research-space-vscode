@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import type { CanvasNode, FnStatus, ParamDef } from '../../../../../src/core/canvas-model';
+import type { CanvasNode, FnStatus, ParamDef } from '../../../../src/core/canvas-model';
 import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
+import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
+import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
 import { NodeContextMenu } from './NodeContextMenu';
 
 interface FunctionNodeProps {
@@ -90,6 +92,11 @@ function ensureFnAnimations() {
       50%  { box-shadow: 0 0 16px 4px rgba(99,102,241,0.55); }
       100% { box-shadow: 0 0 8px 2px rgba(59,130,246,0.4); }
     }
+    @keyframes rsFnShake {
+      0%, 100% { transform: translateX(0); }
+      10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+      20%, 40%, 60%, 80% { transform: translateX(4px); }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -133,11 +140,23 @@ function FullFunctionNode({
   icon: string;
   isRunning: boolean;
 }) {
-  const { updateNodeParamValue, updateInputOrder, getUpstreamNodes, modelCache, settings, toolDefs } = useCanvasStore();
+  const { updateNodeParamValue, updateInputOrder, getUpstreamNodes, modelCache, settings, toolDefs, canvasFile } = useCanvasStore();
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+
+  // v2.0: Cycle error shake animation
+  const cycleErrorNodeId = useCanvasStore(s => (s as any)._cycleErrorNodeId) as string | null;
+  const isCycleError = cycleErrorNodeId === data.id;
+
+  // v2.0: Pipeline node status (overlay on top of normal fn_status)
+  const pipelineNodeStatus = useCanvasStore(s => {
+    const ps = s.pipelineState;
+    if (!ps) { return null; }
+    return ps.nodeStatuses[data.id] ?? null;
+  }) as import('../../stores/canvas-store').PipelineNodeStatus | null;
+
   // Local draft for the system prompt textarea
   const [promptDraft, setPromptDraft] = useState<string>(
     (data.meta?.param_values?.['_systemPrompt'] as string) ?? ''
@@ -161,7 +180,6 @@ function FullFunctionNode({
   const toolDef = toolDefs.find(t => t.id === tool);
   const isChatMode = toolDef?.uiMode === 'chat';
   const isMultimodal = !!(toolDef?.apiType && toolDef.apiType !== 'chat');
-
   // For multimodal tools, resolve the global default model from settings
   const MULTIMODAL_SETTINGS_KEY: Record<string, keyof typeof settings> = {
     'image-gen':      'aiHubMixImageGenModel',
@@ -218,6 +236,45 @@ function FullFunctionNode({
 
   // ── Model options ──────────────────────────────────────────────────────────
   const models = modelCache[currentProvider] ?? null;
+  const effectiveGlobalModelLabel = getConcreteProviderModelLabel(settings?.globalProvider ?? 'copilot', settings ?? null, modelCache);
+  const providerFollowLabel = `全局 (${getProviderDisplayName(
+    settings?.globalProvider ?? 'copilot',
+    settings ?? null
+  )}${effectiveGlobalModelLabel ? ` · ${effectiveGlobalModelLabel}` : ''})`;
+  const currentProviderAutoModelLabel = getAutoModelLabel(currentProvider, settings ?? null, modelCache, {
+    emptyStateText: currentProvider === 'copilot'
+      ? '自动（正在加载 Copilot 具体模型…）'
+      : '自动（当前未配置具体模型）',
+  });
+  const providerOptions: SearchableSelectOption[] = [
+    { value: '', label: providerFollowLabel, keywords: ['全局', 'global', settings?.globalProvider ?? 'copilot'] },
+    ...Object.entries(PROVIDER_LABELS).map(([id, label]) => ({
+      value: id,
+      label,
+      keywords: [id, label],
+    })),
+    ...((settings?.customProviders ?? []).map(cp => ({
+      value: cp.id,
+      label: cp.name,
+      title: cp.baseUrl,
+      keywords: [cp.id, cp.name, cp.baseUrl],
+    }))),
+  ];
+  const modelOptions: SearchableSelectOption[] = [
+    {
+      value: '',
+      label: models === null ? '加载中…' : currentProviderAutoModelLabel,
+      keywords: ['自动', '默认', currentProviderAutoModelLabel],
+      disabled: models === null,
+    },
+    ...((models ?? []).map(model => ({
+      value: model.id,
+      label: formatModelLabel(model.id, models ?? undefined),
+      title: [model.name && model.name !== model.id ? model.name : '', model.description ?? ''].filter(Boolean).join(' · '),
+      keywords: [model.id, model.name ?? '', model.description ?? ''],
+    }))),
+    ...((models && models.length === 0) ? [{ value: '__none__', label: '未找到模型', disabled: true }] : []),
+  ];
 
   // ── System prompt handlers ────────────────────────────────────────────────
   const handlePromptChange = (value: string) => {
@@ -312,13 +369,13 @@ function FullFunctionNode({
         if (remaining <= 0) {
           if (countdownTimer.current) { clearInterval(countdownTimer.current); countdownTimer.current = null; }
           setCountdown(null);
-          postMessage({ type: 'runFunction', nodeId: data.id });
+          postMessage({ type: 'runFunction', nodeId: data.id, canvas: canvasFile ?? undefined });
         } else {
           setCountdown(remaining);
         }
       }, 1000);
     } else {
-      postMessage({ type: 'runFunction', nodeId: data.id });
+      postMessage({ type: 'runFunction', nodeId: data.id, canvas: canvasFile ?? undefined });
     }
   };
 
@@ -362,6 +419,12 @@ function FullFunctionNode({
     gap: 6,
   };
 
+  // Compute pipeline-aware visual state
+  const pipelineDone = pipelineNodeStatus === 'done';
+  const pipelineFailed = pipelineNodeStatus === 'failed';
+  const pipelineSkipped = pipelineNodeStatus === 'skipped';
+  const pipelineWaiting = pipelineNodeStatus === 'waiting';
+
   return (
     <div
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
@@ -370,16 +433,38 @@ function FullFunctionNode({
       background: 'var(--vscode-editor-background)',
       border: isRunning
         ? '2px solid rgba(59,130,246,0.7)'
-        : `2px solid ${selected ? statusColor : 'var(--vscode-panel-border)'}`,
+        : isCycleError
+          ? '2px solid var(--vscode-terminal-ansiRed)'
+          : pipelineDone
+            ? '2px solid var(--vscode-terminal-ansiGreen)'
+            : pipelineFailed
+              ? '2px solid var(--vscode-terminal-ansiRed)'
+              : pipelineSkipped
+                ? '2px dashed var(--vscode-disabledForeground)'
+                : pipelineWaiting
+                  ? '2px dashed var(--vscode-descriptionForeground)'
+                  : `2px solid ${selected ? statusColor : 'var(--vscode-panel-border)'}`,
       borderRadius: 8,
       padding: 10,
       display: 'flex',
       flexDirection: 'column',
       gap: 8,
-      boxShadow: isRunning ? '0 0 8px 2px rgba(59,130,246,0.4)' : undefined,
+      opacity: pipelineSkipped ? 0.45 : 1,
+      boxShadow: isRunning
+        ? '0 0 8px 2px rgba(59,130,246,0.4)'
+        : isCycleError
+          ? '0 0 8px 2px rgba(239,68,68,0.5)'
+          : pipelineDone
+            ? '0 0 6px 1px rgba(34,197,94,0.3)'
+            : pipelineFailed
+              ? '0 0 6px 1px rgba(239,68,68,0.3)'
+              : undefined,
       animation: isRunning
         ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
-        : undefined,
+        : isCycleError
+          ? 'rsFnShake 0.5s ease-in-out'
+          : undefined,
+      transition: 'border-color 0.3s, box-shadow 0.3s, opacity 0.3s',
     }}>
 
       {/* Header */}
@@ -389,6 +474,11 @@ function FullFunctionNode({
           {data.title || '功能节点'}
         </span>
         <StatusBadge status={status} />
+        {/* Pipeline status overlay */}
+        {pipelineDone && <span style={{ fontSize: 14, flexShrink: 0 }} title="Pipeline 完成">✅</span>}
+        {pipelineFailed && <span style={{ fontSize: 14, flexShrink: 0 }} title="Pipeline 失败">❌</span>}
+        {pipelineSkipped && <span style={{ fontSize: 12, flexShrink: 0, color: 'var(--vscode-disabledForeground)' }} title="已跳过（上游错误）">⊘</span>}
+        {pipelineWaiting && <span style={{ fontSize: 12, flexShrink: 0, color: 'var(--vscode-descriptionForeground)' }} title="等待执行">⏳</span>}
       </div>
 
       {/* Progress / Peek Preview */}
@@ -431,46 +521,31 @@ function FullFunctionNode({
           {/* Provider selector */}
           <div style={rowStyle}>
             <span style={labelStyle}>服务商</span>
-            <select
+            <SearchableSelect
               value={nodeProvider}
-              onChange={e => handleProviderChange(e.target.value)}
+              onChange={handleProviderChange}
+              options={providerOptions}
+              placeholder="搜索服务商..."
+              compact
               style={{
                 ...selectStyle,
                 color: nodeProvider ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
               }}
-            >
-              {/* "" = follow global setting; this is the default */}
-              <option value="">{`全局 (${PROVIDER_LABELS[settings?.globalProvider ?? 'copilot'] ?? settings?.globalProvider ?? 'Copilot'})`}</option>
-              {Object.entries(PROVIDER_LABELS).map(([id, label]) => (
-                <option key={id} value={id}>{label}</option>
-              ))}
-              {(settings?.customProviders ?? []).map(cp => (
-                <option key={cp.id} value={cp.id}>{cp.name}</option>
-              ))}
-            </select>
+            />
           </div>
 
           {/* Model selector — always shown */}
           <div style={rowStyle}>
             <span style={labelStyle}>模型</span>
-            <select
+            <SearchableSelect
               value={currentModel}
-              onChange={e => updateNodeParamValue(data.id, '_model', e.target.value)}
+              onChange={v => updateNodeParamValue(data.id, '_model', v)}
+              options={modelOptions}
+              placeholder="搜索模型..."
+              compact
               style={selectStyle}
               disabled={models === null}
-            >
-              <option value="">
-                {models === null ? '加载中…' : '自动（默认）'}
-              </option>
-              {models && models.length === 0 && (
-                <option disabled value="">未找到模型</option>
-              )}
-              {models && models.map(m => (
-                <option key={m.id} value={m.id} title={m.description}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
+            />
           </div>
         </>
       )}
@@ -720,23 +795,25 @@ function FullFunctionNode({
             {countdown !== null ? `取消 (${countdown}s)` : '⏹ 停止'}
           </button>
         ) : (
-          <button
-            onClick={handleRun}
-            disabled={status === 'running'}
-            style={{
-              flex: 1,
-              background: 'var(--vscode-button-background)',
-              color: 'var(--vscode-button-foreground)',
-              border: 'none',
-              borderRadius: 4,
-              padding: '6px 12px',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: 600,
-            }}
-          >
-            ▶ 运行
-          </button>
+          <>
+            <button
+              onClick={handleRun}
+              disabled={status === 'running'}
+              style={{
+                flex: 1,
+                background: 'var(--vscode-button-background)',
+                color: 'var(--vscode-button-foreground)',
+                border: 'none',
+                borderRadius: 4,
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              ▶ 运行
+            </button>
+          </>
         )}
       </div>
 
@@ -867,7 +944,7 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
   globalDefaultModel?: string;
   isMultimodal?: boolean;
 }) {
-  const { updateNodeParamValue } = useCanvasStore();
+  const { updateNodeParamValue, settings, modelCache } = useCanvasStore();
 
   // For model params: stored value '' means "follow global default"
   // We read raw stored value; empty means "global"
@@ -962,34 +1039,48 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
     }
 
     // Compute the auto-label for the empty option (LLM tools only)
-    const autoLabel = isModelParam && globalDefaultModel
-      ? `全局默认 (${globalDefaultModel})`
-      : `全局默认 (${param.default ?? param.options[0]})`;
+    const currentProvider = ((nodeData.meta?.param_values?.['_provider'] as string) || settings?.globalProvider || 'copilot');
+    const autoLabel = isModelParam
+      ? getAutoModelLabel(currentProvider, settings ?? null, modelCache, {
+          emptyStateText: globalDefaultModel
+            ? `自动（当前使用 ${globalDefaultModel}）`
+            : `自动（当前使用 ${param.default ?? param.options[0]})`,
+        })
+      : '';
 
     // For multimodal model params: if stored value is empty, use first option as effective value
     const effectiveValue = (isModelParam && isMultimodal && !modelSelectValue)
       ? (globalDefaultModel || param.options[0])
       : (isModelParam ? modelSelectValue : String(currentValue));
 
+    const options: SearchableSelectOption[] = [
+      ...(isModelParam && !isMultimodal ? [{ value: '', label: autoLabel, keywords: ['自动', '默认', autoLabel] }] : []),
+      ...param.options.map(option => ({
+        value: option,
+        label: option,
+        keywords: [option],
+      })),
+      ...(isModelParam && !isMultimodal ? [{ value: '__custom__', label: '✏ 自定义模型 ID…', keywords: ['自定义', 'custom', 'model'] }] : []),
+    ];
+
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={labelStyle}>{param.label}</span>
-        <select
+        <SearchableSelect
           value={effectiveValue}
-          onChange={e => {
-            if (isModelParam && e.target.value === '__custom__') {
+          options={options}
+          onChange={nextValue => {
+            if (isModelParam && nextValue === '__custom__') {
               setCustomMode(true);
               setCustomDraft('');
             } else {
-              updateNodeParamValue(nodeData.id, param.name, e.target.value);
+              updateNodeParamValue(nodeData.id, param.name, nextValue);
             }
           }}
+          placeholder={`搜索${param.label}...`}
+          compact
           style={{ ...inputBase, background: 'var(--vscode-dropdown-background)', color: 'var(--vscode-dropdown-foreground)', border: '1px solid var(--vscode-dropdown-border)', cursor: 'pointer' }}
-        >
-          {isModelParam && !isMultimodal && <option value="">{autoLabel}</option>}
-          {param.options.map(o => <option key={o} value={o}>{o}</option>)}
-          {isModelParam && !isMultimodal && <option value="__custom__">✏ 自定义模型 ID…</option>}
-        </select>
+        />
       </div>
     );
   }

@@ -8,14 +8,19 @@ import {
   useOnSelectionChange,
   type NodeTypes,
   type EdgeTypes,
-  type Node,
+  type Node as RFNode,
   type Edge,
+  type Connection,
+  type IsValidConnection,
 } from '@xyflow/react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
+import { wouldCreateCycle } from '../../utils/graph-utils';
 import { DataNode } from '../nodes/DataNode';
 import { FunctionNode } from '../nodes/FunctionNode';
+import { NodeGroupNode } from '../nodes/NodeGroupNode';
 import { CustomEdge } from './edges/CustomEdge';
+import { PipelineEdge } from './edges/PipelineEdge';
 import { RolePickerDialog } from './RolePickerDialog';
 import { Toolbar } from '../panels/Toolbar';
 import { AiToolsPanel, DRAG_TOOL_KEY } from '../panels/AiToolsPanel';
@@ -25,16 +30,20 @@ import { SettingsPanel } from '../panels/SettingsPanel';
 import { EmptyCanvasGuide } from './EmptyCanvasGuide';
 import { SelectionToolbar } from './SelectionToolbar';
 import { BoardOverlays } from './BoardOverlay';
+import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
-import type { AiTool } from '../../../../../src/core/canvas-model';
+import { PipelineToolbar } from '../pipeline/PipelineToolbar';
+import type { AiTool } from '../../../../src/core/canvas-model';
 
 const nodeTypes: NodeTypes = {
   dataNode: DataNode,
   functionNode: FunctionNode,
+  nodeGroup: NodeGroupNode,
 };
 
 const edgeTypes: EdgeTypes = {
   custom: CustomEdge,
+  pipeline: PipelineEdge,
 };
 
 export function Canvas() {
@@ -45,11 +54,17 @@ export function Canvas() {
     pendingConnection,
     createFunctionNode, commitStagingNode,
     setSelectedNodeIds, selectedNodeIds,
+    duplicateNode, getPipelineHeadNodes,
+    nodeGroups,
+    canvasFile,
+    searchOpen, searchMatches, searchIndex,
+    setSearchOpen,
     boards, deleteBoard,
     selectionMode,
     undo, redo,
+    saveNow,
   } = useCanvasStore();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   // Drag-over overlay state (shows big hint when dragging files onto canvas)
@@ -75,7 +90,7 @@ export function Canvas() {
 
   // Track selection changes
   useOnSelectionChange({
-    onChange: useCallback(({ nodes: selNodes }: { nodes: Node[] }) => {
+    onChange: useCallback(({ nodes: selNodes }: { nodes: RFNode[] }) => {
       const ids = selNodes.map(n => n.id);
       setSelectedNodeIds(ids);
     }, [setSelectedNodeIds]),
@@ -101,8 +116,44 @@ export function Canvas() {
   );
 
   const handleConnect = useCallback(
-    (connection: Parameters<typeof onConnect>[0]) => onConnect(connection),
+    (connection: Parameters<typeof onConnect>[0]) => {
+      onConnect(connection);
+    },
     [onConnect]
+  );
+
+  // v2.0: Real-time connection validation — prevent cycles in pipeline connections
+  const isValidConnection: IsValidConnection = useCallback(
+    (connection: Edge | Connection) => {
+      const state = useCanvasStore.getState();
+      if (!state.canvasFile) { return true; }
+      const sourceNode = state.canvasFile.nodes.find(n => n.id === connection.source);
+      const targetNode = state.canvasFile.nodes.find(n => n.id === connection.target);
+
+      // Self-loop is never valid
+      if (connection.source === connection.target) { return false; }
+      if (!sourceNode || !targetNode) { return false; }
+
+      // Function → Function: check for cycles
+      if (sourceNode?.node_type === 'function' && targetNode?.node_type === 'function') {
+        return !wouldCreateCycle(state.canvasFile.edges, connection.source, connection.target);
+      }
+
+      if (targetNode.node_type === 'group_hub') {
+        return sourceNode.node_type !== 'function';
+      }
+
+      if (sourceNode.node_type === 'group_hub') {
+        return targetNode.node_type === 'function' || targetNode.node_type === 'group_hub';
+      }
+
+      if (targetNode.node_type === 'function') {
+        return sourceNode.node_type !== 'function';
+      }
+
+      return false;
+    },
+    []
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -124,7 +175,7 @@ export function Canvas() {
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     // Only hide if leaving the wrapper entirely (not entering a child)
-    if (e.currentTarget.contains(e.relatedTarget as Node)) { return; }
+    if (e.currentTarget.contains(e.relatedTarget as globalThis.Node | null)) { return; }
     dragLeaveTimer.current = setTimeout(() => setIsDraggingOver(false), 80);
   }, []);
 
@@ -176,7 +227,7 @@ export function Canvas() {
   }, [screenToFlowPosition, commitStagingNode, createFunctionNode]);
 
   // When nodes are deleted, also clean up their non-synthetic connected edges.
-  const handleNodesDelete = useCallback((deleted: Node[]) => {
+  const handleNodesDelete = useCallback((deleted: RFNode[]) => {
     const ids = new Set(deleted.map(n => n.id));
     const danglingEdges = edges
       .filter(e => ids.has(e.source) || ids.has(e.target))
@@ -191,18 +242,152 @@ export function Canvas() {
     if (changes.length > 0) { onEdgesChange(changes); }
   }, [onEdgesChange]);
 
+  // Canvas-wide shortcuts (excluding input/textarea/contenteditable)
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) { return false; }
+      const tag = target.tagName.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || target.isContentEditable;
+    };
+
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) { return; }
+
+      const key = e.key.toLowerCase();
+      if (key === 'f') {
+        e.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+
+      if (key === 's') {
+        e.preventDefault();
+        saveNow();
+        return;
+      }
+
+      if (isEditableTarget(e.target)) { return; }
+
+      if (key === 'a') {
+        e.preventDefault();
+        const ids = nodes.map(n => n.id);
+        if (ids.length === 0) { return; }
+        onNodesChange(ids.map(id => ({ id, type: 'select', selected: true })) as Parameters<typeof onNodesChange>[0]);
+        setSelectedNodeIds(ids);
+        return;
+      }
+
+      if (key === 'd') {
+        e.preventDefault();
+        const ids = [...selectedNodeIds];
+        for (const id of ids) {
+          duplicateNode(id);
+        }
+        return;
+      }
+
+      if (key === 'enter' && !e.shiftKey) {
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        const firstFn = selectedNodeIds
+          .map(id => state.nodes.find(n => n.id === id))
+          .find(n => n?.data.node_type === 'function');
+        if (firstFn) {
+          postMessage({ type: 'runFunction', nodeId: firstFn.id, canvas: state.canvasFile ?? undefined });
+        }
+        return;
+      }
+
+      if (key === 'enter' && e.shiftKey) {
+        e.preventDefault();
+        const state = useCanvasStore.getState();
+        const heads = state.getPipelineHeadNodes(selectedNodeIds);
+        for (const head of heads) {
+          postMessage({ type: 'runPipeline', triggerNodeId: head.id, canvas: state.canvasFile ?? undefined });
+        }
+        return;
+      }
+
+      if (key === '0') {
+        e.preventDefault();
+        fitView({ padding: 0.1, duration: 250 });
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [nodes, selectedNodeIds, onNodesChange, setSelectedNodeIds, duplicateNode, fitView, setSearchOpen, saveNow]);
+
+  // Search focus jump: fit to current match
+  useEffect(() => {
+    if (!searchOpen || searchMatches.length === 0 || searchIndex < 0) { return; }
+    const nodeId = searchMatches[searchIndex];
+    fitView({ nodes: [{ id: nodeId }], padding: 0.3, duration: 220 });
+  }, [searchOpen, searchMatches, searchIndex, fitView]);
+
+  const collapsedNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of nodeGroups) {
+      if (!g.collapsed) { continue; }
+      for (const id of g.nodeIds) { ids.add(id); }
+    }
+    return ids;
+  }, [nodeGroups]);
+
+  const displayNodes = useMemo<RFNode[]>(() => {
+    const matchSet = new Set(searchMatches);
+    const hasSearch = searchOpen && searchMatches.length > 0;
+    const currentId = searchIndex >= 0 ? searchMatches[searchIndex] : null;
+    const hasCollapsedGroups = collapsedNodeIds.size > 0;
+
+    const visualNodes = (!hasSearch && !hasCollapsedGroups)
+      ? nodes
+      : nodes.map(n => {
+          const hidden = collapsedNodeIds.has(n.id);
+          let style = n.style;
+
+          if (hasSearch && !hidden) {
+            const isMatch = matchSet.has(n.id);
+            const isCurrent = currentId === n.id;
+            style = { ...(n.style ?? {}) };
+
+            if (!isMatch) {
+              style.opacity = 0.3;
+              style.filter = 'grayscale(0.2)';
+            } else {
+              style.opacity = 1;
+              style.border = isCurrent
+                ? '2px solid #ffdd57'
+                : '2px solid rgba(255, 221, 87, 0.65)';
+              style.boxShadow = isCurrent
+                ? '0 0 0 3px rgba(255, 221, 87, 0.28), 0 6px 16px rgba(0,0,0,0.25)'
+                : '0 0 0 2px rgba(255, 221, 87, 0.18)';
+            }
+          }
+
+          if (hidden !== !!n.hidden || style !== n.style) {
+            return { ...n, hidden, style };
+          }
+          return n;
+        });
+
+    return visualNodes as unknown as RFNode[];
+  }, [nodes, nodeGroups, collapsedNodeIds, searchOpen, searchMatches, searchIndex]);
+
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Toolbar />
       <div style={{ flex: 1, position: 'relative' }} ref={reactFlowWrapper} onDragLeave={handleDragLeave}>
         <ReactFlow
-          nodes={nodes}
+          nodes={displayNodes}
           edges={allEdges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={handleEdgesChange}
           onConnect={handleConnect}
+          isValidConnection={isValidConnection}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onNodesDelete={handleNodesDelete}
@@ -236,8 +421,10 @@ export function Canvas() {
         <AiOutputPanel />
         <StagingPanel />
         <SettingsPanel />
+        <SearchBar />
         {nodes.length === 0 && <EmptyCanvasGuide />}
         <SelectionToolbar />
+        <PipelineToolbar />
         <PreviewModal />
         {pendingConnection && (
           <RolePickerDialog

@@ -4,6 +4,8 @@ import { useCanvasStore } from '../../stores/canvas-store';
 import { usePetStore } from '../../stores/pet-store';
 import { postMessage } from '../../bridge';
 import type { CustomProviderConfig } from '../../../../src/core/canvas-model';
+import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
+import { getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
 import { PET_TYPES, getPetType, GROUND_THEMES } from '../../pet/pet-types';
 import type { PetTypeId, GroundThemeId } from '../../pet/pet-types';
 
@@ -48,23 +50,37 @@ function ModelSelect({ providerId, value, onChange }: {
   onChange: (v: string) => void;
 }) {
   const modelCache = useCanvasStore(s => s.modelCache);
+  const settings = useCanvasStore(s => s.settings);
   const models = modelCache[providerId];
+  const autoLabel = getAutoModelLabel(providerId, settings, modelCache, {
+    emptyStateText: providerId === 'copilot'
+      ? '自动（正在加载 Copilot 具体模型…）'
+      : '自动（当前未配置具体模型）',
+  });
+  const options: SearchableSelectOption[] = [
+    { value: '', label: autoLabel, keywords: [providerId, '自动', '默认'] },
+    ...(models ?? []).map(m => ({
+      value: m.id,
+      label: m.id,
+      title: [m.name && m.name !== m.id ? m.name : '', m.description ?? ''].filter(Boolean).join(' · '),
+      keywords: [m.id, m.name ?? '', m.description ?? ''],
+    })),
+  ];
+  if (!models && value) {
+    options.push({ value, label: value, keywords: [value] });
+  }
 
   const refresh = () => postMessage({ type: 'requestModels', provider: providerId });
 
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-      <select
-        style={{ ...selectStyle, flex: 1 }}
+      <SearchableSelect
         value={value}
-        onChange={e => onChange(e.target.value)}
-      >
-        <option value="">自动（不指定）</option>
-        {models && models.map(m => (
-          <option key={m.id} value={m.id}>{m.name}</option>
-        ))}
-        {!models && value && <option value={value}>{value}</option>}
-      </select>
+        options={options}
+        onChange={onChange}
+        placeholder="搜索模型..."
+        style={{ ...selectStyle, flex: 1 }}
+      />
       <button onClick={refresh} title="刷新模型列表" style={smallBtnStyle}>🔄</button>
     </div>
   );
@@ -81,14 +97,20 @@ function MultimodalModelSelect({
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
 }) {
+  const selectOptions: SearchableSelectOption[] = options.map(option => ({
+    value: option.value,
+    label: option.value,
+    title: option.label,
+    keywords: [option.value, option.label],
+  }));
   return (
-    <select
+    <SearchableSelect
       style={selectStyle}
       value={value}
-      onChange={e => onChange(e.target.value)}
-    >
-      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
+      options={selectOptions}
+      onChange={onChange}
+      placeholder="搜索模型..."
+    />
   );
 }
 
@@ -204,6 +226,20 @@ const AIHUBMIX_PRESET: Omit<CustomProviderConfig, 'id' | 'apiKey' | 'defaultMode
   baseUrl: 'https://aihubmix.com/v1',
 };
 
+function buildProviderOptions(customProviders: CustomProviderConfig[]): SearchableSelectOption[] {
+  return [
+    { value: 'copilot', label: 'GitHub Copilot', keywords: ['copilot', 'github'] },
+    { value: 'anthropic', label: 'Anthropic Claude', keywords: ['anthropic', 'claude'] },
+    { value: 'ollama', label: 'Ollama（本地）', keywords: ['ollama', 'local', '本地'] },
+    ...customProviders.map(cp => ({
+      value: cp.id,
+      label: cp.name,
+      title: cp.baseUrl,
+      keywords: [cp.id, cp.name, cp.baseUrl],
+    })),
+  ];
+}
+
 export function SettingsPanel() {
   const { settings, settingsPanelOpen, setSettingsPanelOpen } = useCanvasStore();
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
@@ -237,6 +273,7 @@ export function SettingsPanel() {
   }
 
   const customProviders = settings.customProviders ?? [];
+  const providerOptions = buildProviderOptions(customProviders);
 
   const saveCustomProviders = (list: CustomProviderConfig[]) => {
     sendSetting('customProviders', list);
@@ -279,18 +316,13 @@ export function SettingsPanel() {
         {/* Global Provider */}
         <Section title="AI 服务商">
           <Field label="全局默认服务商">
-            <select
+            <SearchableSelect
               style={selectStyle}
               value={settings.globalProvider}
-              onChange={e => sendSetting('globalProvider', e.target.value)}
-            >
-              <option value="copilot">GitHub Copilot</option>
-              <option value="anthropic">Anthropic Claude</option>
-              <option value="ollama">Ollama（本地）</option>
-              {customProviders.map(cp => (
-                <option key={cp.id} value={cp.id}>{cp.name}</option>
-              ))}
-            </select>
+              options={providerOptions}
+              onChange={v => sendSetting('globalProvider', v)}
+              placeholder="搜索服务商..."
+            />
           </Field>
           <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
             功能节点可单独覆盖此设置。
@@ -489,7 +521,7 @@ export function SettingsPanel() {
               onChange={e => sendSetting('autoSave', e.target.checked)}
               style={{ cursor: 'pointer' }}
             />
-            <span>自动保存（变更后自动保存）</span>
+            <span>自动保存（每 3 分钟）</span>
           </label>
         </Section>
 
@@ -568,6 +600,7 @@ const panelStyle: React.CSSProperties = {
 function PetSettingsSection() {
   const { enabled, setEnabled, pet, setPetType, setPetName, restReminderMin, setRestReminderMin, groundTheme, setGroundTheme } = usePetStore();
   const settings = useCanvasStore(s => s.settings);
+  const modelCache = useCanvasStore(s => s.modelCache);
   const [nameInput, setNameInput] = useState(pet.petName);
   const nameTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -581,6 +614,12 @@ function PetSettingsSection() {
   const resolvedPetProvider = (settings?.petAiProvider && settings.petAiProvider !== 'auto')
     ? settings.petAiProvider
     : settings?.globalProvider ?? 'copilot';
+  const providerOptions = buildProviderOptions(settings?.customProviders ?? []);
+  const resolvedPetModel = getConcreteProviderModelLabel(resolvedPetProvider, settings ?? null, modelCache);
+  const petProviderAutoLabel = `自动（跟随全局：${getProviderDisplayName(
+    settings?.globalProvider ?? 'copilot',
+    settings ?? null
+  )}${resolvedPetModel ? ` · ${resolvedPetModel}` : ''})`;
 
   return (
     <>
@@ -632,17 +671,17 @@ function PetSettingsSection() {
           </Section>
 
           <Section title="场景主题">
-            <select
+            <SearchableSelect
               style={selectStyle}
               value={groundTheme}
-              onChange={e => setGroundTheme(e.target.value as GroundThemeId)}
-            >
-              {GROUND_THEMES.map(t => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+              options={GROUND_THEMES.map(theme => ({
+                value: theme.id,
+                label: theme.name,
+                keywords: [theme.id, theme.name],
+              }))}
+              onChange={v => setGroundTheme(v as GroundThemeId)}
+              placeholder="搜索主题..."
+            />
           </Section>
 
           <Section title="宠物名字">
@@ -668,19 +707,16 @@ function PetSettingsSection() {
           <Section title="宠物 AI">
             <div style={{ marginBottom: 6 }}>
               <div style={labelStyle}>AI 服务商</div>
-              <select
+              <SearchableSelect
                 style={selectStyle}
                 value={settings?.petAiProvider ?? 'auto'}
-                onChange={e => sendSetting('petAiProvider', e.target.value)}
-              >
-                <option value="auto">自动（跟随全局）</option>
-                <option value="copilot">GitHub Copilot</option>
-                <option value="anthropic">Anthropic Claude</option>
-                <option value="ollama">Ollama（本地）</option>
-                {(settings?.customProviders ?? []).map(cp => (
-                  <option key={cp.id} value={cp.id}>{cp.name}</option>
-                ))}
-              </select>
+                options={[
+                  { value: 'auto', label: petProviderAutoLabel, keywords: ['auto', '自动', '全局'] },
+                  ...providerOptions,
+                ]}
+                onChange={v => sendSetting('petAiProvider', v)}
+                placeholder="搜索服务商..."
+              />
             </div>
             <div style={{ marginBottom: 6 }}>
               <div style={labelStyle}>AI 模型</div>

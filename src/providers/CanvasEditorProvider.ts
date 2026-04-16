@@ -1,13 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode } from '../core/canvas-model';
+import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isCanvasFile } from '../core/canvas-model';
 import { readCanvas, writeCanvas, setDataNodeRegistry, ensureAiOutputDir, toRelPath } from '../core/storage';
 import { runFunctionNode, runBatchFunctionNode, cancelRun, cancelRunByNodeId, setToolRegistry } from '../ai/function-runner';
+import { runPipeline, pausePipeline, resumePipeline, cancelPipeline } from '../pipeline/pipeline-runner';
 import { getProviderById } from '../ai/provider';
 import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
 import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
+import { extractPreviewWithMeta } from '../core/content-extractor';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -268,6 +270,19 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     };
   }
 
+  private async _prepareExecutionCanvas(
+    msg: { [key: string]: unknown },
+    document: CanvasDocument
+  ): Promise<CanvasFile> {
+    const incomingCanvas = msg['canvas'];
+    if (isCanvasFile(incomingCanvas)) {
+      document.data = incomingCanvas;
+    }
+    document.suppressNextRevert = true;
+    await writeCanvas(document.uri, document.data);
+    return document.data;
+  }
+
   // ── Message handling ──────────────────────────────────────────────────────
 
   private async _handleMessage(
@@ -302,8 +317,20 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         }
         break;
 
+      case 'canvasStateSync': {
+        const newData = msg['data'] as CanvasFile;
+        if (!newData) { break; }
+        // Keep extension-side in-memory canvas state aligned with the live webview
+        // without writing to disk or touching save status. This lets file watchers,
+        // rename handlers, and execution prep see newly created / moved nodes
+        // immediately instead of waiting for the next canvas save.
+        document.data = newData;
+        break;
+      }
+
       case 'canvasChanged': {
         const newData = msg['data'] as CanvasFile;
+        const requestId = msg['requestId'] as number | undefined;
         if (!newData) { break; }
         // Update in-memory data WITHOUT calling pushEdit — pushEdit fires onDidChange
         // which marks the document dirty in VSCode's UI, causing the unsaved-dot.
@@ -314,9 +341,28 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         document.suppressNextRevert = true;
         try {
           await writeCanvas(document.uri, document.data);
+          webview.postMessage({ type: 'canvasSaveStatus', status: 'saved', savedAt: Date.now(), mode: 'auto', requestId });
         } catch (e: unknown) {
           const msg2 = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'canvasSaveStatus', status: 'error', message: msg2, mode: 'auto', requestId });
           webview.postMessage({ type: 'toastError', message: `Auto-save failed: ${msg2}` });
+        }
+        break;
+      }
+
+      case 'saveCanvas': {
+        const newData = msg['data'] as CanvasFile;
+        const requestId = msg['requestId'] as number | undefined;
+        if (!newData) { break; }
+        document.data = newData;
+        document.suppressNextRevert = true;
+        try {
+          await writeCanvas(document.uri, document.data);
+          webview.postMessage({ type: 'canvasSaveStatus', status: 'saved', savedAt: Date.now(), mode: 'manual', requestId });
+        } catch (e: unknown) {
+          const msg2 = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'canvasSaveStatus', status: 'error', message: msg2, mode: 'manual', requestId });
+          webview.postMessage({ type: 'toastError', message: `保存失败: ${msg2}` });
         }
         break;
       }
@@ -640,7 +686,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'runFunction': {
         const nodeId = msg['nodeId'] as string;
         if (!nodeId) { break; }
-        runFunctionNode(nodeId, document.data, document.uri, webview).catch(e => {
+        const executionCanvas = await this._prepareExecutionCanvas(msg, document);
+        runFunctionNode(nodeId, executionCanvas, document.uri, webview).catch(e => {
           webview.postMessage({ type: 'aiError', runId: nodeId, message: String(e) });
         });
         break;
@@ -649,7 +696,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'runBatchFunction': {
         const nodeId = msg['nodeId'] as string;
         if (!nodeId) { break; }
-        runBatchFunctionNode(nodeId, document.data, document.uri, webview).catch(e => {
+        const executionCanvas = await this._prepareExecutionCanvas(msg, document);
+        runBatchFunctionNode(nodeId, executionCanvas, document.uri, webview).catch(e => {
           webview.postMessage({ type: 'aiError', runId: nodeId, message: String(e) });
         });
         break;
@@ -667,6 +715,34 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           cancelRunByNodeId(nodeId);
           webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
         }
+        break;
+      }
+
+      case 'runPipeline': {
+        const triggerNodeId = msg['triggerNodeId'] as string;
+        if (!triggerNodeId) { break; }
+        await this._prepareExecutionCanvas(msg, document);
+        runPipeline(triggerNodeId, document.uri, webview).catch(e => {
+          webview.postMessage({ type: 'error', message: `Pipeline 执行失败: ${String(e)}` });
+        });
+        break;
+      }
+
+      case 'pipelinePause': {
+        const pipelineId = msg['pipelineId'] as string;
+        if (pipelineId) { pausePipeline(pipelineId); }
+        break;
+      }
+
+      case 'pipelineResume': {
+        const pipelineId = msg['pipelineId'] as string;
+        if (pipelineId) { resumePipeline(pipelineId); }
+        break;
+      }
+
+      case 'pipelineCancel': {
+        const pipelineId = msg['pipelineId'] as string;
+        if (pipelineId) { cancelPipeline(pipelineId); }
         break;
       }
 
@@ -717,9 +793,18 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           const absPath = toAbsPath(restoreFilePath, document.uri);
           const fileUri = vscode.Uri.file(absPath);
           let preview = '';
+          let metaPatch = {};
           try {
-            const bytes = await vscode.workspace.fs.readFile(fileUri);
-            preview = Buffer.from(bytes).toString('utf-8').slice(0, 300);
+            const result = await extractPreviewWithMeta(fileUri, 'ai_output');
+            preview = result.preview;
+            metaPatch = {
+              ai_readable_chars: result.ai_readable_chars,
+              ai_readable_pages: result.ai_readable_pages,
+              has_unreadable_content: result.has_unreadable_content,
+              unreadable_hint: result.unreadable_hint,
+              csv_rows: result.csv_rows,
+              csv_cols: result.csv_cols,
+            };
           } catch { /* skip */ }
 
           // Place new node below all existing nodes
@@ -733,7 +818,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
             position: { x: 100, y: maxY + 40 },
             size: DEFAULT_SIZES['ai_output'],
             file_path: restoreFilePath,
-            meta: { content_preview: preview },
+            meta: { content_preview: preview, ...metaPatch },
           };
 
           canvas.nodes.push(newNode);

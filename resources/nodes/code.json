@@ -8,7 +8,7 @@
     "rs", "go", "java", "c", "cpp",
     "cs", "rb", "swift", "kt", "r",
     "sh", "bash", "yaml", "yml", "json",
-    "toml", "tex",
+    "toml", "tex", "bib", "bst",
     "xml", "html", "css", "scss", "less",
     "sql", "graphql", "proto", "ini", "cfg",
     "env", "log", "conf"
@@ -40,6 +40,8 @@
     "json": "json",
     "toml": "toml",
     "tex":  "latex",
+    "bib":  "bibtex",
+    "bst":  "bibtex",
     "xml":  "xml",
     "html": "html",
     "css":  "css",

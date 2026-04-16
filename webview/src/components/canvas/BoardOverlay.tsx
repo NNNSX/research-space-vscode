@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { ViewportPortal, useReactFlow } from '@xyflow/react';
-import type { Board } from '../../../../../src/core/canvas-model';
+import type { Board } from '../../../../src/core/canvas-model';
 import { useCanvasStore, startBoardDrag, endBoardDrag } from '../../stores/canvas-store';
 
 // ── Color presets (shared with BoardDropdown) ────────────────────────────────

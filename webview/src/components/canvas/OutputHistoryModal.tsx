@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import type { OutputHistoryEntry } from '../../../../../src/core/canvas-model';
+import type { OutputHistoryEntry } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 

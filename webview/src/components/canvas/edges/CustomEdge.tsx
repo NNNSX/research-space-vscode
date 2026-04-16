@@ -8,7 +8,7 @@ import {
 import { useCanvasStore } from '../../../stores/canvas-store';
 
 interface EdgeData {
-  edge_type: 'data_flow' | 'ai_generated' | 'reference';
+  edge_type: 'data_flow' | 'ai_generated' | 'reference' | 'hub_member';
   label?: string;
   role?: string;
   roleLabel?: string;  // Display label resolved from tool slots
@@ -18,6 +18,7 @@ const EDGE_COLORS: Record<string, string> = {
   data_flow:    'var(--vscode-terminal-ansiBlue)',
   ai_generated: 'var(--vscode-terminal-ansiGreen)',
   reference:    'var(--vscode-editorIndentGuide-activeBackground)',
+  hub_member:   'transparent',
 };
 
 export function CustomEdge({

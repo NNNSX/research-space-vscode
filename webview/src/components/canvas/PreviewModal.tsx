@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import * as pdfjsLib from 'pdfjs-dist';
-import type { CanvasNode } from '../../../../../src/core/canvas-model';
+import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { ExperimentLogBody } from '../nodes/ExperimentLogBody';
 import { TaskBody } from '../nodes/TaskBody';

@@ -3,8 +3,9 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "1.2.2",
+  "version": "2.0.0-alpha.13",
   "icon": "resources/icon.png",
+  "repository": { "type": "git", "url": "https://github.com/research-space-dev/research-space" },
   "engines": { "vscode": "^1.93.0" },
   "categories": ["Other"],
   "activationEvents": [
@@ -43,13 +44,13 @@
         {
           "command": "researchSpace.addToCanvas",
           "group": "researchSpace@1",
-          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|txt|py|js|ts|tsx|png|jpg|jpeg|gif|webp|rs|go|java|c|cpp|cs|rb|swift|kt|r)$/"
+          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|txt|py|js|ts|tsx|jsx|png|jpg|jpeg|gif|webp|rs|go|java|c|cpp|cs|rb|swift|kt|r|sh|bash|yaml|yml|json|toml|tex|bib|bst|xml|html|css|scss|less|sql|graphql|proto|ini|cfg|env|log|conf|csv|tsv|mp3|wav|opus|aac|flac|m4a|webm|mp4|mov)$/"
         }
       ],
       "view/item/context": [
         {
           "command": "researchSpace.tree.openFile",
-          "when": "view == researchSpace.explorer && viewItem =~ /^node-(paper|note|code|image|ai_output)/",
+          "when": "view == researchSpace.explorer && viewItem =~ /^node-(paper|note|code|image|ai_output|audio|video|data|experiment_log|task)/",
           "group": "navigation@1"
         },
         {
@@ -178,7 +179,7 @@
         "researchSpace.canvas.autoSave": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-save canvas on change (debounced 1s)"
+          "description": "Auto-save canvas every 3 minutes when there are unsaved changes"
         },
         "researchSpace.canvas.maxUndoSteps": {
           "type": "number",

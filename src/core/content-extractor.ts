@@ -92,31 +92,134 @@ export async function extractContent(
 
 // ── Preview extraction (up to 5000 chars for rich node preview) ──────────────
 
+/** Extended preview result with AI readability metadata (v2.0) */
+export interface PreviewResult {
+  preview: string;
+  ai_readable_chars?: number;
+  ai_readable_pages?: number;
+  has_unreadable_content?: boolean;
+  unreadable_hint?: string;
+  csv_rows?: number;
+  csv_cols?: number;
+}
+
 export async function extractPreview(
   uri: vscode.Uri,
   nodeType: string
 ): Promise<string> {
+  const result = await extractPreviewWithMeta(uri, nodeType);
+  return result.preview;
+}
+
+export async function extractPreviewWithMeta(
+  uri: vscode.Uri,
+  nodeType: string
+): Promise<PreviewResult> {
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
 
     if (ext === 'pdf') {
-      const text = await extractPdfText(Buffer.from(bytes));
-      return text.slice(0, 300);
+      const analysis = await analyzePdf(Buffer.from(bytes));
+      return {
+        preview: analysis.text.slice(0, 300),
+        ai_readable_chars: analysis.charCount,
+        ai_readable_pages: analysis.pageCount,
+        has_unreadable_content: analysis.hasUnreadableContent,
+        unreadable_hint: analysis.unreadableHint,
+      };
     }
 
     if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-      return '';  // Images have no text preview
+      return { preview: '' };  // Images have no text preview
     }
 
     if (['mp3', 'wav', 'opus', 'aac', 'flac', 'm4a', 'mp4', 'webm', 'mov'].includes(ext)) {
-      return '';  // Audio/video have no text preview
+      return { preview: '' };  // Audio/video have no text preview
     }
 
-    return Buffer.from(bytes).toString('utf-8').slice(0, 300);
+    // CSV/TSV: count rows and columns
+    if (ext === 'csv' || ext === 'tsv') {
+      const text = Buffer.from(bytes).toString('utf-8');
+      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+      const separator = ext === 'tsv' ? '\t' : ',';
+      const cols = lines.length > 0 ? lines[0].split(separator).length : 0;
+      const rows = Math.max(0, lines.length - 1); // exclude header
+      return {
+        preview: text.slice(0, 300),
+        ai_readable_chars: text.length,
+        csv_rows: rows,
+        csv_cols: cols,
+      };
+    }
+
+    // Text/Code files
+    const text = Buffer.from(bytes).toString('utf-8');
+    return {
+      preview: text.slice(0, 300),
+      ai_readable_chars: text.length,
+    };
   } catch {
-    return '';
+    return { preview: '' };
   }
+}
+
+// ── PDF chart/figure detection (v2.0) ───────────────────────────────────────
+
+export interface PdfAnalysis {
+  text: string;
+  pageCount: number;
+  charCount: number;
+  hasUnreadableContent: boolean;
+  unreadableHint?: string;
+}
+
+const FIGURE_PATTERNS = [
+  /\bFig(?:ure)?\.?\s*\d/gi,
+  /\b图\s*\d/g,
+  /\bChart\s+\d/gi,
+  /\bDiagram\s+\d/gi,
+];
+
+const TABLE_PATTERNS = [
+  /\bTable\s+\d/gi,
+  /\b表\s*\d/g,
+];
+
+const FORMULA_PATTERNS = [
+  /\bEquation\s+\d/gi,
+  /\b公式\s*\d/g,
+  /\bFormula\s+\d/gi,
+];
+
+function detectUnreadableContent(text: string): { has: boolean; hint?: string } {
+  const figureMatches = new Set<string>();
+  const tableMatches = new Set<string>();
+  const formulaMatches = new Set<string>();
+
+  for (const pattern of FIGURE_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = text.match(pattern);
+    if (matches) { for (const m of matches) { figureMatches.add(m.trim()); } }
+  }
+  for (const pattern of TABLE_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = text.match(pattern);
+    if (matches) { for (const m of matches) { tableMatches.add(m.trim()); } }
+  }
+  for (const pattern of FORMULA_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = text.match(pattern);
+    if (matches) { for (const m of matches) { formulaMatches.add(m.trim()); } }
+  }
+
+  const parts: string[] = [];
+  if (figureMatches.size > 0) { parts.push(`${figureMatches.size} 个图表`); }
+  if (tableMatches.size > 0) { parts.push(`${tableMatches.size} 个表格图片`); }
+  if (formulaMatches.size > 0) { parts.push(`${formulaMatches.size} 个公式图片`); }
+
+  if (parts.length === 0) { return { has: false }; }
+  return { has: true, hint: `检测到 ${parts.join('、')} 引用，图片内容未识别` };
 }
 
 // ── PDF text extraction ─────────────────────────────────────────────────────
@@ -127,6 +230,21 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
   const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string; numpages: number }>;
   const result = await pdfParse(buffer);
   return result.text;
+}
+
+/** Extended PDF extraction with chart/figure detection (v2.0) */
+export async function analyzePdf(buffer: Buffer): Promise<PdfAnalysis> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string; numpages: number }>;
+  const result = await pdfParse(buffer);
+  const detection = detectUnreadableContent(result.text);
+  return {
+    text: result.text,
+    pageCount: result.numpages,
+    charCount: result.text.length,
+    hasUnreadableContent: detection.has,
+    unreadableHint: detection.hint,
+  };
 }
 
 export async function getPdfPageCount(uri: vscode.Uri): Promise<number | undefined> {

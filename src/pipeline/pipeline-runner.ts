@@ -1,0 +1,326 @@
+import * as vscode from 'vscode';
+import { v4 as uuid } from 'uuid';
+import type { CanvasFile, CanvasNode, CanvasEdge } from '../core/canvas-model';
+import { AIContent } from '../ai/provider';
+import { runFunctionNode, FunctionRunResult, cancelRunByNodeId } from '../ai/function-runner';
+import { readCanvas, writeCanvas } from '../core/storage';
+import { buildPipelinePlan, PipelinePlan } from './pipeline-engine';
+import { validatePipeline } from './pipeline-validator';
+import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
+import { extractContent } from '../core/content-extractor';
+
+// ── Pipeline Runner (v2.0) ──────────────────────────────────────────────────
+// Executes a pipeline: topological sort → layer-by-layer execution
+// Each layer runs in parallel; next layer waits for current to finish.
+
+export type PipelineNodeStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped';
+
+interface PipelineContext {
+  pipelineId: string;
+  triggerNodeId: string;
+  plan: PipelinePlan;
+  nodeStatuses: Map<string, PipelineNodeStatus>;
+  /** Maps function-node-id → its AI output content (for injection into downstream) */
+  outputContents: Map<string, AIContent>;
+  /** Maps function-node-id → its output CanvasNode (for edge tracking) */
+  outputNodes: Map<string, CanvasNode>;
+  isPaused: boolean;
+  isCancelled: boolean;
+  abortController: AbortController;
+  pausePromise: Promise<void> | null;
+  pauseResolve: (() => void) | null;
+}
+
+// Active pipeline contexts (for pause/resume/cancel from outside)
+const activePipelines = new Map<string, PipelineContext>();
+
+export function pausePipeline(pipelineId: string): void {
+  const ctx = activePipelines.get(pipelineId);
+  if (!ctx || ctx.isCancelled) { return; }
+  ctx.isPaused = true;
+  ctx.pausePromise = new Promise<void>(resolve => { ctx.pauseResolve = resolve; });
+}
+
+export function resumePipeline(pipelineId: string): void {
+  const ctx = activePipelines.get(pipelineId);
+  if (!ctx) { return; }
+  ctx.isPaused = false;
+  if (ctx.pauseResolve) { ctx.pauseResolve(); ctx.pauseResolve = null; ctx.pausePromise = null; }
+}
+
+export function cancelPipeline(pipelineId: string): void {
+  const ctx = activePipelines.get(pipelineId);
+  if (!ctx) { return; }
+  ctx.isCancelled = true;
+  ctx.abortController.abort();
+  // Also resume if paused so the loop can exit
+  if (ctx.pauseResolve) { ctx.pauseResolve(); }
+}
+
+// ── Main entry point ────────────────────────────────────────────────────────
+
+export async function runPipeline(
+  triggerNodeId: string,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+): Promise<void> {
+  // Re-read canvas from disk for fresh state
+  let canvas = await readCanvas(canvasUri);
+
+  const plan = buildPipelinePlan(triggerNodeId, canvas.nodes, canvas.edges);
+  if ('error' in plan) {
+    webview.postMessage({ type: 'error', message: `Pipeline 构建失败: ${plan.error}` });
+    return;
+  }
+
+  if (plan.layers.length === 0) {
+    webview.postMessage({ type: 'error', message: '没有可执行的管道节点' });
+    return;
+  }
+
+  // Pre-run validation
+  const validation = validatePipeline(plan, canvas.nodes, canvas.edges);
+  if (!validation.valid) {
+    const errorMessages = validation.errors
+      .filter(e => e.severity === 'error')
+      .map(e => e.message)
+      .join('\n');
+    webview.postMessage({ type: 'error', message: `Pipeline 校验失败:\n${errorMessages}` });
+    return;
+  }
+  const warnings = validation.errors.filter(e => e.severity === 'warning');
+
+  const pipelineId = uuid();
+  const totalCount = plan.pipelineNodeIds.length;
+  const ctx: PipelineContext = {
+    pipelineId,
+    triggerNodeId,
+    plan,
+    nodeStatuses: new Map(plan.pipelineNodeIds.map(id => [id, 'waiting' as PipelineNodeStatus])),
+    outputContents: new Map(),
+    outputNodes: new Map(),
+    isPaused: false,
+    isCancelled: false,
+    abortController: new AbortController(),
+    pausePromise: null,
+    pauseResolve: null,
+  };
+
+  activePipelines.set(pipelineId, ctx);
+
+  // Notify webview that pipeline started (with full metadata for UI)
+  webview.postMessage({
+    type: 'pipelineStarted',
+    pipelineId,
+    triggerNodeId,
+    nodeIds: plan.pipelineNodeIds,
+    totalNodes: totalCount,
+  });
+
+  for (const w of warnings) {
+    webview.postMessage({
+      type: 'pipelineValidationWarning',
+      pipelineId,
+      nodeId: w.nodeId,
+      message: w.message,
+    });
+  }
+
+  // Clear any stale per-node status from a previous run. Waiting/skip/running
+  // states are driven by the pipeline-specific status messages.
+  for (const nodeId of plan.pipelineNodeIds) {
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+  }
+
+  let completedCount = 0;
+
+  try {
+    for (let layerIdx = 0; layerIdx < plan.layers.length; layerIdx++) {
+      if (ctx.isCancelled) { break; }
+      if (ctx.isPaused && ctx.pausePromise) { await ctx.pausePromise; }
+      if (ctx.isCancelled) { break; }
+
+      const layer = plan.layers[layerIdx];
+      const layerPromises: Promise<void>[] = [];
+
+      for (const nodeId of layer.nodeIds) {
+        if (ctx.isCancelled) { break; }
+        if (ctx.nodeStatuses.get(nodeId) === 'skipped') { continue; }
+
+        // Check if any upstream node failed → skip this node
+        const upstreamEdges = plan.pipelineEdges.filter(e => e.target === nodeId);
+        const hasFailedUpstream = upstreamEdges.some(e => ctx.nodeStatuses.get(e.source) === 'failed');
+        if (hasFailedUpstream) {
+          ctx.nodeStatuses.set(nodeId, 'skipped');
+          completedCount++;
+          webview.postMessage({
+            type: 'pipelineNodeSkipped',
+            pipelineId,
+            nodeId,
+            reason: '上游节点执行失败',
+          });
+          webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle', progressText: '已跳过' });
+          continue;
+        }
+
+        layerPromises.push(
+          runPipelineNode(ctx, nodeId, canvas, canvasUri, webview).then(result => {
+            if (result.success && result.outputNode) {
+              ctx.nodeStatuses.set(nodeId, 'done');
+              completedCount++;
+              webview.postMessage({
+                type: 'pipelineNodeComplete',
+                pipelineId,
+                nodeId,
+                outputNodeId: result.outputNode.id,
+              });
+            } else {
+              ctx.nodeStatuses.set(nodeId, 'failed');
+              completedCount++;
+              // Mark all downstream as skipped
+              completedCount += markDownstreamSkipped(ctx, nodeId, webview);
+              webview.postMessage({
+                type: 'pipelineNodeError',
+                pipelineId,
+                nodeId,
+                error: result.errorMessage ?? 'Unknown error',
+              });
+            }
+          })
+        );
+      }
+
+      // Wait for all nodes in current layer to complete
+      await Promise.all(layerPromises);
+
+      // Re-read canvas to pick up output nodes added during this layer
+      canvas = await readCanvas(canvasUri);
+    }
+  } finally {
+    activePipelines.delete(pipelineId);
+
+    // Reset all pipeline node statuses after a short delay
+    setTimeout(() => {
+      for (const nodeId of plan.pipelineNodeIds) {
+        webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+      }
+    }, 5000);
+
+    webview.postMessage({
+      type: 'pipelineComplete',
+      pipelineId,
+      totalNodes: totalCount,
+      completedNodes: countCompletedNodes(ctx),
+    });
+  }
+}
+
+// ── Run a single node within a pipeline context ─────────────────────────────
+
+async function runPipelineNode(
+  ctx: PipelineContext,
+  nodeId: string,
+  canvas: CanvasFile,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+): Promise<FunctionRunResult> {
+  ctx.nodeStatuses.set(nodeId, 'running');
+  webview.postMessage({ type: 'pipelineNodeStart', pipelineId: ctx.pipelineId, nodeId });
+
+  // Build injected contents from upstream pipeline outputs.
+  // Key insight: pipeline_flow edges point from function-node-A → function-node-B,
+  // but function-node-B's upstream edges in the canvas reference A's ID.
+  // We need to inject content keyed by A's function-node ID, so that when
+  // extractContent is called for "upstream node A (a function node)", it
+  // finds the injected output instead of trying to extract from A's tool config.
+  const injectedContents = new Map<string, AIContent>();
+
+  // For each pipeline_flow edge pointing to this node, get the upstream's output
+  const incomingPipelineEdges = ctx.plan.pipelineEdges.filter(
+    e => e.target === nodeId && e.edge_type === 'pipeline_flow'
+  );
+
+  for (const edge of incomingPipelineEdges) {
+    const upstreamOutput = ctx.outputContents.get(edge.source);
+    if (upstreamOutput) {
+      // Key by the upstream FUNCTION node's ID — this is what the canvas edge points to
+      injectedContents.set(edge.source, upstreamOutput);
+    }
+  }
+
+  // Re-read canvas for this node's run (may have been updated by earlier nodes)
+  const freshCanvas = await readCanvas(canvasUri);
+
+  const result = await runFunctionNode(nodeId, freshCanvas, canvasUri, webview, {
+    injectedContents: injectedContents.size > 0 ? injectedContents : undefined,
+  });
+
+  if (result.success && result.outputNode) {
+    // Store the output content for downstream nodes
+    try {
+      const outputContent = await extractContent(result.outputNode, canvasUri);
+      ctx.outputContents.set(nodeId, outputContent);
+      ctx.outputNodes.set(nodeId, result.outputNode);
+    } catch {
+      // If we can't extract, use preview as fallback
+      ctx.outputContents.set(nodeId, {
+        type: 'text',
+        title: result.outputNode.title,
+        text: result.outputNode.meta?.content_preview ?? '',
+      });
+      ctx.outputNodes.set(nodeId, result.outputNode);
+    }
+  }
+
+  return result;
+}
+
+// ── Mark all downstream nodes as skipped ────────────────────────────────────
+
+function markDownstreamSkipped(
+  ctx: PipelineContext,
+  failedNodeId: string,
+  webview: vscode.Webview,
+): number {
+  const queue = [failedNodeId];
+  const visited = new Set<string>();
+  let skippedCount = 0;
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const edge of ctx.plan.pipelineEdges) {
+      if (edge.source !== current) { continue; }
+      if (visited.has(edge.target)) { continue; }
+      visited.add(edge.target);
+      const prevStatus = ctx.nodeStatuses.get(edge.target);
+      if (prevStatus && ['done', 'failed', 'skipped'].includes(prevStatus)) { continue; }
+      ctx.nodeStatuses.set(edge.target, 'skipped');
+      skippedCount++;
+      webview.postMessage({
+        type: 'pipelineNodeSkipped',
+        pipelineId: ctx.pipelineId,
+        nodeId: edge.target,
+        reason: '上游节点执行失败',
+      });
+      webview.postMessage({
+        type: 'fnStatusUpdate',
+        nodeId: edge.target,
+        status: 'idle',
+        progressText: '已跳过（上游错误）',
+      });
+      queue.push(edge.target);
+    }
+  }
+
+  return skippedCount;
+}
+
+function countCompletedNodes(ctx: PipelineContext): number {
+  let total = 0;
+  for (const status of ctx.nodeStatuses.values()) {
+    if (status === 'done' || status === 'failed' || status === 'skipped') {
+      total++;
+    }
+  }
+  return total;
+}

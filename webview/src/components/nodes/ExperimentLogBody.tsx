@@ -1,5 +1,5 @@
 import React from 'react';
-import type { CanvasNode } from '../../../../../src/core/canvas-model';
+import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 
