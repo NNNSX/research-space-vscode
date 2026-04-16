@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
+import { postMessage } from '../../bridge';
 import { ExperimentLogBody } from '../nodes/ExperimentLogBody';
 import { TaskBody } from '../nodes/TaskBody';
 
@@ -24,6 +25,15 @@ export function PreviewModal() {
   const nodes = useCanvasStore(s => s.nodes);
   const imageUriMap = useCanvasStore(s => s.imageUriMap);
   const fullContentCache = useCanvasStore(s => s.fullContentCache);
+  const flowNode = previewNodeId ? nodes.find(n => n.id === previewNodeId) : null;
+  const node = flowNode?.data as CanvasNode | undefined;
+  const fullContent = previewNodeId ? fullContentCache[previewNodeId] : undefined;
+  const shouldRequestFullContent =
+    !!previewNodeId &&
+    !!node?.file_path &&
+    !node.meta?.file_missing &&
+    fullContent === undefined &&
+    ['note', 'ai_output', 'code', 'data', 'experiment_log', 'task'].includes(node.node_type);
 
   // ESC to close
   useEffect(() => {
@@ -33,12 +43,13 @@ export function PreviewModal() {
     return () => window.removeEventListener('keydown', handler);
   }, [previewNodeId, closePreview]);
 
-  if (!previewNodeId) { return null; }
+  useEffect(() => {
+    if (!shouldRequestFullContent || !node?.file_path || !previewNodeId) { return; }
+    postMessage({ type: 'requestFileContent', filePath: node.file_path, requestId: previewNodeId });
+  }, [node?.file_path, previewNodeId, shouldRequestFullContent]);
 
-  const flowNode = nodes.find(n => n.id === previewNodeId);
-  if (!flowNode) { return null; }
-  const node = flowNode.data as CanvasNode;
-  const fullContent = fullContentCache[previewNodeId];
+  if (!previewNodeId || !flowNode || !node) { return null; }
+
   const displayContent = fullContent ?? node.meta?.content_preview;
   const uri = node.file_path ? imageUriMap[node.file_path] : undefined;
   const icon = NODE_ICONS[node.node_type] ?? '📁';

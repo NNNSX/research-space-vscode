@@ -241,7 +241,9 @@ function buildProviderOptions(customProviders: CustomProviderConfig[]): Searchab
 }
 
 export function SettingsPanel() {
-  const { settings, settingsPanelOpen, setSettingsPanelOpen } = useCanvasStore();
+  const settings = useCanvasStore(s => s.settings);
+  const settingsPanelOpen = useCanvasStore(s => s.settingsPanelOpen);
+  const setSettingsPanelOpen = useCanvasStore(s => s.setSettingsPanelOpen);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const debouncedSend = useDebounced(sendSetting, 500);
 

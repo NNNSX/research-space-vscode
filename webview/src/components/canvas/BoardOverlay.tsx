@@ -57,7 +57,12 @@ interface BoardOverlayProps {
 }
 
 function BoardOverlay({ board }: BoardOverlayProps) {
-  const { deleteBoard, moveBoard, resizeBoard, updateBoard, activeBoardId, setActiveBoardId } = useCanvasStore();
+  const deleteBoard = useCanvasStore(s => s.deleteBoard);
+  const moveBoard = useCanvasStore(s => s.moveBoard);
+  const resizeBoard = useCanvasStore(s => s.resizeBoard);
+  const updateBoard = useCanvasStore(s => s.updateBoard);
+  const activeBoardId = useCanvasStore(s => s.activeBoardId);
+  const setActiveBoardId = useCanvasStore(s => s.setActiveBoardId);
   const { screenToFlowPosition } = useReactFlow();
   const { bounds, name, id, color, borderColor } = board;
   const [dragging, setDragging] = useState(false);
@@ -457,7 +462,7 @@ function contrastTextShadow(hex: string): string {
 // ── Render all boards ────────────────────────────────────────────────────────
 
 export function BoardOverlays() {
-  const { boards } = useCanvasStore();
+  const boards = useCanvasStore(s => s.boards);
   if (boards.length === 0) return null;
   return (
     <ViewportPortal>

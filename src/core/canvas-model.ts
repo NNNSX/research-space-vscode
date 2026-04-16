@@ -56,6 +56,7 @@ export interface ParamDef {
 export interface NodeMeta {
   // Data nodes
   content_preview?: string;
+  card_content_mode?: 'preview' | 'full';  // card text display mode for lazy full-content hydration
   file_missing?: boolean;
   page_count?: number;          // paper
   language?: string;            // code
@@ -228,6 +229,11 @@ export interface Board {
 export interface NodeGroup {
   id: string;
   name: string;
+  /**
+   * Persistent hub node id for this group. External connections always bind
+   * to the hub node; member connections remain hidden as `hub_member` edges
+   * and are expanded only when collecting execution inputs.
+   */
   hubNodeId: string;
   sourceNodeId?: string;
   nodeIds: string[];
@@ -268,6 +274,27 @@ export function isCanvasFile(obj: unknown): obj is CanvasFile {
 
 export function isDataNode(node: CanvasNode): boolean {
   return ['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'experiment_log', 'task', 'data'].includes(node.node_type);
+}
+
+export function isFunctionNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && node.node_type === 'function';
+}
+
+/**
+ * Group hubs are first-class canvas nodes. Their rendered body may be visually
+ * transparent so grouped children stay interactive, but their graph semantics
+ * must stay aligned with ordinary nodes for drag/select/connect/delete.
+ */
+export function isGroupHubNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && node.node_type === 'group_hub';
+}
+
+export function isGroupHubNodeType(type: NodeType | undefined | null): boolean {
+  return type === 'group_hub';
+}
+
+export function isHubEdgeType(edgeType: EdgeType | undefined | null): boolean {
+  return edgeType === 'hub_member';
 }
 
 // ── Webview ↔ Extension message protocol ───────────────────────────────────

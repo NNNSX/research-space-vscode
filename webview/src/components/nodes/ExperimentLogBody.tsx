@@ -16,7 +16,7 @@ const STATUS_LABELS = {
 };
 
 export function ExperimentLogBody({ node }: { node: CanvasNode }) {
-  const { updateNodeMeta } = useCanvasStore();
+  const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
   const meta = node.meta ?? {};
 
   const status = (meta.experiment_status as 'running' | 'done' | 'failed') ?? 'running';

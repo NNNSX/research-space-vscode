@@ -33,6 +33,7 @@ import { BoardOverlays } from './BoardOverlay';
 import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
 import { PipelineToolbar } from '../pipeline/PipelineToolbar';
+import { isGroupHubNode } from '../../../../src/core/canvas-model';
 import type { AiTool } from '../../../../src/core/canvas-model';
 
 const nodeTypes: NodeTypes = {
@@ -47,23 +48,32 @@ const edgeTypes: EdgeTypes = {
 };
 
 export function Canvas() {
-  const {
-    nodes, edges, syntheticEdges,
-    onNodesChange, onEdgesChange, onConnect,
-    confirmConnection, cancelConnection,
-    pendingConnection,
-    createFunctionNode, commitStagingNode,
-    setSelectedNodeIds, selectedNodeIds,
-    duplicateNode, getPipelineHeadNodes,
-    nodeGroups,
-    canvasFile,
-    searchOpen, searchMatches, searchIndex,
-    setSearchOpen,
-    boards, deleteBoard,
-    selectionMode,
-    undo, redo,
-    saveNow,
-  } = useCanvasStore();
+  const nodes = useCanvasStore(s => s.nodes);
+  const edges = useCanvasStore(s => s.edges);
+  const syntheticEdges = useCanvasStore(s => s.syntheticEdges);
+  const onNodesChange = useCanvasStore(s => s.onNodesChange);
+  const onEdgesChange = useCanvasStore(s => s.onEdgesChange);
+  const onConnect = useCanvasStore(s => s.onConnect);
+  const confirmConnection = useCanvasStore(s => s.confirmConnection);
+  const cancelConnection = useCanvasStore(s => s.cancelConnection);
+  const pendingConnection = useCanvasStore(s => s.pendingConnection);
+  const createFunctionNode = useCanvasStore(s => s.createFunctionNode);
+  const commitStagingNode = useCanvasStore(s => s.commitStagingNode);
+  const setSelectedNodeIds = useCanvasStore(s => s.setSelectedNodeIds);
+  const selectedNodeIds = useCanvasStore(s => s.selectedNodeIds);
+  const duplicateNode = useCanvasStore(s => s.duplicateNode);
+  const getPipelineHeadNodes = useCanvasStore(s => s.getPipelineHeadNodes);
+  const nodeGroups = useCanvasStore(s => s.nodeGroups);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
+  const searchOpen = useCanvasStore(s => s.searchOpen);
+  const searchMatches = useCanvasStore(s => s.searchMatches);
+  const searchIndex = useCanvasStore(s => s.searchIndex);
+  const setSearchOpen = useCanvasStore(s => s.setSearchOpen);
+  const boards = useCanvasStore(s => s.boards);
+  const selectionMode = useCanvasStore(s => s.selectionMode);
+  const undo = useCanvasStore(s => s.undo);
+  const redo = useCanvasStore(s => s.redo);
+  const saveNow = useCanvasStore(s => s.saveNow);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
@@ -139,12 +149,12 @@ export function Canvas() {
         return !wouldCreateCycle(state.canvasFile.edges, connection.source, connection.target);
       }
 
-      if (targetNode.node_type === 'group_hub') {
+      if (isGroupHubNode(targetNode)) {
         return sourceNode.node_type !== 'function';
       }
 
-      if (sourceNode.node_type === 'group_hub') {
-        return targetNode.node_type === 'function' || targetNode.node_type === 'group_hub';
+      if (isGroupHubNode(sourceNode)) {
+        return targetNode.node_type === 'function' || isGroupHubNode(targetNode);
       }
 
       if (targetNode.node_type === 'function') {

@@ -7,7 +7,7 @@ import { postMessage } from '../../bridge';
 type TaskItem = { id: string; label: string; done: boolean };
 
 export function TaskBody({ node }: { node: CanvasNode }) {
-  const { updateNodeMeta } = useCanvasStore();
+  const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
   const [newLabel, setNewLabel] = React.useState('');
   const inputRef = React.useRef<HTMLInputElement>(null);
 

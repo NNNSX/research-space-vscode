@@ -8,6 +8,7 @@ import {
 } from '@xyflow/react';
 import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
+import { buildNodePortStyle, NODE_PORT_SIZE } from '../../utils/node-port';
 
 interface NodeGroupNodeData {
   hub_group_id?: string;
@@ -16,7 +17,6 @@ interface NodeGroupNodeData {
 const HEADER_H = 38;
 const COLLAPSED_WIDTH = 220;
 const COLLAPSED_HEIGHT = 72;
-const PORT_SIZE = 10;
 
 export function NodeGroupNode({ id, data }: NodeProps) {
   const hubData = data as unknown as NodeGroupNodeData & CanvasNode;
@@ -26,12 +26,9 @@ export function NodeGroupNode({ id, data }: NodeProps) {
       ? s.nodeGroups.find(g => g.id === groupId)
       : s.nodeGroups.find(g => g.hubNodeId === id)
   );
-  const {
-    nodes,
-    deleteNodeGroup,
-    toggleNodeGroupCollapse,
-    setSelectedNodeIds,
-  } = useCanvasStore();
+  const nodes = useCanvasStore(s => s.nodes);
+  const deleteNodeGroup = useCanvasStore(s => s.deleteNodeGroup);
+  const toggleNodeGroupCollapse = useCanvasStore(s => s.toggleNodeGroupCollapse);
   const renameNodeGroup = useCanvasStore(s => s.renameNodeGroup);
   const updateNodeInternals = useUpdateNodeInternals();
 
@@ -50,11 +47,6 @@ export function NodeGroupNode({ id, data }: NodeProps) {
     return () => window.cancelAnimationFrame(raf);
   }, [id, group?.bounds.height, group?.bounds.width, group?.collapsed, group?.nodeIds.length, updateNodeInternals]);
 
-  const handleGroupClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setSelectedNodeIds([]);
-  }, [setSelectedNodeIds]);
-
   const openRename = useCallback(() => {
     if (!group) { return; }
     setCtxMenu(null);
@@ -70,11 +62,7 @@ export function NodeGroupNode({ id, data }: NodeProps) {
   }, [group, nameDraft, renameNodeGroup]);
 
   const portStyle = useMemo<React.CSSProperties>(() => ({
-    width: PORT_SIZE,
-    height: PORT_SIZE,
-    border: 'none',
-    background: group?.borderColor ?? '#d8b648',
-    borderRadius: '50%',
+    ...buildNodePortStyle(group?.borderColor ?? '#d8b648'),
     cursor: 'crosshair',
     pointerEvents: 'all',
     zIndex: 120,
@@ -107,7 +95,6 @@ export function NodeGroupNode({ id, data }: NodeProps) {
         {isCollapsed ? (
           <div
             onDoubleClick={() => toggleNodeGroupCollapse(group.id)}
-            onClick={handleGroupClick}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -148,7 +135,6 @@ export function NodeGroupNode({ id, data }: NodeProps) {
         ) : (
           <>
             <div
-              onClick={handleGroupClick}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -234,7 +220,7 @@ export function NodeGroupNode({ id, data }: NodeProps) {
           isConnectable
           isConnectableStart={false}
           isConnectableEnd
-          style={portStyle}
+          style={{ ...portStyle, width: NODE_PORT_SIZE, height: NODE_PORT_SIZE }}
         />
         <Handle
           type="source"
@@ -243,7 +229,7 @@ export function NodeGroupNode({ id, data }: NodeProps) {
           isConnectable
           isConnectableStart
           isConnectableEnd={false}
-          style={portStyle}
+          style={{ ...portStyle, width: NODE_PORT_SIZE, height: NODE_PORT_SIZE }}
         />
       </div>
 

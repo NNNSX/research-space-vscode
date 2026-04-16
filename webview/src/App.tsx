@@ -37,7 +37,7 @@ function classifyError(msg: string): ErrorKind {
 // ── ErrorToast component ─────────────────────────────────────────────────────
 
 function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
-  const { setSettingsPanelOpen } = useCanvasStore();
+  const setSettingsPanelOpen = useCanvasStore(s => s.setSettingsPanelOpen);
   const kind = classifyError(message);
 
   // Auto-dismiss after 12s for non-actionable errors
@@ -202,24 +202,50 @@ function InitialCanvasRenderBridge() {
 // ── App ──────────────────────────────────────────────────────────────────────
 
 export function App() {
-  const {
-    initCanvas, updateNodeStatus,
-    appendAiChunk, finishAiRun, setImageUri, addNode,
-    setNodeFileMissing, updateNodeFilePath, updateNodePreview,
-    addToStaging, setFullContent,
-    setError, clearError, lastError, setModelCache,
-    setSettings, setToolDefs, setNodeDefs,
-    setPipelineState, updatePipelineNodeStatus,
-    incrementPipelineCompleted, setPipelinePaused,
-    addPipelineWarning, runAutosaveCheck, markSaveSuccess, markSaveError,
-  } = useCanvasStore();
+  const initCanvas = useCanvasStore(s => s.initCanvas);
+  const updateNodeStatus = useCanvasStore(s => s.updateNodeStatus);
+  const appendAiChunk = useCanvasStore(s => s.appendAiChunk);
+  const finishAiRun = useCanvasStore(s => s.finishAiRun);
+  const setImageUri = useCanvasStore(s => s.setImageUri);
+  const addNode = useCanvasStore(s => s.addNode);
+  const setNodeFileMissing = useCanvasStore(s => s.setNodeFileMissing);
+  const updateNodeFilePath = useCanvasStore(s => s.updateNodeFilePath);
+  const updateNodePreview = useCanvasStore(s => s.updateNodePreview);
+  const addToStaging = useCanvasStore(s => s.addToStaging);
+  const setFullContents = useCanvasStore(s => s.setFullContents);
+  const setError = useCanvasStore(s => s.setError);
+  const clearError = useCanvasStore(s => s.clearError);
+  const lastError = useCanvasStore(s => s.lastError);
+  const setModelCache = useCanvasStore(s => s.setModelCache);
+  const setSettings = useCanvasStore(s => s.setSettings);
+  const setToolDefs = useCanvasStore(s => s.setToolDefs);
+  const setNodeDefs = useCanvasStore(s => s.setNodeDefs);
+  const setPipelineState = useCanvasStore(s => s.setPipelineState);
+  const updatePipelineNodeStatus = useCanvasStore(s => s.updatePipelineNodeStatus);
+  const incrementPipelineCompleted = useCanvasStore(s => s.incrementPipelineCompleted);
+  const setPipelinePaused = useCanvasStore(s => s.setPipelinePaused);
+  const addPipelineWarning = useCanvasStore(s => s.addPipelineWarning);
+  const runAutosaveCheck = useCanvasStore(s => s.runAutosaveCheck);
+  const markSaveSuccess = useCanvasStore(s => s.markSaveSuccess);
+  const markSaveError = useCanvasStore(s => s.markSaveError);
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
   const aiChunkBufferRef = useRef(new Map<string, string>());
   const aiChunkFlushRafRef = useRef<number | null>(null);
+  const fileContentBufferRef = useRef(new Map<string, string>());
+  const fileContentFlushRafRef = useRef<number | null>(null);
+  const isAliveRef = useRef(true);
+
+  useEffect(() => {
+    isAliveRef.current = true;
+    return () => {
+      isAliveRef.current = false;
+    };
+  }, []);
 
   const flushAiChunks = () => {
     aiChunkFlushRafRef.current = null;
+    if (!isAliveRef.current) { return; }
     const buffered = aiChunkBufferRef.current;
     if (buffered.size === 0) { return; }
     aiChunkBufferRef.current = new Map();
@@ -229,6 +255,7 @@ export function App() {
   };
 
   const flushAiChunksForRun = (runId: string) => {
+    if (!isAliveRef.current) { return; }
     const chunk = aiChunkBufferRef.current.get(runId);
     if (!chunk) { return; }
     aiChunkBufferRef.current.delete(runId);
@@ -236,10 +263,29 @@ export function App() {
   };
 
   const enqueueAiChunk = (runId: string, chunk: string) => {
+    if (!isAliveRef.current) { return; }
     const current = aiChunkBufferRef.current.get(runId) ?? '';
     aiChunkBufferRef.current.set(runId, current + chunk);
     if (aiChunkFlushRafRef.current !== null) { return; }
     aiChunkFlushRafRef.current = window.requestAnimationFrame(flushAiChunks);
+  };
+
+  const flushFileContents = () => {
+    fileContentFlushRafRef.current = null;
+    if (!isAliveRef.current) { return; }
+    const buffered = fileContentBufferRef.current;
+    if (buffered.size === 0) { return; }
+    fileContentBufferRef.current = new Map();
+    setFullContents(
+      Array.from(buffered.entries()).map(([nodeId, content]) => ({ nodeId, content }))
+    );
+  };
+
+  const enqueueFileContent = (nodeId: string, content: string) => {
+    if (!isAliveRef.current) { return; }
+    fileContentBufferRef.current.set(nodeId, content);
+    if (fileContentFlushRafRef.current !== null) { return; }
+    fileContentFlushRafRef.current = window.requestAnimationFrame(flushFileContents);
   };
 
   useEffect(() => {
@@ -271,10 +317,16 @@ export function App() {
       aiChunkFlushRafRef.current = null;
     }
     aiChunkBufferRef.current.clear();
+    if (fileContentFlushRafRef.current !== null) {
+      window.cancelAnimationFrame(fileContentFlushRafRef.current);
+      fileContentFlushRafRef.current = null;
+    }
+    fileContentBufferRef.current.clear();
   }, []);
 
   useEffect(() => {
     const unsubscribe = onMessage(msg => {
+      if (!isAliveRef.current) { return; }
       switch (msg.type) {
         case 'init':
           if (msg.data && msg.workspaceRoot !== undefined) {
@@ -406,7 +458,7 @@ export function App() {
         case 'fileContent': {
           const fc = msg as { requestId: string; content: string };
           if (fc.requestId && fc.content !== undefined) {
-            setFullContent(fc.requestId, fc.content);
+            enqueueFileContent(fc.requestId, fc.content);
           }
           break;
         }

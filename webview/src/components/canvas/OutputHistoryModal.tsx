@@ -5,7 +5,8 @@ import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 
 export function OutputHistoryModal() {
-  const { outputHistory, setOutputHistory } = useCanvasStore();
+  const outputHistory = useCanvasStore(s => s.outputHistory);
+  const setOutputHistory = useCanvasStore(s => s.setOutputHistory);
   if (!outputHistory) { return null; }
 
   const { nodeId, entries } = outputHistory;

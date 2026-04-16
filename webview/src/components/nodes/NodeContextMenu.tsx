@@ -15,7 +15,10 @@ interface NodeContextMenuProps {
 }
 
 export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, filePath, canDuplicate }: NodeContextMenuProps) {
-  const { onNodesChange, onEdgesChange, edges, duplicateNode } = useCanvasStore();
+  const onNodesChange = useCanvasStore(s => s.onNodesChange);
+  const onEdgesChange = useCanvasStore(s => s.onEdgesChange);
+  const edges = useCanvasStore(s => s.edges);
+  const duplicateNode = useCanvasStore(s => s.duplicateNode);
   const [renaming, setRenaming] = React.useState(false);
   const [draft, setDraft] = React.useState(nodeTitle);
   const inputRef = React.useRef<HTMLInputElement>(null);

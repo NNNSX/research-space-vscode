@@ -5,7 +5,11 @@ import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 
 export function AiOutputPanel() {
-  const { aiPanelOpen, aiOutput, aiOutputRunId, aiOutputNodeTitle, setAiPanelOpen } = useCanvasStore();
+  const aiPanelOpen = useCanvasStore(s => s.aiPanelOpen);
+  const aiOutput = useCanvasStore(s => s.aiOutput);
+  const aiOutputRunId = useCanvasStore(s => s.aiOutputRunId);
+  const aiOutputNodeTitle = useCanvasStore(s => s.aiOutputNodeTitle);
+  const setAiPanelOpen = useCanvasStore(s => s.setAiPanelOpen);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom as chunks arrive

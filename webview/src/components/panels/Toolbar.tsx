@@ -4,14 +4,22 @@ import { postMessage } from '../../bridge';
 import { BoardDropdown } from './BoardDropdown';
 
 export function Toolbar() {
-  const {
-    setAiToolsPanelOpen, aiToolsPanelOpen,
-    settingsPanelOpen, setSettingsPanelOpen,
-    selectionMode, setSelectionMode,
-    undo, redo, undoStack, redoStack,
-    saveState, saveDueAt, lastSavedAt, saveError,
-    saveNow, canvasFile,
-  } = useCanvasStore();
+  const setAiToolsPanelOpen = useCanvasStore(s => s.setAiToolsPanelOpen);
+  const aiToolsPanelOpen = useCanvasStore(s => s.aiToolsPanelOpen);
+  const settingsPanelOpen = useCanvasStore(s => s.settingsPanelOpen);
+  const setSettingsPanelOpen = useCanvasStore(s => s.setSettingsPanelOpen);
+  const selectionMode = useCanvasStore(s => s.selectionMode);
+  const setSelectionMode = useCanvasStore(s => s.setSelectionMode);
+  const undo = useCanvasStore(s => s.undo);
+  const redo = useCanvasStore(s => s.redo);
+  const undoStack = useCanvasStore(s => s.undoStack);
+  const redoStack = useCanvasStore(s => s.redoStack);
+  const saveState = useCanvasStore(s => s.saveState);
+  const saveDueAt = useCanvasStore(s => s.saveDueAt);
+  const lastSavedAt = useCanvasStore(s => s.lastSavedAt);
+  const saveError = useCanvasStore(s => s.saveError);
+  const saveNow = useCanvasStore(s => s.saveNow);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
   const [helpOpen, setHelpOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
 

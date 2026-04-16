@@ -61,7 +61,8 @@ function nodeIcon(type: string): string {
 // ── StagingPanel ───────────────────────────────────────────────────────────
 
 export function StagingPanel() {
-  const { stagingNodes, removeFromStaging } = useCanvasStore();
+  const stagingNodes = useCanvasStore(s => s.stagingNodes);
+  const removeFromStaging = useCanvasStore(s => s.removeFromStaging);
 
   // Only show data nodes + boards — function/blueprint nodes go directly to canvas
   const fileNodes = stagingNodes.filter(n =>

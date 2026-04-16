@@ -7,7 +7,7 @@ import {
   type EdgeChange,
   type Connection,
 } from '@xyflow/react';
-import { isDataNode } from '../../../src/core/canvas-model';
+import { isDataNode, isGroupHubNodeType, isHubEdgeType } from '../../../src/core/canvas-model';
 import type {
   CanvasFile,
   CanvasNode,
@@ -178,6 +178,7 @@ interface CanvasState {
   beginInitialCanvasLoad(nodeCount: number): void;
   trackInitialCanvasLoadRequest(key: string): void;
   resolveInitialCanvasLoadRequest(key: string): void;
+  resolveInitialCanvasLoadRequests(keys: string[]): void;
   markInitialCanvasRenderReady(ready: boolean): void;
   onNodesChange(changes: NodeChange[]): void;
   onEdgesChange(changes: EdgeChange[]): void;
@@ -195,6 +196,7 @@ interface CanvasState {
   updateNodeFilePath(nodeId: string, newFilePath: string, newTitle: string): void;
   updateNodePreview(nodeId: string, preview: string, metaPatch?: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
   setFullContent(nodeId: string, content: string): void;
+  setFullContents(entries: Array<{ nodeId: string; content: string }>): void;
   addToStaging(nodes: CanvasNode[]): void;
   removeFromStaging(nodeId: string): void;
   commitStagingNode(nodeId: string, position: { x: number; y: number }): void;
@@ -203,7 +205,12 @@ interface CanvasState {
   updateNodeParamValue(nodeId: string, key: string, value: unknown): void;
   updateNodeMeta(nodeId: string, patch: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
   previewNodeSize(nodeId: string, width: number, height: number): void;
-  updateNodeSize(nodeId: string, width: number, height: number): void;
+  updateNodeSize(
+    nodeId: string,
+    width: number,
+    height: number,
+    metaPatch?: Partial<import('../../../src/core/canvas-model').NodeMeta>,
+  ): void;
   updateInputOrder(nodeId: string, order: string[]): void;
   duplicateNode(nodeId: string): void;
   getUpstreamNodes(nodeId: string): CanvasNode[];
@@ -279,9 +286,17 @@ function flushCanvasStateSync() {
   postMessage({ type: 'canvasStateSync', data: file });
 }
 
-function syncCanvasState(file: CanvasFile | null) {
+function syncCanvasState(file: CanvasFile | null, immediate = false) {
   if (!file) { return; }
   pendingCanvasSyncFile = file;
+  if (immediate) {
+    if (pendingCanvasSyncTimer) {
+      clearTimeout(pendingCanvasSyncTimer);
+      pendingCanvasSyncTimer = undefined;
+    }
+    flushCanvasStateSync();
+    return;
+  }
   if (pendingCanvasSyncTimer) { return; }
   pendingCanvasSyncTimer = setTimeout(() => {
     flushCanvasStateSync();
@@ -299,6 +314,11 @@ function resetAutosaveWindow() {
 function ensureAutosaveWindow() {
   if (nextAutosaveAt > Date.now()) { return; }
   resetAutosaveWindow();
+}
+
+function markPersistedFromExternal(file: CanvasFile) {
+  lastPersistedSerialized = serializeCanvasFile(file);
+  inFlightSavePayloads.clear();
 }
 
 function markCanvasDirty(fileOverride?: CanvasFile | null) {
@@ -351,15 +371,15 @@ function dispatchSave(mode: 'auto' | 'manual', fileOverride?: CanvasFile | null)
   });
 }
 
-function debouncedSave(file: CanvasFile | null) {
+function debouncedSave(file: CanvasFile | null, syncMode: 'deferred' | 'immediate' = 'deferred') {
   if (!file) { return; }
-  syncCanvasState(file);
+  syncCanvasState(file, syncMode === 'immediate');
   markCanvasDirty(file);
 }
 
 function saveImmediately(file: CanvasFile | null) {
   if (!file) { return; }
-  syncCanvasState(file);
+  syncCanvasState(file, true);
   dispatchSave('manual', file);
 }
 
@@ -468,9 +488,9 @@ function syncHubFlowNode(node: FlowNode, group: NodeGroup): FlowNode {
     height: hubData.size.height,
     zIndex: 5,
     draggable: true,
-    selectable: false,
-    deletable: false,
-    focusable: false,
+    selectable: true,
+    deletable: true,
+    focusable: true,
     connectable: true,
     dragHandle: '.rs-group-header',
     style: {
@@ -569,10 +589,10 @@ function canvasToFlow(
     .filter(n => n && n.id && n.position && n.size)
     .map(n => {
       // Sanitize size: cap at reasonable bounds, use defaults if out of range
-      const w = n.node_type === 'group_hub'
+      const w = isGroupHubNodeType(n.node_type)
         ? Math.max(n.size.width, GROUP_MIN_WIDTH)
         : ((n.size.width >= 120 && n.size.width <= 800) ? n.size.width : 280);
-      const h = n.node_type === 'group_hub'
+      const h = isGroupHubNodeType(n.node_type)
         ? Math.max(n.size.height, GROUP_MIN_HEIGHT)
         : ((n.size.height >= 50 && n.size.height <= 1200) ? n.size.height : 160);
       const base: FlowNode = {
@@ -584,12 +604,12 @@ function canvasToFlow(
         width: w,
         height: h,
       };
-      if (n.node_type === 'group_hub') {
+      if (isGroupHubNodeType(n.node_type)) {
         base.zIndex = 5;
         base.draggable = true;
-        base.selectable = false;
-        base.deletable = false;
-        base.focusable = false;
+        base.selectable = true;
+        base.deletable = true;
+        base.focusable = true;
         base.connectable = true;
         base.dragHandle = '.rs-group-header';
         base.style = {
@@ -734,11 +754,33 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   resolveInitialCanvasLoadRequest(key) {
+    if (!get().initialCanvasLoadActive) {
+      return;
+    }
     if (!initialCanvasLoadPendingKeys.has(key)) {
-      finishInitialCanvasLoad();
       return;
     }
     initialCanvasLoadPendingKeys.delete(key);
+    set({ initialCanvasLoadPending: initialCanvasLoadPendingKeys.size });
+    finishInitialCanvasLoad();
+  },
+
+  resolveInitialCanvasLoadRequests(keys) {
+    if (!get().initialCanvasLoadActive || keys.length === 0) {
+      return;
+    }
+
+    let changed = false;
+    for (const key of keys) {
+      if (!initialCanvasLoadPendingKeys.has(key)) { continue; }
+      initialCanvasLoadPendingKeys.delete(key);
+      changed = true;
+    }
+
+    if (!changed) {
+      return;
+    }
+
     set({ initialCanvasLoadPending: initialCanvasLoadPendingKeys.size });
     finishInitialCanvasLoad();
   },
@@ -889,9 +931,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
 
       const activeHubIds = new Set(nodeGroups.map(group => group.hubNodeId));
-      const prunedNodes = updated.filter(node => node.data.node_type !== 'group_hub' || activeHubIds.has(node.id));
+      const prunedNodes = updated.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id));
       const prunedEdges = state.edges.filter(edge => {
-        if (edge.data?.edge_type === 'hub_member') {
+        if (isHubEdgeType(edge.data?.edge_type)) {
           return activeHubIds.has(edge.target);
         }
         const sourceExists = prunedNodes.some(node => node.id === edge.source);
@@ -1159,7 +1201,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         postMessage({ type: 'requestImageUri', filePath: node.file_path });
       }
 
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, aiOutputRunId: runId };
     });
   },
@@ -1195,7 +1237,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         postMessage({ type: 'requestImageUri', filePath: node.file_path });
       }
 
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, canvasFile: newFile };
     });
   },
@@ -1216,8 +1258,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             : cn
         ),
       };
-      debouncedSave(canvasFile);
-      return { nodes, canvasFile };
+      markPersistedFromExternal(canvasFile);
+      return {
+        nodes,
+        canvasFile,
+        saveState: 'saved',
+        saveDueAt: null,
+        saveError: null,
+        lastSavedAt: Date.now(),
+      };
     });
   },
 
@@ -1245,8 +1294,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             : cn
         ),
       };
-      debouncedSave(canvasFile);
-      return { nodes, canvasFile };
+      markPersistedFromExternal(canvasFile);
+      return {
+        nodes,
+        canvasFile,
+        saveState: 'saved',
+        saveDueAt: null,
+        saveError: null,
+        lastSavedAt: Date.now(),
+      };
     });
   },
 
@@ -1275,69 +1331,36 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             : cn
         ),
       };
-      debouncedSave(canvasFile);
+      markPersistedFromExternal(canvasFile);
       return {
         nodes: updatedNodes,
         canvasFile,
         fullContentCache: newCache,
+        saveState: 'saved',
+        saveDueAt: null,
+        saveError: null,
+        lastSavedAt: Date.now(),
       };
     });
   },
 
   setFullContent(nodeId, content) {
-    get().resolveInitialCanvasLoadRequest(`file:${nodeId}`);
-    // Don't cache empty content — let content_preview show instead
-    if (!content) { return; }
+    get().setFullContents([{ nodeId, content }]);
+  },
+
+  setFullContents(entries) {
+    if (!entries.length) { return; }
+    get().resolveInitialCanvasLoadRequests(entries.map(entry => `file:${entry.nodeId}`));
+
     set(state => {
-      const fullContentCache = { ...state.fullContentCache, [nodeId]: content };
-      if (!state.canvasFile || content.startsWith('[读取失败:')) {
-        return { fullContentCache };
+      const fullContentCache = { ...state.fullContentCache };
+
+      for (const { nodeId, content } of entries) {
+        if (!content) { continue; }
+        fullContentCache[nodeId] = content;
       }
 
-      const targetNode = state.nodes.find(node => node.id === nodeId);
-      const isTextLikeNode = targetNode && ['note', 'ai_output', 'code', 'experiment_log', 'task'].includes(targetNode.data.node_type);
-      if (!targetNode || !isTextLikeNode) {
-        return { fullContentCache };
-      }
-
-      const nextChars = content.length;
-      const currentChars = targetNode.data.meta?.ai_readable_chars;
-      if (currentChars === nextChars) {
-        return { fullContentCache };
-      }
-
-      const updatedNodes = state.nodes.map(node =>
-        node.id === nodeId
-          ? {
-              ...node,
-              data: {
-                ...node.data,
-                meta: {
-                  ...node.data.meta,
-                  ai_readable_chars: nextChars,
-                  file_missing: false,
-                },
-              },
-            }
-          : node
-      );
-      const canvasFile: CanvasFile = {
-        ...state.canvasFile,
-        nodes: state.canvasFile.nodes.map(node =>
-          node.id === nodeId
-            ? {
-                ...node,
-                meta: {
-                  ...node.meta,
-                  ai_readable_chars: nextChars,
-                  file_missing: false,
-                },
-              }
-            : node
-        ),
-      };
-      debouncedSave(canvasFile);
-      return { fullContentCache, nodes: updatedNodes, canvasFile };
+      return { fullContentCache };
     });
   },
 
@@ -1349,7 +1372,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (toAdd.length === 0) { return {}; }
       const stagingNodes = [...state.stagingNodes, ...toAdd];
       const newFile: CanvasFile = { ...state.canvasFile, stagingNodes };
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { stagingNodes, canvasFile: newFile };
     });
   },
@@ -1364,7 +1387,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       const stagingNodes = state.stagingNodes.filter(n => n.id !== nodeId);
       const newFile: CanvasFile = { ...state.canvasFile, stagingNodes };
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { stagingNodes, canvasFile: newFile };
     });
   },
@@ -1388,7 +1411,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         };
         const newBoards = [...state.boards, board];
         const newFile: CanvasFile = { ...state.canvasFile, boards: newBoards, stagingNodes: remainingStaging };
-        debouncedSave(newFile);
+        debouncedSave(newFile, 'immediate');
         return { boards: newBoards, canvasFile: newFile, stagingNodes: remainingStaging };
       }
 
@@ -1414,7 +1437,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         postMessage({ type: 'requestImageUri', filePath: placed.file_path });
       }
 
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, canvasFile: newFile, stagingNodes: remainingStaging };
     });
   },
@@ -1459,7 +1482,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedNodes = [...state.nodes, flowNode];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
       const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, canvasFile: newFile };
     });
   },
@@ -1491,7 +1514,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (useStaging) {
         const newStaging = [...state.stagingNodes, node];
         const newFile: CanvasFile = { ...state.canvasFile, stagingNodes: newStaging };
-        debouncedSave(newFile);
+        debouncedSave(newFile, 'immediate');
         return { stagingNodes: newStaging, canvasFile: newFile };
       }
 
@@ -1506,7 +1529,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedNodes = [...state.nodes, flowNode];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
       const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
-      debouncedSave(newFile);
+      debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, canvasFile: newFile };
     });
   },
@@ -1562,12 +1585,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
-  updateNodeSize(nodeId, width, height) {
+  updateNodeSize(nodeId, width, height, metaPatch) {
     set(state => {
       if (!state.canvasFile) { return {}; }
       const updatedNodes = state.nodes.map(n => {
         if (n.id !== nodeId) { return n; }
-        return { ...n, width: Math.round(width), height: Math.round(height), data: { ...n.data, size: { width: Math.round(width), height: Math.round(height) } } };
+        return {
+          ...n,
+          width: Math.round(width),
+          height: Math.round(height),
+          data: {
+            ...n.data,
+            size: { width: Math.round(width), height: Math.round(height) },
+            meta: metaPatch ? { ...n.data.meta, ...metaPatch } : n.data.meta,
+          },
+        };
       });
       const nodeGroups = recalcGroupsForNodeIds(state.nodeGroups, updatedNodes, [nodeId]);
       const syncedNodes = syncGroupHubNodes(updatedNodes, nodeGroups);
@@ -1854,14 +1886,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         .filter((g): g is NodeGroup => !!g);
       const activeHubIds = new Set(nodeGroups.map(group => group.hubNodeId));
       const nodes = syncGroupHubNodes(
-        state.nodes.filter(node => node.data.node_type !== 'group_hub' || activeHubIds.has(node.id)),
+        state.nodes.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id)),
         nodeGroups,
       );
       const edges = state.edges.filter(edge => {
         const sourceExists = nodes.some(node => node.id === edge.source);
         const targetExists = nodes.some(node => node.id === edge.target);
         if (!sourceExists || !targetExists) { return false; }
-        if (edge.data?.edge_type !== 'hub_member') { return true; }
+        if (!isHubEdgeType(edge.data?.edge_type)) { return true; }
         const group = nodeGroups.find(item => item.hubNodeId === edge.target);
         return !!group && group.nodeIds.includes(edge.source);
       });

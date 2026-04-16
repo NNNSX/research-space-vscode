@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import { v4 as uuid } from 'uuid';
-import type { CanvasFile, CanvasNode, CanvasEdge } from '../core/canvas-model';
+import { isFunctionNode, type CanvasFile, type CanvasNode, type CanvasEdge } from '../core/canvas-model';
 import { AIContent } from '../ai/provider';
 import { runFunctionNode, FunctionRunResult, cancelRunByNodeId } from '../ai/function-runner';
-import { readCanvas, writeCanvas } from '../core/storage';
+import { readCanvas } from '../core/storage';
 import { buildPipelinePlan, PipelinePlan } from './pipeline-engine';
 import { validatePipeline } from './pipeline-validator';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
@@ -61,11 +61,16 @@ export function cancelPipeline(pipelineId: string): void {
 
 export async function runPipeline(
   triggerNodeId: string,
+  executionCanvas: CanvasFile,
   canvasUri: vscode.Uri,
   webview: vscode.Webview,
 ): Promise<void> {
-  // Re-read canvas from disk for fresh state
-  let canvas = await readCanvas(canvasUri);
+  let canvas = executionCanvas;
+  const triggerNode = canvas.nodes.find(node => node.id === triggerNodeId);
+  if (!isFunctionNode(triggerNode)) {
+    webview.postMessage({ type: 'error', message: 'Pipeline 只能从功能节点启动。' });
+    return;
+  }
 
   const plan = buildPipelinePlan(triggerNodeId, canvas.nodes, canvas.edges);
   if ('error' in plan) {
@@ -159,7 +164,6 @@ export async function runPipeline(
             nodeId,
             reason: '上游节点执行失败',
           });
-          webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle', progressText: '已跳过' });
           continue;
         }
 
@@ -301,12 +305,6 @@ function markDownstreamSkipped(
         pipelineId: ctx.pipelineId,
         nodeId: edge.target,
         reason: '上游节点执行失败',
-      });
-      webview.postMessage({
-        type: 'fnStatusUpdate',
-        nodeId: edge.target,
-        status: 'idle',
-        progressText: '已跳过（上游错误）',
       });
       queue.push(edge.target);
     }

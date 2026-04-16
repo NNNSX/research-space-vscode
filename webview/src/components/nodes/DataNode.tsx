@@ -5,13 +5,14 @@ import remarkGfm from 'remark-gfm';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-expect-error — Vite ?raw import returns file content as string
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?raw';
-import type { CanvasNode } from '../../../../src/core/canvas-model';
+import { DEFAULT_SIZES, type CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { NodeContextMenu } from './NodeContextMenu';
 import { ExperimentLogBody } from './ExperimentLogBody';
 import { TaskBody } from './TaskBody';
 import { AiReadabilityBadge } from './AiReadabilityBadge';
+import { buildNodePortStyle } from '../../utils/node-port';
 
 // Create blob worker URL from inlined source (CSP: worker-src blob:)
 const workerBlob = new Blob([pdfjsWorkerSrc], { type: 'application/javascript' });
@@ -47,11 +48,27 @@ const FALLBACK_ICONS: Record<string, string> = {
 
 // Node types that support the preview button (opens in VSCode native viewer)
 const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'data']);
+const CARD_HYDRATABLE_NODE_TYPES = new Set<CanvasNode['node_type']>(['note', 'ai_output', 'code', 'data']);
+
+function resolveCardContentMode(node: CanvasNode, width?: number, height?: number): 'preview' | 'full' | undefined {
+  if (!CARD_HYDRATABLE_NODE_TYPES.has(node.node_type)) { return undefined; }
+  const defaultSize = DEFAULT_SIZES[node.node_type];
+  const nextWidth = width ?? node.size?.width ?? defaultSize.width;
+  const nextHeight = height ?? node.size?.height ?? defaultSize.height;
+  const expandedEnough =
+    nextHeight >= defaultSize.height + 60 ||
+    nextWidth >= defaultSize.width + 80;
+  return expandedEnough ? 'full' : 'preview';
+}
 
 export const DataNode = memo(DataNodeInner);
 
 function DataNodeInner({ data, selected }: DataNodeProps) {
-  const { imageUriMap, nodeDefs, previewNodeSize, updateNodeSize, openPreview, trackInitialCanvasLoadRequest } = useCanvasStore();
+  const imageUriMap = useCanvasStore(s => s.imageUriMap);
+  const nodeDefs = useCanvasStore(s => s.nodeDefs);
+  const previewNodeSize = useCanvasStore(s => s.previewNodeSize);
+  const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
+  const openPreview = useCanvasStore(s => s.openPreview);
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
 
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
@@ -64,9 +81,17 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
 
   const isMissing  = data.meta?.file_missing;
   const canPreview = PREVIEWABLE.has(data.node_type) && !isMissing && !!data.file_path;
+  const desiredCardContentMode = data.meta?.card_content_mode ?? resolveCardContentMode(data);
+  const shouldHydrateCardContent =
+    desiredCardContentMode === 'full' &&
+    !!data.file_path &&
+    !isMissing &&
+    fullContent === undefined;
 
-  // Display content: full content from cache > content_preview (300-char summary)
-  const displayContent = fullContent ?? data.meta?.content_preview;
+  // Card body follows the node's own display mode; cached full content is only used in full mode.
+  const displayContent = desiredCardContentMode === 'full'
+    ? (fullContent ?? data.meta?.content_preview)
+    : data.meta?.content_preview;
 
   // ── Context menu state ──
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -77,18 +102,14 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   }, [data.id, previewNodeSize]);
 
   const handleResizeEnd = useCallback((_event: unknown, params: { width: number; height: number }) => {
-    updateNodeSize(data.id, params.width, params.height);
-  }, [data.id, updateNodeSize]);
-
-  // Lazy-load full file content when node enters viewport (cache-first)
-  // Skip paper/PDF nodes — 300-char abstract is sufficient, no need for full text
-  useEffect(() => {
-    if (fullContent !== undefined) { return; }
-    if (!data.file_path || data.meta?.file_missing) { return; }
-    if (data.node_type === 'paper') { return; }
-    trackInitialCanvasLoadRequest(`file:${data.id}`);
-    postMessage({ type: 'requestFileContent', filePath: data.file_path, requestId: data.id });
-  }, [data.id, data.file_path, data.meta?.file_missing, data.node_type, fullContent, trackInitialCanvasLoadRequest]);
+    const nextMode = resolveCardContentMode(data, params.width, params.height);
+    updateNodeSize(
+      data.id,
+      params.width,
+      params.height,
+      nextMode ? { card_content_mode: nextMode } : undefined,
+    );
+  }, [data, updateNodeSize]);
 
   // Preview button click → open in-canvas modal preview
   const handlePreviewClick = useCallback((e: React.MouseEvent) => {
@@ -111,6 +132,11 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     e.stopPropagation();
     setCtxMenu({ x: e.clientX, y: e.clientY });
   }, []);
+
+  useEffect(() => {
+    if (!shouldHydrateCardContent || !data.file_path) { return; }
+    postMessage({ type: 'requestFileContent', filePath: data.file_path, requestId: data.id });
+  }, [data.file_path, data.id, shouldHydrateCardContent]);
 
   return (
     <div
@@ -335,9 +361,9 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
 
       {/* Handles */}
       <Handle type="source" position={Position.Right} id="out"
-        style={{ background: accentColor, width: 10, height: 10 }} />
+        style={buildNodePortStyle(accentColor)} />
       <Handle type="target" position={Position.Left} id="in"
-        style={{ background: accentColor, width: 10, height: 10 }} />
+        style={buildNodePortStyle(accentColor)} />
 
       {/* Context menu */}
       {ctxMenu && (

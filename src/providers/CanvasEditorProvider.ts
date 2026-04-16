@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isCanvasFile } from '../core/canvas-model';
+import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isCanvasFile, isFunctionNode } from '../core/canvas-model';
 import { readCanvas, writeCanvas, setDataNodeRegistry, ensureAiOutputDir, toRelPath } from '../core/storage';
 import { runFunctionNode, runBatchFunctionNode, cancelRun, cancelRunByNodeId, setToolRegistry } from '../ai/function-runner';
 import { runPipeline, pausePipeline, resumePipeline, cancelPipeline } from '../pipeline/pipeline-runner';
@@ -281,6 +281,24 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     document.suppressNextRevert = true;
     await writeCanvas(document.uri, document.data);
     return document.data;
+  }
+
+  private async _prepareExecutionContext(
+    msg: { [key: string]: unknown },
+    document: CanvasDocument,
+    targetKey: 'nodeId' | 'triggerNodeId',
+  ): Promise<{ canvas: CanvasFile; targetNode: CanvasNode }> {
+    const executionCanvas = await this._prepareExecutionCanvas(msg, document);
+    const rawTargetId = msg[targetKey];
+    const targetId = typeof rawTargetId === 'string' ? rawTargetId : '';
+    const targetNode = executionCanvas.nodes.find(node => node.id === targetId);
+    if (!targetNode) {
+      throw new Error(targetKey === 'triggerNodeId' ? '找不到 Pipeline 触发节点。' : '找不到要运行的功能节点。');
+    }
+    if (!isFunctionNode(targetNode)) {
+      throw new Error('执行入口只能绑定到功能节点。');
+    }
+    return { canvas: executionCanvas, targetNode };
   }
 
   // ── Message handling ──────────────────────────────────────────────────────
@@ -686,9 +704,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'runFunction': {
         const nodeId = msg['nodeId'] as string;
         if (!nodeId) { break; }
-        const executionCanvas = await this._prepareExecutionCanvas(msg, document);
-        runFunctionNode(nodeId, executionCanvas, document.uri, webview).catch(e => {
-          webview.postMessage({ type: 'aiError', runId: nodeId, message: String(e) });
+        const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'nodeId');
+        runFunctionNode(targetNode.id, canvas, document.uri, webview).catch(e => {
+          webview.postMessage({ type: 'aiError', runId: targetNode.id, message: String(e) });
         });
         break;
       }
@@ -696,9 +714,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'runBatchFunction': {
         const nodeId = msg['nodeId'] as string;
         if (!nodeId) { break; }
-        const executionCanvas = await this._prepareExecutionCanvas(msg, document);
-        runBatchFunctionNode(nodeId, executionCanvas, document.uri, webview).catch(e => {
-          webview.postMessage({ type: 'aiError', runId: nodeId, message: String(e) });
+        const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'nodeId');
+        runBatchFunctionNode(targetNode.id, canvas, document.uri, webview).catch(e => {
+          webview.postMessage({ type: 'aiError', runId: targetNode.id, message: String(e) });
         });
         break;
       }
@@ -721,8 +739,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'runPipeline': {
         const triggerNodeId = msg['triggerNodeId'] as string;
         if (!triggerNodeId) { break; }
-        await this._prepareExecutionCanvas(msg, document);
-        runPipeline(triggerNodeId, document.uri, webview).catch(e => {
+        const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'triggerNodeId');
+        runPipeline(targetNode.id, canvas, document.uri, webview).catch(e => {
           webview.postMessage({ type: 'error', message: `Pipeline 执行失败: ${String(e)}` });
         });
         break;

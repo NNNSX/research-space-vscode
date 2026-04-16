@@ -1,4 +1,4 @@
-import type { CanvasNode, CanvasEdge } from '../core/canvas-model';
+import { isFunctionNode, type CanvasNode, type CanvasEdge } from '../core/canvas-model';
 
 // ── Pipeline Engine (v2.0) ─────────────────────────────────────────────────
 // Responsible for analyzing a pipeline's topology and producing an execution plan.
@@ -26,6 +26,13 @@ export function buildPipelinePlan(
   allEdges: CanvasEdge[]
 ): PipelinePlan | { error: string } {
   const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+  const triggerNode = nodeMap.get(triggerNodeId);
+  if (!triggerNode) {
+    return { error: '找不到触发节点' };
+  }
+  if (!isFunctionNode(triggerNode)) {
+    return { error: 'Pipeline 只能从功能节点启动' };
+  }
 
   // Step 1: BFS downstream from trigger, following pipeline_flow edges to function nodes
   const downstream = new Set<string>();

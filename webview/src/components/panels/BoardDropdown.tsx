@@ -5,7 +5,10 @@ import { useCanvasStore, hexToRgba } from '../../stores/canvas-store';
 import { BOARD_COLOR_PRESETS } from '../canvas/BoardOverlay';
 
 export function BoardDropdown() {
-  const { boards, boardDropdownOpen, setBoardDropdownOpen, addBoardToStaging } = useCanvasStore();
+  const boards = useCanvasStore(s => s.boards);
+  const boardDropdownOpen = useCanvasStore(s => s.boardDropdownOpen);
+  const setBoardDropdownOpen = useCanvasStore(s => s.setBoardDropdownOpen);
+  const addBoardToStaging = useCanvasStore(s => s.addBoardToStaging);
   const { fitBounds } = useReactFlow();
   const btnRef = useRef<HTMLButtonElement>(null);
   const [creating, setCreating] = useState(false);

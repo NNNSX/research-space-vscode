@@ -228,6 +228,20 @@ async function getCanvasState(canvasUri: vscode.Uri): Promise<{
   return { canvas: await readCanvas(canvasUri), document: undefined };
 }
 
+function metaPatchChanged(
+  meta: Record<string, unknown> | undefined,
+  preview: string,
+  metaPatch: Record<string, unknown>,
+  fileMissing: boolean,
+): boolean {
+  if ((meta?.content_preview ?? '') !== preview) { return true; }
+  if ((meta?.file_missing ?? false) !== fileMissing) { return true; }
+  for (const [key, value] of Object.entries(metaPatch)) {
+    if ((meta?.[key] ?? undefined) !== value) { return true; }
+  }
+  return false;
+}
+
 function setupFileWatcher(context: vscode.ExtensionContext): void {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -250,10 +264,12 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
           let changed = false;
           for (const node of canvas.nodes) {
             if (node.file_path !== relPath) { continue; }
-            // Clear missing flag
-            node.meta = { ...node.meta, file_missing: false };
-            webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
-            changed = true;
+            const wasMissing = !!node.meta?.file_missing;
+            if (wasMissing) {
+              node.meta = { ...node.meta, file_missing: false };
+              webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+              changed = true;
+            }
             // Refresh content preview for text-based nodes (ai_output, note, code, data, etc.)
             // Use node type to decide: ai_output has watchContent=true but no extensions,
             // so check the node's own type definition rather than relying solely on extension lookup.
@@ -272,9 +288,11 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
                   csv_rows: result.csv_rows,
                   csv_cols: result.csv_cols,
                 };
-                node.meta = { ...node.meta, content_preview: preview, file_missing: false, ...metaPatch };
-                webview?.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview, metaPatch });
-                changed = true;
+                if (metaPatchChanged(node.meta as Record<string, unknown> | undefined, preview, metaPatch, false)) {
+                  node.meta = { ...node.meta, content_preview: preview, file_missing: false, ...metaPatch };
+                  webview?.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview, metaPatch });
+                  changed = true;
+                }
               } catch { /* ignore read errors */ }
             }
           }
@@ -305,7 +323,7 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
           if (relPath.startsWith('outputs/')) { continue; }
           let changed = false;
           for (const node of canvas.nodes) {
-            if (node.file_path === relPath) {
+            if (node.file_path === relPath && !node.meta?.file_missing) {
               node.meta = { ...node.meta, file_missing: true };
               webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
               changed = true;

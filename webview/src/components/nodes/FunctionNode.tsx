@@ -5,6 +5,7 @@ import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
 import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
+import { buildNodePortStyle } from '../../utils/node-port';
 import { NodeContextMenu } from './NodeContextMenu';
 
 interface FunctionNodeProps {
@@ -105,10 +106,8 @@ export const FunctionNode = memo(FunctionNodeInner);
 
 function FunctionNodeInner({ data, selected }: FunctionNodeProps) {
   const status: FnStatus = data.meta?.fn_status ?? 'idle';
-  const statusColor = STATUS_COLORS[status];
   const tool = data.meta?.ai_tool;
   const icon = tool ? (TOOL_ICONS[tool] ?? '⚡') : '⚡';
-  const isRunning = status === 'running';
 
   // Inject CSS keyframes on first render
   React.useEffect(() => { ensureFnAnimations(); }, []);
@@ -118,9 +117,7 @@ function FunctionNodeInner({ data, selected }: FunctionNodeProps) {
       data={data}
       selected={selected}
       status={status}
-      statusColor={statusColor}
       icon={icon}
-      isRunning={isRunning}
     />
   );
 }
@@ -129,18 +126,20 @@ function FullFunctionNode({
   data,
   selected,
   status,
-  statusColor,
   icon,
-  isRunning,
 }: {
   data: CanvasNode;
   selected: boolean;
   status: FnStatus;
-  statusColor: string;
   icon: string;
-  isRunning: boolean;
 }) {
-  const { updateNodeParamValue, updateInputOrder, getUpstreamNodes, modelCache, settings, toolDefs, canvasFile } = useCanvasStore();
+  const updateNodeParamValue = useCanvasStore(s => s.updateNodeParamValue);
+  const updateInputOrder = useCanvasStore(s => s.updateInputOrder);
+  const getUpstreamNodes = useCanvasStore(s => s.getUpstreamNodes);
+  const modelCache = useCanvasStore(s => s.modelCache);
+  const settings = useCanvasStore(s => s.settings);
+  const toolDefs = useCanvasStore(s => s.toolDefs);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
@@ -419,11 +418,42 @@ function FullFunctionNode({
     gap: 6,
   };
 
-  // Compute pipeline-aware visual state
+  // Pipeline state should own the node's visible execution state whenever present.
+  const effectiveStatus: FnStatus = pipelineNodeStatus === 'running'
+    ? 'running'
+    : pipelineNodeStatus === 'done'
+      ? 'done'
+      : pipelineNodeStatus === 'failed'
+        ? 'error'
+        : status;
+  const effectiveStatusColor = STATUS_COLORS[effectiveStatus];
+  const effectiveProgressText = pipelineNodeStatus === 'waiting' || pipelineNodeStatus === 'skipped'
+    ? ''
+    : (data.meta?.fn_progress ?? '');
+  const isVisuallyRunning = effectiveStatus === 'running';
   const pipelineDone = pipelineNodeStatus === 'done';
   const pipelineFailed = pipelineNodeStatus === 'failed';
+  const pipelineRunning = pipelineNodeStatus === 'running';
   const pipelineSkipped = pipelineNodeStatus === 'skipped';
   const pipelineWaiting = pipelineNodeStatus === 'waiting';
+  const showStopButton = isVisuallyRunning || countdown !== null;
+
+  const badgeConfig = (() => {
+    switch (pipelineNodeStatus) {
+      case 'running':
+        return { color: STATUS_COLORS.running, label: '流程运行中' };
+      case 'waiting':
+        return { color: 'var(--vscode-descriptionForeground)', label: '排队中' };
+      case 'done':
+        return { color: STATUS_COLORS.done, label: '流程完成' };
+      case 'failed':
+        return { color: STATUS_COLORS.error, label: '流程失败' };
+      case 'skipped':
+        return { color: 'var(--vscode-disabledForeground)', label: '已跳过' };
+      default:
+        return { color: effectiveStatusColor, label: STATUS_LABELS[effectiveStatus] };
+    }
+  })();
 
   return (
     <div
@@ -431,7 +461,7 @@ function FullFunctionNode({
       style={{
       width,
       background: 'var(--vscode-editor-background)',
-      border: isRunning
+      border: isVisuallyRunning
         ? '2px solid rgba(59,130,246,0.7)'
         : isCycleError
           ? '2px solid var(--vscode-terminal-ansiRed)'
@@ -439,27 +469,27 @@ function FullFunctionNode({
             ? '2px solid var(--vscode-terminal-ansiGreen)'
             : pipelineFailed
               ? '2px solid var(--vscode-terminal-ansiRed)'
-              : pipelineSkipped
+                : pipelineSkipped
                 ? '2px dashed var(--vscode-disabledForeground)'
                 : pipelineWaiting
                   ? '2px dashed var(--vscode-descriptionForeground)'
-                  : `2px solid ${selected ? statusColor : 'var(--vscode-panel-border)'}`,
+                  : `2px solid ${selected ? effectiveStatusColor : 'var(--vscode-panel-border)'}`,
       borderRadius: 8,
       padding: 10,
       display: 'flex',
       flexDirection: 'column',
       gap: 8,
       opacity: pipelineSkipped ? 0.45 : 1,
-      boxShadow: isRunning
+      boxShadow: isVisuallyRunning
         ? '0 0 8px 2px rgba(59,130,246,0.4)'
         : isCycleError
           ? '0 0 8px 2px rgba(239,68,68,0.5)'
           : pipelineDone
             ? '0 0 6px 1px rgba(34,197,94,0.3)'
             : pipelineFailed
-              ? '0 0 6px 1px rgba(239,68,68,0.3)'
+            ? '0 0 6px 1px rgba(239,68,68,0.3)'
               : undefined,
-      animation: isRunning
+      animation: isVisuallyRunning
         ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
         : isCycleError
           ? 'rsFnShake 0.5s ease-in-out'
@@ -473,8 +503,9 @@ function FullFunctionNode({
         <span style={{ fontWeight: 700, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {data.title || '功能节点'}
         </span>
-        <StatusBadge status={status} />
+        <StatusBadge color={badgeConfig.color} label={badgeConfig.label} />
         {/* Pipeline status overlay */}
+        {pipelineRunning && <span style={{ fontSize: 14, flexShrink: 0 }} title="Pipeline 运行中">▶</span>}
         {pipelineDone && <span style={{ fontSize: 14, flexShrink: 0 }} title="Pipeline 完成">✅</span>}
         {pipelineFailed && <span style={{ fontSize: 14, flexShrink: 0 }} title="Pipeline 失败">❌</span>}
         {pipelineSkipped && <span style={{ fontSize: 12, flexShrink: 0, color: 'var(--vscode-disabledForeground)' }} title="已跳过（上游错误）">⊘</span>}
@@ -482,12 +513,12 @@ function FullFunctionNode({
       </div>
 
       {/* Progress / Peek Preview */}
-      {status === 'running' && data.meta?.fn_progress && (
+      {isVisuallyRunning && effectiveProgressText && (
         <div style={{
           fontSize: 10,
-          color: statusColor,
-          background: statusColor + '12',
-          border: `1px solid ${statusColor}30`,
+          color: effectiveStatusColor,
+          background: effectiveStatusColor + '12',
+          border: `1px solid ${effectiveStatusColor}30`,
           borderRadius: 4,
           padding: '4px 7px',
           lineHeight: 1.5,
@@ -497,7 +528,7 @@ function FullFunctionNode({
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-all',
         }}>
-          {data.meta.fn_progress}
+          {effectiveProgressText}
         </div>
       )}
 
@@ -777,7 +808,7 @@ function FullFunctionNode({
 
       {/* Run / Stop button */}
       <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
-        {status === 'running' || countdown !== null ? (
+        {showStopButton ? (
           <button
             onClick={handleCancel}
             style={{
@@ -798,7 +829,7 @@ function FullFunctionNode({
           <>
             <button
               onClick={handleRun}
-              disabled={status === 'running'}
+              disabled={isVisuallyRunning}
               style={{
                 flex: 1,
                 background: 'var(--vscode-button-background)',
@@ -819,9 +850,9 @@ function FullFunctionNode({
 
       {/* Handles */}
       <Handle type="target" position={Position.Left} id="in-main"
-        style={{ background: statusColor, width: 10, height: 10 }} />
+        style={buildNodePortStyle(effectiveStatusColor)} />
       <Handle type="source" position={Position.Right} id="out"
-        style={{ background: statusColor, width: 10, height: 10 }} />
+        style={buildNodePortStyle(effectiveStatusColor)} />
 
       {/* Context menu */}
       {ctxMenu && (
@@ -922,18 +953,18 @@ function ChatPromptEditor({
   );
 }
 
-function StatusBadge({ status }: { status: FnStatus }) {
+function StatusBadge({ color, label }: { color: string; label: string }) {
   return (
     <span style={{
       fontSize: 10,
-      background: STATUS_COLORS[status] + '30',
-      color: STATUS_COLORS[status],
+      background: color + '30',
+      color,
       padding: '1px 6px',
       borderRadius: 4,
       fontWeight: 600,
       flexShrink: 0,
     }}>
-      {STATUS_LABELS[status]}
+      {label}
     </span>
   );
 }
@@ -944,7 +975,9 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
   globalDefaultModel?: string;
   isMultimodal?: boolean;
 }) {
-  const { updateNodeParamValue, settings, modelCache } = useCanvasStore();
+  const updateNodeParamValue = useCanvasStore(s => s.updateNodeParamValue);
+  const settings = useCanvasStore(s => s.settings);
+  const modelCache = useCanvasStore(s => s.modelCache);
 
   // For model params: stored value '' means "follow global default"
   // We read raw stored value; empty means "global"

@@ -2,16 +2,14 @@ import React, { useEffect, useRef } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 
 export function SearchBar() {
-  const {
-    searchOpen,
-    searchQuery,
-    searchMatches,
-    searchIndex,
-    setSearchOpen,
-    setSearchQuery,
-    nextSearchMatch,
-    prevSearchMatch,
-  } = useCanvasStore();
+  const searchOpen = useCanvasStore(s => s.searchOpen);
+  const searchQuery = useCanvasStore(s => s.searchQuery);
+  const searchMatches = useCanvasStore(s => s.searchMatches);
+  const searchIndex = useCanvasStore(s => s.searchIndex);
+  const setSearchOpen = useCanvasStore(s => s.setSearchOpen);
+  const setSearchQuery = useCanvasStore(s => s.setSearchQuery);
+  const nextSearchMatch = useCanvasStore(s => s.nextSearchMatch);
+  const prevSearchMatch = useCanvasStore(s => s.prevSearchMatch);
 
   const inputRef = useRef<HTMLInputElement>(null);
 

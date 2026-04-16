@@ -11,7 +11,13 @@ import { isDataNode } from '../../../../src/core/canvas-model';
  * contains pipeline-connected function nodes — an external "▶▶ Pipeline" button.
  */
 export function SelectionToolbar() {
-  const { selectedNodeIds, nodes, nodeGroups, setSelectionMode, getPipelineHeadNodes, createNodeGroup, canvasFile } = useCanvasStore();
+  const selectedNodeIds = useCanvasStore(s => s.selectedNodeIds);
+  const nodes = useCanvasStore(s => s.nodes);
+  const nodeGroups = useCanvasStore(s => s.nodeGroups);
+  const setSelectionMode = useCanvasStore(s => s.setSelectionMode);
+  const getPipelineHeadNodes = useCanvasStore(s => s.getPipelineHeadNodes);
+  const createNodeGroup = useCanvasStore(s => s.createNodeGroup);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
   const { getNodesBounds, flowToScreenPosition } = useReactFlow();
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState('节点组');

@@ -1,14 +1,17 @@
-import type { CanvasEdge, CanvasFile, CanvasNode, NodeGroup } from './canvas-model';
+import {
+  type CanvasEdge,
+  type CanvasFile,
+  type CanvasNode,
+  type NodeGroup,
+  isGroupHubNode,
+  isHubEdgeType,
+} from './canvas-model';
 
 export interface ExpandedInputRef {
   node: CanvasNode;
   role?: string;
   topSourceId: string;
   viaHubId?: string;
-}
-
-export function isGroupHubNode(node: CanvasNode | undefined | null): node is CanvasNode {
-  return !!node && node.node_type === 'group_hub';
 }
 
 export function getGroupByHubNodeId(nodeGroups: NodeGroup[] | undefined, hubNodeId: string): NodeGroup | undefined {
@@ -32,7 +35,7 @@ export function expandHubSourceNodes(
 
   const incomingEdges = canvas.edges.filter(edge =>
     edge.target === node.id &&
-    (edge.edge_type === 'hub_member' || edge.edge_type === 'data_flow')
+    (isHubEdgeType(edge.edge_type) || edge.edge_type === 'data_flow')
   );
 
   const orderedSourceIds = [
