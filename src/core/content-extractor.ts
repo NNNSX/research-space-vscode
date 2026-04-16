@@ -1,12 +1,16 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFile } from 'child_process';
+import { promises as fs } from 'fs';
 import { promisify } from 'util';
 import { AIContent } from '../ai/provider';
 import { CanvasNode } from './canvas-model';
 import { toAbsPath } from './storage';
 
 const execFileAsync = promisify(execFile);
+// `yauzl` is bundled into dist by esbuild; keep require-style import to avoid extra type deps.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const yauzl = require('yauzl');
 
 // ── Content extraction ──────────────────────────────────────────────────────
 
@@ -307,20 +311,16 @@ function decodeXmlText(input: string): string {
 }
 
 async function unzipList(zipPath: string): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync('unzip', ['-Z1', zipPath], { maxBuffer: 8 * 1024 * 1024 });
-    return stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
+  return Array.from((await readZipEntries(zipPath)).keys());
 }
 
 async function unzipEntry(zipPath: string, entry: string): Promise<string> {
-  const { stdout } = await execFileAsync('unzip', ['-p', zipPath, entry], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return stdout;
+  const entries = await readZipEntries(zipPath);
+  const content = entries.get(entry);
+  if (!content) {
+    throw new Error(`Zip entry not found: ${entry}`);
+  }
+  return content.toString('utf8');
 }
 
 function xmlToPlainText(xml: string, blockBreakPattern: RegExp): string {
@@ -464,17 +464,98 @@ async function extractWithTextutil(filePath: string): Promise<string> {
   return normalizeExtractedText(stdout);
 }
 
+function extractPrintableAsciiStrings(buffer: Buffer, minLen = 4): string[] {
+  const out: string[] = [];
+  let current = '';
+  for (const byte of buffer) {
+    if ((byte >= 32 && byte <= 126) || byte === 9) {
+      current += String.fromCharCode(byte);
+      continue;
+    }
+    if (current.length >= minLen) {
+      out.push(current);
+    }
+    current = '';
+  }
+  if (current.length >= minLen) {
+    out.push(current);
+  }
+  return out;
+}
+
+function extractPrintableUtf16LeStrings(buffer: Buffer, minLen = 4): string[] {
+  const out: string[] = [];
+  let current = '';
+  for (let i = 0; i + 1 < buffer.length; i += 2) {
+    const low = buffer[i];
+    const high = buffer[i + 1];
+    const code = low | (high << 8);
+    const isAsciiUtf16 = high === 0 && ((low >= 32 && low <= 126) || low === 9);
+    if (isAsciiUtf16) {
+      current += String.fromCharCode(code);
+      continue;
+    }
+    if (current.length >= minLen) {
+      out.push(current);
+    }
+    current = '';
+  }
+  if (current.length >= minLen) {
+    out.push(current);
+  }
+  return out;
+}
+
 async function extractLegacyBinaryText(filePath: string): Promise<string> {
-  const { stdout } = await execFileAsync('strings', ['-a', '-n', '4', filePath], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const lines = stdout
-    .split(/\r?\n/)
+  const buffer = await fs.readFile(filePath);
+  const lines = Array.from(new Set([
+    ...extractPrintableAsciiStrings(buffer),
+    ...extractPrintableUtf16LeStrings(buffer),
+  ]))
     .map(line => line.trim())
     .filter(line => line.length >= 4)
     .filter(line => /[A-Za-z\u4e00-\u9fff]/.test(line));
   return normalizeExtractedText(lines.join('\n'));
+}
+
+function decodeRtfHex(input: string): string {
+  return input.replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) =>
+    Buffer.from([parseInt(hex, 16)]).toString('latin1')
+  );
+}
+
+function stripRtfToPlainText(rtf: string): string {
+  return normalizeExtractedText(
+    decodeRtfHex(rtf)
+      .replace(/\\u(-?\d+)\??/g, (_, dec) => {
+        const code = Number(dec);
+        const normalized = code < 0 ? code + 65536 : code;
+        return String.fromCharCode(normalized);
+      })
+      .replace(/\\par[d]?/g, '\n')
+      .replace(/\\line/g, '\n')
+      .replace(/\\tab/g, '\t')
+      .replace(/\{\\\*[\s\S]*?\}/g, ' ')
+      .replace(/\\[a-zA-Z]+-?\d* ?/g, ' ')
+      .replace(/\\[^a-zA-Z]/g, ' ')
+      .replace(/[{}]/g, ' ')
+  );
+}
+
+async function extractRtfText(filePath: string): Promise<string> {
+  const raw = await fs.readFile(filePath, 'utf8');
+  return stripRtfToPlainText(raw);
+}
+
+async function extractDocLikeText(filePath: string, ext: string): Promise<string> {
+  try {
+    return await extractWithTextutil(filePath);
+  } catch {
+    if (ext === 'rtf') {
+      return extractRtfText(filePath);
+    }
+    return extractLegacyBinaryText(filePath);
+  }
 }
 
 function htmlToPlainText(html: string): string {
@@ -608,7 +689,7 @@ export async function extractStructuredTextFile(filePath: string, ext?: string):
     case 'doc':
     case 'dot':
     case 'rtf':
-      return extractWithTextutil(filePath);
+      return extractDocLikeText(filePath, normalizedExt);
     case 'ppt':
     case 'pps':
     case 'pot':
@@ -632,4 +713,49 @@ export async function extractStructuredTextFile(filePath: string, ext?: string):
     default:
       return '';
   }
+}
+
+const zipEntriesCache = new Map<string, Promise<Map<string, Buffer>>>();
+
+async function readZipEntries(zipPath: string): Promise<Map<string, Buffer>> {
+  const existing = zipEntriesCache.get(zipPath);
+  if (existing) {
+    return existing;
+  }
+  const pending = new Promise<Map<string, Buffer>>((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true, autoClose: true }, (err: Error | null, zipFile: any) => {
+      if (err || !zipFile) {
+        reject(err ?? new Error(`Failed to open zip: ${zipPath}`));
+        return;
+      }
+      const entries = new Map<string, Buffer>();
+      zipFile.readEntry();
+      zipFile.on('entry', (entry: any) => {
+        if (entry.fileName.endsWith('/')) {
+          zipFile.readEntry();
+          return;
+        }
+        zipFile.openReadStream(entry, (streamErr: Error | null, stream: any) => {
+          if (streamErr || !stream) {
+            reject(streamErr ?? new Error(`Failed to read zip entry: ${entry.fileName}`));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+          stream.on('error', reject);
+          stream.on('end', () => {
+            entries.set(entry.fileName, Buffer.concat(chunks));
+            zipFile.readEntry();
+          });
+        });
+      });
+      zipFile.on('end', () => resolve(entries));
+      zipFile.on('error', reject);
+    });
+  }).catch((error) => {
+    zipEntriesCache.delete(zipPath);
+    throw error;
+  });
+  zipEntriesCache.set(zipPath, pending);
+  return pending;
 }

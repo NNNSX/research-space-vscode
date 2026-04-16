@@ -1,6 +1,6 @@
-# Research Space v2.1.0-alpha.5
+# Research Space v2.1.0-alpha.6
 
-`v2.1.0-alpha.5` 是 **2.0 新链路的收口版开发预览**，已经可以安装体验，但仍然 **不是稳定版**。
+`v2.1.0-alpha.6` 是 **2.0 新链路的收口版开发预览**，已经可以安装体验，但仍然 **不是稳定版**。
 
 请在 GitHub Release 页面明确说明：
 
@@ -10,12 +10,12 @@
 
 本次版本重点：
 
-- 主流文件导入继续扩容，已补齐 `doc/xls/ppt`、`docm/xlsm/pptm`、`rtf`、`odt/ods/odp`、`epub`
-- 继续补齐 Office 模板 / 放映 / Flat ODF 变体：`dot/dotx/dotm`、`xlt/xltx/xltm`、`pps/ppsx/ppsm`、`pot/potx/potm`、`fodt/fods/fodp`
-- 导入入口、文件监听、fallback 识别、预览 / 全文提取、AI 输入链路已同步打通
-- `doc/rtf` 优先走 macOS `textutil`，OOXML 走解包提取，`odt/ods/odp/epub/fod*` 走 XML/HTML 提取，`xls/ppt/xlt/pps/pot` 仍属 best-effort 文本抽取
-- README、CHANGELOG、发布文案与版本号同步到 `v2.1.0-alpha.5`
+- 文档文本提取继续做跨平台收口：OOXML / OpenDocument / EPUB 改为优先走内置 zip 解析，不再依赖系统 `unzip`
+- `rtf` 增加纯文本 fallback；`doc/dot` 在非 macOS 或 `textutil` 不可用时回退到 legacy 文本抽取
+- `xls/ppt/xlt/pps/pot` 的 best-effort 文本提取改为内置实现，不再依赖系统 `strings`
+- 这意味着 `docx/xlsx/pptx`、`odt/ods/odp`、`epub`、`fodt/fods/fodp` 在 Windows / Linux / macOS 上的文本预览与 AI 输入链路更一致
+- README、CHANGELOG、发布文案与版本号同步到 `v2.1.0-alpha.6`
 
 推荐的 GitHub 发布文案：
 
-> `v2.1.0-alpha.5` is a closure-focused alpha preview of the upcoming 2.0 workflow engine. It is available for testing, but stability is still weaker than the `v1.2.2` stable line. Please use it cautiously, back up your workspace first, and avoid relying on it as your only production environment.
+> `v2.1.0-alpha.6` is a closure-focused alpha preview of the upcoming 2.0 workflow engine. It is available for testing, but stability is still weaker than the `v1.2.2` stable line. Please use it cautiously, back up your workspace first, and avoid relying on it as your only production environment.

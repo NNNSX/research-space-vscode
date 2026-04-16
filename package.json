@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.0-alpha.5",
+  "version": "2.1.0-alpha.6",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -346,6 +346,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "pdf-parse": "^1.1.1",
-    "uuid": "^11.0.0"
+    "uuid": "^11.0.0",
+    "yauzl": "^2.10.0"
   }
 }

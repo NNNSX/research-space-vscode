@@ -2,6 +2,10 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [2.1.0-alpha.6] — 2026-04-17
+
+- **文档提取跨平台 fallback 收口** — OOXML / OpenDocument / EPUB 的文本提取改为优先走内置 zip 解析，不再依赖系统 `unzip`；`rtf` 增加纯文本 fallback；`doc/dot` 在非 macOS 或 `textutil` 不可用时回退到 legacy 文本抽取；`xls/ppt/xlt/pps/pot` 的 best-effort 文本提取改为内置实现，不再依赖系统 `strings`
+
 ## [2.1.0-alpha.5] — 2026-04-17
 
 - **Office 模板 / 放映变体继续补齐** — 新增 `dot` / `dotx` / `dotm`、`xlt` / `xltx` / `xltm`、`pps` / `ppsx` / `ppsm`、`pot` / `potx` / `potm` 导入支持；对应 Note / Data 节点映射、Explorer 右键入口、文件监听和 fallback 识别已同步扩展
