@@ -1,0 +1,54 @@
+{
+  "id": "image-group-output",
+  "name": "组图输出",
+  "description": "基于统一主题生成多张连贯图像（Doubao Seedream）",
+  "icon": "images",
+  "supportsImages": false,
+  "outputNodeType": "image",
+  "apiType": "image_generation",
+  "params": [
+    {
+      "name": "model",
+      "type": "select",
+      "label": "模型",
+      "options": [
+        "doubao-seedream-4-0-250828",
+        "doubao-seedream-4-5-250828",
+        "doubao-seedream-5.0-lite"
+      ],
+      "default": ""
+    },
+    {
+      "name": "prompt",
+      "type": "text",
+      "label": "组图描述",
+      "default": ""
+    },
+    {
+      "name": "size",
+      "type": "select",
+      "label": "输出尺寸",
+      "options": [
+        "2k",
+        "3k"
+      ],
+      "default": "2k"
+    },
+    {
+      "name": "max_images",
+      "type": "number",
+      "label": "输出张数",
+      "default": 4
+    },
+    {
+      "name": "watermark",
+      "type": "boolean",
+      "label": "添加水印",
+      "default": true
+    }
+  ],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "category": "multimodal"
+}

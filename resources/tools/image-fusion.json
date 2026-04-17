@@ -1,8 +1,8 @@
 {
-  "id": "image-edit",
-  "name": "图像编辑",
-  "description": "基于参考图像 + 连接的文本节点提示词编辑图像（Gemini / Doubao）",
-  "icon": "edit",
+  "id": "image-fusion",
+  "name": "多图融合",
+  "description": "连接至少 2 张图像并按指令完成融合创作（Doubao Seedream）",
+  "icon": "combine",
   "supportsImages": true,
   "outputNodeType": "image",
   "apiType": "image_edit",
@@ -12,16 +12,22 @@
       "type": "select",
       "label": "模型",
       "options": [
-        "gemini-3.1-flash-image-preview",
-        "gemini-3-pro-image-preview",
+        "doubao-seedream-4-0-250828",
+        "doubao-seedream-4-5-250828",
         "doubao-seedream-5.0-lite"
       ],
       "default": ""
     },
     {
+      "name": "instruction",
+      "type": "text",
+      "label": "融合指令",
+      "default": ""
+    },
+    {
       "name": "size",
       "type": "select",
-      "label": "输出尺寸（Doubao）",
+      "label": "输出尺寸",
       "options": [
         "2k",
         "3k"
@@ -29,22 +35,9 @@
       "default": "2k"
     },
     {
-      "name": "aspect_ratio",
-      "type": "select",
-      "label": "输出比例",
-      "options": [
-        "1:1",
-        "16:9",
-        "9:16",
-        "4:3",
-        "3:4"
-      ],
-      "default": "1:1"
-    },
-    {
       "name": "watermark",
       "type": "boolean",
-      "label": "添加水印（Doubao）",
+      "label": "添加水印",
       "default": false
     }
   ],

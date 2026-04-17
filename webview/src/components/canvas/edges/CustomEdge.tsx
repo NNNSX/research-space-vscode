@@ -42,6 +42,9 @@ export function CustomEdge({
       const slot = targetNode.meta?.blueprint_input_slot_defs?.find(s => s.id === edgeData.role);
       return slot?.title ?? edgeData.role;
     }
+    if (targetNode?.meta?.blueprint_placeholder_kind === 'input') {
+      return targetNode.meta?.blueprint_placeholder_title ?? edgeData.role;
+    }
     const toolId = targetNode?.meta?.ai_tool as string | undefined;
     const toolDef = toolId ? toolDefs.find(d => d.id === toolId) : undefined;
     const slot = toolDef?.slots?.find(s => s.name === edgeData.role);

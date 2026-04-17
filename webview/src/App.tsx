@@ -236,6 +236,8 @@ export function App() {
   const updateNodeFilePath = useCanvasStore(s => s.updateNodeFilePath);
   const updateNodePreviews = useCanvasStore(s => s.updateNodePreviews);
   const addToStaging = useCanvasStore(s => s.addToStaging);
+  const resolveStagingMaterialization = useCanvasStore(s => s.resolveStagingMaterialization);
+  const failStagingMaterialization = useCanvasStore(s => s.failStagingMaterialization);
   const setFullContents = useCanvasStore(s => s.setFullContents);
   const setError = useCanvasStore(s => s.setError);
   const clearError = useCanvasStore(s => s.clearError);
@@ -523,6 +525,23 @@ export function App() {
           if (Array.isArray(msg.nodes)) {
             addToStaging(msg.nodes as import('../../src/core/canvas-model').CanvasNode[]);
             usePetStore.getState().notifyCanvasEvent('nodeAdded');
+          }
+          break;
+        case 'stagingNodeMaterialized':
+          if (msg.sourceNodeId && msg.node && msg.position) {
+            resolveStagingMaterialization(
+              msg.sourceNodeId as string,
+              msg.node as import('../../src/core/canvas-model').CanvasNode,
+              msg.position as { x: number; y: number },
+            );
+          }
+          break;
+        case 'stagingNodeMaterializeFailed':
+          if (msg.sourceNodeId) {
+            failStagingMaterialization(msg.sourceNodeId as string);
+          }
+          if (msg.message) {
+            setError(msg.message as string);
           }
           break;
         case 'nodeAdded':

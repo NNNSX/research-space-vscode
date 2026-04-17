@@ -62,6 +62,7 @@ function nodeIcon(type: string): string {
 
 export function StagingPanel() {
   const stagingNodes = useCanvasStore(s => s.stagingNodes);
+  const pendingStagingMaterializations = useCanvasStore(s => s.pendingStagingMaterializations);
   const removeFromStaging = useCanvasStore(s => s.removeFromStaging);
 
   // Only show data nodes + boards — function/blueprint nodes go directly to canvas
@@ -209,6 +210,10 @@ export function StagingPanel() {
             key={node.id}
             draggable
             onDragStart={e => {
+              if (pendingStagingMaterializations[node.id]) {
+                e.preventDefault();
+                return;
+              }
               e.dataTransfer.setData(STAGING_NODE_KEY, node.id);
               e.dataTransfer.effectAllowed = 'copy';
             }}
@@ -221,8 +226,9 @@ export function StagingPanel() {
               background: 'var(--vscode-input-background)',
               border: '1px solid var(--vscode-input-border, transparent)',
               borderRadius: 5,
-              cursor: 'grab',
+              cursor: pendingStagingMaterializations[node.id] ? 'progress' : 'grab',
               fontSize: 12,
+              opacity: pendingStagingMaterializations[node.id] ? 0.7 : 1,
             }}
           >
             <span style={{ flexShrink: 0, fontSize: 14 }}>{nodeIcon(node.node_type)}</span>
@@ -236,18 +242,31 @@ export function StagingPanel() {
             }}>
               {node.title}
             </span>
+            {pendingStagingMaterializations[node.id] && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                }}
+              >
+                创建中…
+              </span>
+            )}
             <button
               onClick={() => removeFromStaging(node.id)}
+              disabled={!!pendingStagingMaterializations[node.id]}
               title="从暂存架移除"
               style={{
                 flexShrink: 0,
                 background: 'none',
                 border: 'none',
                 color: 'var(--vscode-descriptionForeground)',
-                cursor: 'pointer',
+                cursor: pendingStagingMaterializations[node.id] ? 'not-allowed' : 'pointer',
                 fontSize: 12,
                 padding: '0 2px',
                 lineHeight: 1,
+                opacity: pendingStagingMaterializations[node.id] ? 0.4 : 1,
               }}
             >
               ✕

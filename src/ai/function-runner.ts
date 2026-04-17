@@ -457,15 +457,37 @@ async function _runFunctionNodeInner(
     const defaultModels = {
       imageGen:   aiCfg.get<string>('aiHubMixImageGenModel', ''),
       imageEdit:  aiCfg.get<string>('aiHubMixImageEditModel', ''),
+      imageFusion: aiCfg.get<string>('aiHubMixImageFusionModel', ''),
+      imageGroup: aiCfg.get<string>('aiHubMixImageGroupModel', ''),
       tts:        aiCfg.get<string>('aiHubMixTtsModel', ''),
       stt:        aiCfg.get<string>('aiHubMixSttModel', ''),
       videoGen:   aiCfg.get<string>('aiHubMixVideoGenModel', ''),
     };
     switch (aiType) {
       case 'image_generation':
-        return runImageGen(fnNode, toolDef, params, contents, canvasUri, webview, runId, aiHubMixApiKey, defaultModels.imageGen);
+        return runImageGen(
+          fnNode,
+          toolDef,
+          params,
+          contents,
+          canvasUri,
+          webview,
+          runId,
+          aiHubMixApiKey,
+          toolId === 'image-group-output' ? defaultModels.imageGroup : defaultModels.imageGen,
+        );
       case 'image_edit':
-        return runImageEdit(fnNode, toolDef, params, contents, canvasUri, webview, runId, aiHubMixApiKey, defaultModels.imageEdit);
+        return runImageEdit(
+          fnNode,
+          toolDef,
+          params,
+          contents,
+          canvasUri,
+          webview,
+          runId,
+          aiHubMixApiKey,
+          toolId === 'image-fusion' ? defaultModels.imageFusion : defaultModels.imageEdit,
+        );
       case 'tts':
         return runTts(fnNode, toolDef, params, contents, canvasUri, webview, runId, aiHubMixApiKey, defaultModels.tts);
       case 'stt':
@@ -551,7 +573,7 @@ async function _runFunctionNodeInner(
   // 10. Create output node — place it to the right of the function node,
   //     avoiding overlap with existing nodes using a simple collision scan.
   const outSize = { width: 280, height: 160 };
-  const outPos = calcOutputPosition(fnNode, outSize, canvas.nodes);
+  const outPos = calcPreferredBlueprintOutputPosition(nodeId, fnNode, outSize, canvas);
 
   const outNode: CanvasNode = {
     id: uuid(),
@@ -630,19 +652,40 @@ async function runImageGen(
   }
 
   const textContent = contents.filter(c => c.type === 'text').map(c => c.text).join('\n\n');
+  const directPrompt = ((params['prompt'] as string) ?? '').trim();
   const styleHint = (params['style_hint'] as string)?.trim();
-  const prompt = styleHint ? `${textContent}\n\nStyle: ${styleHint}` : textContent;
+  const promptBase = [directPrompt, textContent].filter(Boolean).join('\n\n').trim();
+  const prompt = styleHint ? `${promptBase}\n\nStyle: ${styleHint}` : promptBase;
 
   if (!prompt.trim()) {
-    const msg = '图像生成需要文字描述，请连接笔记节点或在「风格提示」参数中输入。';
+    const msg = toolDef.id === 'image-group-output'
+      ? '组图输出需要组图描述，请在参数中填写，或连接文本节点。'
+      : '图像生成需要文字描述，请连接笔记节点或在参数中输入。';
     reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
+  if (toolDef.id === 'image-group-output') {
+    const model = (params['model'] as string) || settingsDefaultModel || 'doubao-seedream-4-0-250828';
+    const size = normalizeDoubaoSize(params['size'] as string | undefined);
+    const maxImages = Math.max(1, Math.min(8, Number(params['max_images'] ?? 4) || 4));
+    const watermark = Boolean(params['watermark'] ?? true);
+    const controller = new AbortController();
+    activeRuns.set(runId, controller);
+    return runDoubaoImageGroupOutput(fnNode, prompt, model, size, maxImages, watermark, canvasUri, webview, runId, apiKey, controller);
+  }
+
   const aspectRatio = (params['aspect_ratio'] as string) ?? '1:1';
+  const size = normalizeDoubaoSize(params['size'] as string | undefined);
+  const watermark = Boolean(params['watermark'] ?? true);
+  const webSearch = Boolean(params['web_search'] ?? false);
   const model = (params['model'] as string) || settingsDefaultModel || 'gemini-3.1-flash-image-preview';
   const controller = new AbortController();
   activeRuns.set(runId, controller);
+
+  if (isDoubaoSeedreamModel(model)) {
+    return runImageGenDoubao(fnNode, prompt, model, size, watermark, webSearch, canvasUri, webview, runId, apiKey, controller);
+  }
 
   return runImageGenGemini(fnNode, params, prompt, model, aspectRatio, canvasUri, webview, runId, apiKey, controller);
 }
@@ -712,18 +755,18 @@ async function runImageGenGemini(
     await vscode.workspace.fs.writeFile(fileUri, imageBytes);
     const relPath = toRelPath(fileUri.fsPath, canvasUri);
 
+    const activeDoc = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     const outNode: CanvasNode = {
       id: uuid(),
       node_type: 'image',
       title: `Image ${ts}`,
-      position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
+      position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 200 }, activeDoc?.data),
       size: { width: 240, height: 200 },
       file_path: relPath,
       meta: { display_mode: 'file' },
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
-    const activeDoc = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     if (activeDoc) {
       activeDoc.data.nodes.push(outNode);
       activeDoc.data.edges.push(outEdge);
@@ -744,6 +787,147 @@ async function runImageGenGemini(
     };
     return { success: true, runId, outputContent, outputNode: outNode };
 
+  } catch (e: unknown) {
+    activeRuns.delete(runId);
+    if (e instanceof Error && e.name === 'AbortError') {
+      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+      return { success: false, runId, errorMessage: 'Cancelled' };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+}
+
+async function runImageGenDoubao(
+  fnNode: CanvasNode,
+  prompt: string,
+  model: string,
+  size: string,
+  watermark: boolean,
+  webSearch: boolean,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+  runId: string,
+  apiKey: string,
+  controller: AbortController,
+): Promise<FunctionRunResult> {
+  const nodeId = fnNode.id;
+  try {
+    const response = await fetch(buildDoubaoPredictionsEndpoint(model), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        input: {
+          prompt,
+          size,
+          sequential_image_generation: 'disabled',
+          stream: false,
+          response_format: 'url',
+          watermark,
+          ...(webSearch ? { tools: [{ type: 'web_search' }] } : {}),
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Doubao Image API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as unknown;
+    const { outputNodes, outputEdges, outputContents } = await persistGeneratedImages(
+      nodeId,
+      fnNode,
+      canvasUri,
+      'image-gen',
+      'Image',
+      extractPredictionImageCandidates(data),
+      model,
+    );
+
+    activeRuns.delete(runId);
+    for (let index = 0; index < outputNodes.length; index++) {
+      webview.postMessage({ type: 'aiDone', runId, node: outputNodes[index], edge: outputEdges[index] });
+    }
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'done' });
+    setTimeout(() => webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' }), 3000);
+    return { success: true, runId, outputContent: outputContents[0], outputNode: outputNodes[0] };
+  } catch (e: unknown) {
+    activeRuns.delete(runId);
+    if (e instanceof Error && e.name === 'AbortError') {
+      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+      return { success: false, runId, errorMessage: 'Cancelled' };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+}
+
+async function runDoubaoImageGroupOutput(
+  fnNode: CanvasNode,
+  prompt: string,
+  model: string,
+  size: string,
+  maxImages: number,
+  watermark: boolean,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+  runId: string,
+  apiKey: string,
+  controller: AbortController,
+): Promise<FunctionRunResult> {
+  const nodeId = fnNode.id;
+  try {
+    const response = await fetch(buildDoubaoPredictionsEndpoint(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        input: {
+          model,
+          prompt,
+          size,
+          sequential_image_generation: 'auto',
+          sequential_image_generation_options: { max_images: maxImages },
+          stream: false,
+          response_format: 'url',
+          watermark,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Doubao Group Image API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as unknown;
+    const { outputNodes, outputEdges, outputContents } = await persistGeneratedImages(
+      nodeId,
+      fnNode,
+      canvasUri,
+      'image-group',
+      'Group Image',
+      extractPredictionImageCandidates(data),
+      model,
+    );
+
+    activeRuns.delete(runId);
+    for (let index = 0; index < outputNodes.length; index++) {
+      webview.postMessage({ type: 'aiDone', runId, node: outputNodes[index], edge: outputEdges[index] });
+    }
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'done' });
+    setTimeout(() => webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' }), 3000);
+    return { success: true, runId, outputContent: outputContents[0], outputNode: outputNodes[0] };
   } catch (e: unknown) {
     activeRuns.delete(runId);
     if (e instanceof Error && e.name === 'AbortError') {
@@ -817,19 +1001,19 @@ async function runTts(
     await vscode.workspace.fs.writeFile(fileUri, audioBytes);
     const relPath = toRelPath(fileUri.fsPath, canvasUri);
 
+    const activeDocTTS = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     const outNode: CanvasNode = {
       id: uuid(),
       node_type: 'audio',
       title: `Audio ${ts}`,
-      position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
+      position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 120 }, activeDocTTS?.data),
       size: { width: 240, height: 120 },
       file_path: relPath,
-      meta: {},
+      meta: buildMultimodalNodeMeta(model),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
     // Persist output node to Extension Host canvas
-    const activeDocTTS = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     if (activeDocTTS) {
       activeDocTTS.data.nodes.push(outNode);
       activeDocTTS.data.edges.push(outEdge);
@@ -955,10 +1139,13 @@ async function runStt(
       id: uuid(),
       node_type: 'ai_output',
       title: `Transcript ${ts}`,
-      position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
+      position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 280, height: 160 }, activeDoc?.data),
       size: { width: 280, height: 160 },
       file_path: relPath,
-      meta: { content_preview: transcriptText.slice(0, 300), ai_readable_chars: transcriptText.length },
+      meta: buildMultimodalNodeMeta(model, {
+        content_preview: transcriptText.slice(0, 300),
+        ai_readable_chars: transcriptText.length,
+      }),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
@@ -1134,18 +1321,18 @@ async function runVideoGen(
     await vscode.workspace.fs.writeFile(fileUri, videoBytes);
     const relPath = toRelPath(fileUri.fsPath, canvasUri);
 
+    const activeDocVG = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     const outNode: CanvasNode = {
       id: uuid(),
       node_type: 'video',
       title: `Video ${ts}`,
-      position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
+      position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 280, height: 180 }, activeDocVG?.data),
       size: { width: 280, height: 180 },
       file_path: relPath,
-      meta: {},
+      meta: buildMultimodalNodeMeta(model),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
-    const activeDocVG = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     if (activeDocVG) {
       activeDocVG.data.nodes.push(outNode);
       activeDocVG.data.edges.push(outEdge);
@@ -1203,6 +1390,214 @@ export function calcOutputPosition(
   return { x: baseX, y: maxY + GAP };
 }
 
+function calcPreferredBlueprintOutputPosition(
+  nodeId: string,
+  fnNode: CanvasNode,
+  outSize: { width: number; height: number },
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): { x: number; y: number } {
+  if (canvas) {
+    const directOutputTarget = canvas.edges
+      .filter(edge => edge.source === nodeId && edge.edge_type === 'ai_generated')
+      .map(edge => canvas.nodes.find(node => node.id === edge.target))
+      .find(node =>
+        !!node && (
+          node.meta?.blueprint_placeholder_kind === 'output' ||
+          node.meta?.blueprint_bound_slot_kind === 'output'
+        )
+      );
+    if (directOutputTarget?.position) {
+      return { ...directOutputTarget.position };
+    }
+  }
+  return calcOutputPosition(fnNode, outSize, canvas?.nodes ?? []);
+}
+
+const DOUBAO_SEEDREAM_ROUTE_MODEL = 'doubao-seedream-5.0-lite';
+
+function isDoubaoSeedreamModel(model: string): boolean {
+  return /^doubao-seedream-/i.test(model);
+}
+
+function buildDoubaoPredictionsEndpoint(routeModel = DOUBAO_SEEDREAM_ROUTE_MODEL): string {
+  return `https://aihubmix.com/v1/models/doubao/${encodeURIComponent(routeModel)}/predictions`;
+}
+
+function asImageDataUrl(content: AIContent): string {
+  if (content.type !== 'image' || !content.base64 || !content.mediaType) {
+    throw new Error('图像输入缺少可用的 base64 或 mediaType');
+  }
+  return `data:${content.mediaType};base64,${content.base64}`;
+}
+
+function normalizeDoubaoSize(size: string | undefined): string {
+  const raw = (size ?? '').trim();
+  if (!raw) { return '2k'; }
+  const lower = raw.toLowerCase();
+  if (lower === '2k' || lower === '3k') { return lower; }
+  if (lower === '1k') { return '2k'; }
+  if (/^\d+x\d+$/.test(lower)) { return lower; }
+  return '2k';
+}
+
+function buildMultimodalNodeMeta(
+  model: string,
+  extra?: CanvasNode['meta'],
+): CanvasNode['meta'] {
+  return {
+    ai_provider: 'AIHubMix',
+    ai_model: model || undefined,
+    ...(extra ?? {}),
+  };
+}
+
+type PredictionImageCandidate = { url?: string; dataUrl?: string; mimeType?: string };
+
+function normalizePredictionImageCandidate(item: unknown): PredictionImageCandidate | null {
+  if (!item) { return null; }
+  if (typeof item === 'string') {
+    if (/^data:image\//i.test(item)) {
+      return { dataUrl: item };
+    }
+    return { url: item };
+  }
+  if (typeof item !== 'object') { return null; }
+  const rec = item as Record<string, unknown>;
+  const stringValue = ['url', 'image', 'src'].find(key => typeof rec[key] === 'string');
+  if (stringValue) {
+    const value = String(rec[stringValue]);
+    return /^data:image\//i.test(value) ? { dataUrl: value } : { url: value };
+  }
+  const base64Value = ['b64_json', 'base64', 'data'].find(key => typeof rec[key] === 'string');
+  if (base64Value) {
+    const value = String(rec[base64Value]);
+    if (/^data:image\//i.test(value)) {
+      return { dataUrl: value };
+    }
+    const mimeType = typeof rec['mime_type'] === 'string'
+      ? String(rec['mime_type'])
+      : typeof rec['mimeType'] === 'string'
+        ? String(rec['mimeType'])
+        : 'image/png';
+    return { dataUrl: `data:${mimeType};base64,${value}`, mimeType };
+  }
+  return null;
+}
+
+function extractPredictionImageCandidates(payload: unknown): PredictionImageCandidate[] {
+  if (!payload || typeof payload !== 'object') { return []; }
+  const rec = payload as Record<string, unknown>;
+  const buckets = [rec['output'], rec['data'], rec['images'], rec['image']];
+  const entries: unknown[] = [];
+  for (const bucket of buckets) {
+    if (Array.isArray(bucket)) {
+      entries.push(...bucket);
+    } else if (bucket && typeof bucket === 'object') {
+      const nested = bucket as Record<string, unknown>;
+      if (Array.isArray(nested['images'])) {
+        entries.push(...nested['images']);
+      } else {
+        entries.push(bucket);
+      }
+    } else if (typeof bucket === 'string') {
+      entries.push(bucket);
+    }
+  }
+  return entries
+    .map(normalizePredictionImageCandidate)
+    .filter((item): item is PredictionImageCandidate => !!item);
+}
+
+async function materializePredictionImage(candidate: PredictionImageCandidate): Promise<{ bytes: Buffer; mimeType: string }> {
+  if (candidate.dataUrl) {
+    const match = candidate.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error('Doubao 返回了无法识别的 data URL 图像');
+    }
+    return {
+      bytes: Buffer.from(match[2], 'base64'),
+      mimeType: match[1],
+    };
+  }
+  if (!candidate.url) {
+    throw new Error('Doubao 未返回可下载的图像地址');
+  }
+  const response = await fetch(candidate.url);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`下载生成图像失败 ${response.status}: ${errText}`);
+  }
+  return {
+    bytes: Buffer.from(await response.arrayBuffer()),
+    mimeType: response.headers.get('content-type') ?? candidate.mimeType ?? 'image/png',
+  };
+}
+
+async function persistGeneratedImages(
+  nodeId: string,
+  fnNode: CanvasNode,
+  canvasUri: vscode.Uri,
+  filePrefix: string,
+  titlePrefix: string,
+  candidates: PredictionImageCandidate[],
+  model: string,
+): Promise<{ outputNodes: CanvasNode[]; outputEdges: CanvasEdge[]; outputContents: AIContent[] }> {
+  if (candidates.length === 0) {
+    throw new Error('模型未返回任何图像结果');
+  }
+
+  const activeDoc = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
+  const outputNodes: CanvasNode[] = [];
+  const outputEdges: CanvasEdge[] = [];
+  const outputContents: AIContent[] = [];
+  const ts = formatTimestamp();
+  const outSize = { width: 240, height: 200 };
+  const basePosition = calcPreferredBlueprintOutputPosition(nodeId, fnNode, outSize, activeDoc?.data);
+  const GAP_Y = 60;
+
+  for (let index = 0; index < candidates.length; index++) {
+    const { bytes, mimeType } = await materializePredictionImage(candidates[index]);
+    const aiDir = await ensureAiOutputDir(canvasUri);
+    const ext = mimeType.includes('jpeg') ? 'jpg' : mimeType.includes('webp') ? 'webp' : 'png';
+    const filename = `${filePrefix}_${ts}_${index + 1}.${ext}`;
+    const fileUri = vscode.Uri.joinPath(aiDir, filename);
+    await vscode.workspace.fs.writeFile(fileUri, bytes);
+    const relPath = toRelPath(fileUri.fsPath, canvasUri);
+
+    const outNode: CanvasNode = {
+      id: uuid(),
+      node_type: 'image',
+      title: candidates.length === 1 ? `${titlePrefix} ${ts}` : `${titlePrefix} ${index + 1} ${ts}`,
+      position: {
+        x: basePosition.x,
+        y: basePosition.y + index * (outSize.height + GAP_Y),
+      },
+      size: outSize,
+      file_path: relPath,
+      meta: buildMultimodalNodeMeta(model, { display_mode: 'file' }),
+    };
+    const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
+    outputNodes.push(outNode);
+    outputEdges.push(outEdge);
+    outputContents.push({
+      type: 'image',
+      title: outNode.title,
+      localPath: fileUri.fsPath,
+      base64: bytes.toString('base64'),
+      mediaType: (mimeType.includes('jpeg') ? 'image/jpeg' : mimeType.includes('webp') ? 'image/webp' : 'image/png') as 'image/png' | 'image/jpeg' | 'image/webp',
+    });
+  }
+
+  if (activeDoc) {
+    activeDoc.data.nodes.push(...outputNodes);
+    activeDoc.data.edges.push(...outputEdges);
+    CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+    await writeCanvas(canvasUri, activeDoc.data);
+  }
+
+  return { outputNodes, outputEdges, outputContents };
+}
+
 // ── Image editing ──────────────────────────────────────────────────────────
 
 async function runImageEdit(
@@ -1225,28 +1620,53 @@ async function runImageEdit(
     return { success: false, runId, errorMessage: msg };
   }
 
-  const imageContent = contents.find(c => c.type === 'image');
-  if (!imageContent || imageContent.type !== 'image') {
-    const msg = '图像编辑需要连接图像节点作为参考图。';
+  const imageContents = contents.filter((c): c is AIContent & { type: 'image' } => c.type === 'image');
+  if (imageContents.length === 0) {
+    const msg = _toolDef.id === 'image-fusion'
+      ? '多图融合需要至少连接 2 个图像节点。'
+      : '图像编辑需要连接图像节点作为参考图。';
     reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
-  const instruction = ((params['instruction'] as string) ?? '').trim();
-  const textFromContents = contents.filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-  const prompt = instruction || textFromContents;
+  if (_toolDef.id === 'image-fusion' && imageContents.length < 2) {
+    const msg = '多图融合至少需要连接 2 个图像节点。';
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+
+  const textPrompt = contents
+    .filter(c => c.type === 'text')
+    .map(c => c.text ?? '')
+    .join('\n\n')
+    .trim();
+  const prompt = _toolDef.id === 'image-fusion'
+    ? ((params['instruction'] as string) ?? '').trim()
+    : textPrompt;
 
   if (!prompt) {
-    const msg = '图像编辑需要编辑指令，请在「编辑指令」参数中输入，或连接笔记节点。';
+    const msg = _toolDef.id === 'image-fusion'
+      ? '多图融合需要融合指令，请在节点下方填写。'
+      : '图像编辑需要连接文本节点作为编辑提示词。';
     reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
   }
 
-  const model = (params['model'] as string) || settingsDefaultModel || 'gemini-3.1-flash-image-preview';
+  const model = (params['model'] as string) || settingsDefaultModel || (_toolDef.id === 'image-fusion' ? 'doubao-seedream-4-0-250828' : 'gemini-3.1-flash-image-preview');
   const aspectRatio = (params['aspect_ratio'] as string) ?? '1:1';
+  const size = normalizeDoubaoSize(params['size'] as string | undefined);
+  const watermark = Boolean(params['watermark'] ?? false);
 
   const controller = new AbortController();
   activeRuns.set(runId, controller);
+
+  if (_toolDef.id === 'image-fusion') {
+    return runDoubaoImageFusion(fnNode, prompt, model, imageContents, size, watermark, canvasUri, webview, runId, apiKey, controller);
+  }
+
+  if (isDoubaoSeedreamModel(model)) {
+    return runImageEditDoubao(fnNode, prompt, model, imageContents[0], size, watermark, canvasUri, webview, runId, apiKey, controller);
+  }
 
   try {
     const endpoint = `https://aihubmix.com/gemini/v1beta/models/${encodeURIComponent(model)}:generateContent`;
@@ -1260,7 +1680,7 @@ async function runImageEdit(
         contents: [{
           role: 'user',
           parts: [
-            { inlineData: { mimeType: imageContent.mediaType, data: imageContent.base64 } },
+            { inlineData: { mimeType: imageContents[0].mediaType, data: imageContents[0].base64 } },
             { text: prompt },
           ],
         }],
@@ -1302,18 +1722,18 @@ async function runImageEdit(
     await vscode.workspace.fs.writeFile(fileUri, imageBytes);
     const relPath = toRelPath(fileUri.fsPath, canvasUri);
 
+    const activeDocIE = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     const outNode: CanvasNode = {
       id: uuid(),
       node_type: 'image',
       title: `Edited Image ${ts}`,
-      position: { x: fnNode.position.x + fnNode.size.width + 60, y: fnNode.position.y },
+      position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 200 }, activeDocIE?.data),
       size: { width: 240, height: 200 },
       file_path: relPath,
-      meta: { display_mode: 'file' },
+      meta: buildMultimodalNodeMeta(model, { display_mode: 'file' }),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
-    const activeDocIE = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
     if (activeDocIE) {
       activeDocIE.data.nodes.push(outNode);
       activeDocIE.data.edges.push(outEdge);
@@ -1334,6 +1754,147 @@ async function runImageEdit(
       mediaType: mimeType as 'image/png' | 'image/jpeg',
     };
     return { success: true, runId, outputContent, outputNode: outNode };
+  } catch (e: unknown) {
+    activeRuns.delete(runId);
+    if (e instanceof Error && e.name === 'AbortError') {
+      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+      return { success: false, runId, errorMessage: 'Cancelled' };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+}
+
+async function runImageEditDoubao(
+  fnNode: CanvasNode,
+  prompt: string,
+  model: string,
+  imageContent: AIContent & { type: 'image' },
+  size: string,
+  watermark: boolean,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+  runId: string,
+  apiKey: string,
+  controller: AbortController,
+): Promise<FunctionRunResult> {
+  const nodeId = fnNode.id;
+  try {
+    const response = await fetch(buildDoubaoPredictionsEndpoint(model), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        input: {
+          image: asImageDataUrl(imageContent),
+          prompt,
+          size,
+          sequential_image_generation: 'disabled',
+          stream: false,
+          response_format: 'url',
+          watermark,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Doubao Image Edit API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as unknown;
+    const { outputNodes, outputEdges, outputContents } = await persistGeneratedImages(
+      nodeId,
+      fnNode,
+      canvasUri,
+      'image-edit',
+      'Edited Image',
+      extractPredictionImageCandidates(data),
+      model,
+    );
+
+    activeRuns.delete(runId);
+    for (let index = 0; index < outputNodes.length; index++) {
+      webview.postMessage({ type: 'aiDone', runId, node: outputNodes[index], edge: outputEdges[index] });
+    }
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'done' });
+    setTimeout(() => webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' }), 3000);
+    return { success: true, runId, outputContent: outputContents[0], outputNode: outputNodes[0] };
+  } catch (e: unknown) {
+    activeRuns.delete(runId);
+    if (e instanceof Error && e.name === 'AbortError') {
+      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+      return { success: false, runId, errorMessage: 'Cancelled' };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+}
+
+async function runDoubaoImageFusion(
+  fnNode: CanvasNode,
+  prompt: string,
+  model: string,
+  imageContents: Array<AIContent & { type: 'image' }>,
+  size: string,
+  watermark: boolean,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+  runId: string,
+  apiKey: string,
+  controller: AbortController,
+): Promise<FunctionRunResult> {
+  const nodeId = fnNode.id;
+  try {
+    const response = await fetch(buildDoubaoPredictionsEndpoint(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        input: {
+          model,
+          prompt,
+          image: imageContents.map(asImageDataUrl),
+          sequential_image_generation: 'disabled',
+          size,
+          stream: false,
+          response_format: 'url',
+          watermark,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Doubao Image Fusion API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as unknown;
+    const { outputNodes, outputEdges, outputContents } = await persistGeneratedImages(
+      nodeId,
+      fnNode,
+      canvasUri,
+      'image-fusion',
+      'Fusion Image',
+      extractPredictionImageCandidates(data),
+      model,
+    );
+
+    activeRuns.delete(runId);
+    for (let index = 0; index < outputNodes.length; index++) {
+      webview.postMessage({ type: 'aiDone', runId, node: outputNodes[index], edge: outputEdges[index] });
+    }
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'done' });
+    setTimeout(() => webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' }), 3000);
+    return { success: true, runId, outputContent: outputContents[0], outputNode: outputNodes[0] };
   } catch (e: unknown) {
     activeRuns.delete(runId);
     if (e instanceof Error && e.name === 'AbortError') {

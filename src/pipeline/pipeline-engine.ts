@@ -16,54 +16,32 @@ export interface PipelinePlan {
   dependencyNodeIdsByNode: Record<string, string[]>;
 }
 
-/**
- * Build a pipeline execution plan starting from the trigger node.
- *
- * 1. BFS downstream from triggerNodeId following pipeline_flow edges to function nodes
- * 2. For every pipeline function node, build the same function execution plan used
- *    by single-node execution (input expansion / hub semantics / edge typing)
- * 3. Topologically sort by pipeline_flow dependencies into layers for parallel execution
- */
-export function buildPipelinePlan(
-  triggerNodeId: string,
+export function buildPipelinePlanForNodeSet(
+  pipelineNodeIdsInput: string[],
   allNodes: CanvasNode[],
   allEdges: CanvasEdge[],
   allNodeGroups?: NodeGroup[],
 ): PipelinePlan | { error: string } {
   const nodeMap = new Map(allNodes.map(n => [n.id, n]));
-  const triggerNode = nodeMap.get(triggerNodeId);
-  if (!triggerNode) {
-    return { error: '找不到触发节点' };
-  }
-  if (!isFunctionNode(triggerNode)) {
-    return { error: 'Pipeline 只能从功能节点启动' };
+  const pipelineNodeIds = Array.from(new Set(pipelineNodeIdsInput));
+  if (pipelineNodeIds.length === 0) {
+    return { error: '没有可执行的管道节点' };
   }
 
-  // Step 1: BFS downstream from trigger, following pipeline_flow edges to function nodes
-  const downstream = new Set<string>();
-  const queue = [triggerNodeId];
-  downstream.add(triggerNodeId);
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const edge of allEdges) {
-      if (edge.source !== current) { continue; }
-      if (edge.edge_type !== 'pipeline_flow') { continue; }
-      const targetNode = nodeMap.get(edge.target);
-      if (!targetNode || targetNode.node_type !== 'function') { continue; }
-      if (downstream.has(edge.target)) { continue; }
-      downstream.add(edge.target);
-      queue.push(edge.target);
+  for (const nodeId of pipelineNodeIds) {
+    const node = nodeMap.get(nodeId);
+    if (!node) {
+      return { error: `找不到节点：${nodeId}` };
+    }
+    if (!isFunctionNode(node)) {
+      return { error: `节点「${node.title}」不是功能节点，无法进入执行计划` };
     }
   }
 
-  const pipelineNodeIds = Array.from(downstream);
-
-  // Step 2: Build the per-node execution plan with the same resolver used by
-  // single-node / batch execution. This keeps hub expansion and edge semantics
-  // on one shared source of truth.
   const nodeExecutionPlans: Record<string, FunctionExecutionPlan> = {};
   const dependencyNodeIdsByNode: Record<string, string[]> = {};
+  const pipelineNodeSet = new Set(pipelineNodeIds);
+
   for (const nodeId of pipelineNodeIds) {
     const nodePlan = buildFunctionExecutionPlan(nodeId, {
       nodes: allNodes,
@@ -74,16 +52,16 @@ export function buildPipelinePlan(
       return { error: `节点「${nodeMap.get(nodeId)?.title ?? nodeId}」执行计划构建失败：${nodePlan.error}` };
     }
     nodeExecutionPlans[nodeId] = nodePlan;
-    dependencyNodeIdsByNode[nodeId] = nodePlan.directPipelineSourceIds.filter(sourceId => downstream.has(sourceId));
+    dependencyNodeIdsByNode[nodeId] = nodePlan.directPipelineSourceIds.filter(sourceId => pipelineNodeSet.has(sourceId));
   }
 
-  // Step 3: Collect only the explicit pipeline dependency edges inside the subgraph
   const pipelineEdges = allEdges.filter(
-    e => downstream.has(e.source) && downstream.has(e.target) &&
-         e.edge_type === 'pipeline_flow'
+    edge =>
+      pipelineNodeSet.has(edge.source) &&
+      pipelineNodeSet.has(edge.target) &&
+      edge.edge_type === 'pipeline_flow'
   );
 
-  // Step 4: Kahn's algorithm — topological sort into layers
   const inDegree = new Map<string, number>();
   const adj = new Map<string, string[]>();
   for (const id of pipelineNodeIds) {
@@ -124,9 +102,7 @@ export function buildPipelinePlan(
     return { error: '管道中存在循环依赖' };
   }
 
-  // Flatten layers into ordered node IDs
-  const orderedIds = layers.flatMap(l => l.nodeIds);
-
+  const orderedIds = layers.flatMap(layer => layer.nodeIds);
   return {
     layers,
     pipelineNodeIds: orderedIds,
@@ -134,4 +110,47 @@ export function buildPipelinePlan(
     nodeExecutionPlans,
     dependencyNodeIdsByNode,
   };
+}
+
+/**
+ * Build a pipeline execution plan starting from the trigger node.
+ *
+ * 1. BFS downstream from triggerNodeId following pipeline_flow edges to function nodes
+ * 2. For every pipeline function node, build the same function execution plan used
+ *    by single-node execution (input expansion / hub semantics / edge typing)
+ * 3. Topologically sort by pipeline_flow dependencies into layers for parallel execution
+ */
+export function buildPipelinePlan(
+  triggerNodeId: string,
+  allNodes: CanvasNode[],
+  allEdges: CanvasEdge[],
+  allNodeGroups?: NodeGroup[],
+): PipelinePlan | { error: string } {
+  const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+  const triggerNode = nodeMap.get(triggerNodeId);
+  if (!triggerNode) {
+    return { error: '找不到触发节点' };
+  }
+  if (!isFunctionNode(triggerNode)) {
+    return { error: 'Pipeline 只能从功能节点启动' };
+  }
+
+  const downstream = new Set<string>();
+  const queue = [triggerNodeId];
+  downstream.add(triggerNodeId);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const edge of allEdges) {
+      if (edge.source !== current) { continue; }
+      if (edge.edge_type !== 'pipeline_flow') { continue; }
+      const targetNode = nodeMap.get(edge.target);
+      if (!targetNode || targetNode.node_type !== 'function') { continue; }
+      if (downstream.has(edge.target)) { continue; }
+      downstream.add(edge.target);
+      queue.push(edge.target);
+    }
+  }
+
+  return buildPipelinePlanForNodeSet(Array.from(downstream), allNodes, allEdges, allNodeGroups);
 }

@@ -3,6 +3,7 @@ import {
   type CanvasFile,
   type CanvasNode,
   type NodeGroup,
+  isBlueprintInputPlaceholderNode,
   isGroupHubNode,
   isHubEdgeType,
 } from './canvas-model';
@@ -28,6 +29,27 @@ export function expandHubSourceNodes(
 
   const node = canvas.nodes.find(item => item.id === sourceNodeId);
   if (!node) { return []; }
+  if (isBlueprintInputPlaceholderNode(node)) {
+    const incomingEdges = canvas.edges.filter(edge =>
+      edge.target === node.id && edge.edge_type === 'data_flow'
+    );
+    const orderedSourceIds = [
+      ...(node.meta?.input_order ?? []),
+      ...incomingEdges.map(edge => edge.source),
+    ].filter((id, index, list) => list.indexOf(id) === index && id !== node.id);
+
+    const expanded: CanvasNode[] = [];
+    const seenLeafIds = new Set<string>();
+    for (const boundSourceId of orderedSourceIds) {
+      const childNodes = expandHubSourceNodes(boundSourceId, canvas, visited);
+      for (const childNode of childNodes) {
+        if (seenLeafIds.has(childNode.id)) { continue; }
+        seenLeafIds.add(childNode.id);
+        expanded.push(childNode);
+      }
+    }
+    return expanded;
+  }
   if (!isGroupHubNode(node)) { return [node]; }
 
   const group = getGroupByHubNodeId(canvas.nodeGroups, node.id);

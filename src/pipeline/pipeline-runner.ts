@@ -88,18 +88,29 @@ export async function runPipeline(
   canvasUri: vscode.Uri,
   webview: vscode.Webview,
 ): Promise<void> {
-  let canvas = executionCanvas;
-  const triggerNode = canvas.nodes.find(node => node.id === triggerNodeId);
+  const triggerNode = executionCanvas.nodes.find(node => node.id === triggerNodeId);
   if (!isFunctionNode(triggerNode)) {
     webview.postMessage({ type: 'error', message: 'Pipeline 只能从功能节点启动。' });
     return;
   }
 
-  const plan = buildPipelinePlan(triggerNodeId, canvas.nodes, canvas.edges, canvas.nodeGroups);
+  const plan = buildPipelinePlan(triggerNodeId, executionCanvas.nodes, executionCanvas.edges, executionCanvas.nodeGroups);
   if ('error' in plan) {
     webview.postMessage({ type: 'error', message: `Pipeline 构建失败: ${plan.error}` });
     return;
   }
+
+  await runPipelinePlan(triggerNodeId, plan, executionCanvas, canvasUri, webview);
+}
+
+export async function runPipelinePlan(
+  triggerNodeId: string,
+  plan: PipelinePlan,
+  executionCanvas: CanvasFile,
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+): Promise<void> {
+  let canvas = executionCanvas;
 
   if (plan.layers.length === 0) {
     webview.postMessage({ type: 'error', message: '没有可执行的管道节点' });

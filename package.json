@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.0-alpha.22",
+  "version": "2.1.0-alpha.34",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -245,6 +245,16 @@
           "type": "string",
           "default": "",
           "description": "Default model for image editing (empty = use tool default: FLUX.1-Kontext-pro)"
+        },
+        "researchSpace.ai.aiHubMixImageFusionModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for image fusion / multi-image composition (empty = use tool default: doubao-seedream-4-0-250828)"
+        },
+        "researchSpace.ai.aiHubMixImageGroupModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model for grouped image output (empty = use tool default: doubao-seedream-4-0-250828)"
         },
         "researchSpace.ai.aiHubMixTtsModel": {
           "type": "string",

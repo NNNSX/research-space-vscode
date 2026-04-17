@@ -35,7 +35,7 @@ import { BoardOverlays } from './BoardOverlay';
 import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
 import { PipelineToolbar } from '../pipeline/PipelineToolbar';
-import { isDataNode, isGroupHubNode } from '../../../../src/core/canvas-model';
+import { isBlueprintInputPlaceholderNode, isDataNode, isGroupHubNode } from '../../../../src/core/canvas-model';
 import type { AiTool } from '../../../../src/core/canvas-model';
 import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
@@ -180,6 +180,34 @@ export function Canvas() {
           );
           if (alreadyBound) { return false; }
         }
+        return true;
+      }
+
+      if (isBlueprintInputPlaceholderNode(targetNode)) {
+        if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) { return false; }
+        if (
+          sourceNode.meta?.blueprint_instance_id &&
+          sourceNode.meta.blueprint_instance_id === targetNode.meta?.blueprint_instance_id
+        ) {
+          return false;
+        }
+        const accepts = targetNode.meta?.blueprint_placeholder_accepts ?? [];
+        if (isDataNode(sourceNode) && accepts.length > 0 && !accepts.includes(sourceNode.node_type)) {
+          return false;
+        }
+        if (!targetNode.meta?.blueprint_placeholder_allow_multiple) {
+          const alreadyBound = state.canvasFile.edges.some(edge =>
+            edge.target === connection.target &&
+            edge.edge_type === 'data_flow'
+          );
+          if (alreadyBound) { return false; }
+        }
+        const duplicateBinding = state.canvasFile.edges.some(edge =>
+          edge.source === connection.source &&
+          edge.target === connection.target &&
+          edge.edge_type === 'data_flow'
+        );
+        if (duplicateBinding) { return false; }
         return true;
       }
 

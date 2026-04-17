@@ -103,6 +103,7 @@ async function addToCanvas(
             unreadable_hint: unreadableHint,
             csv_rows: csvRows,
             csv_cols: csvCols,
+            staging_origin: 'workspace_file',
           },
         };
 

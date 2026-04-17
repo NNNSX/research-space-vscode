@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isCanvasFile, isFunctionNode } from '../core/canvas-model';
+import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isBlueprintInstanceContainerNode, isCanvasFile, isFunctionNode } from '../core/canvas-model';
 import { readCanvas, writeCanvas, setDataNodeRegistry, ensureAiOutputDir, toRelPath } from '../core/storage';
 import { runFunctionNode, runBatchFunctionNode, cancelRun, cancelRunByNodeId, setToolRegistry } from '../ai/function-runner';
 import { runPipeline, pausePipeline, resumePipeline, cancelPipeline } from '../pipeline/pipeline-runner';
@@ -11,6 +11,7 @@ import { DataNodeRegistry } from '../core/data-node-registry';
 import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
 import { extractPreviewWithMeta } from '../core/content-extractor';
 import { listBlueprintDefinitions, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
+import { runBlueprintInstance } from '../blueprint/blueprint-runner';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -452,21 +453,20 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         });
         if (inputTitle === undefined) { break; }  // user cancelled
         const title = inputTitle.trim() || '新建笔记';
-        const notesDir = await ensureNotesDir(canvasDir);
-        const { uri: noteUri, display: displayTitle } = await uniqueFile(notesDir, title, '.md');
-        await vscode.workspace.fs.writeFile(noteUri, Buffer.from(`# ${displayTitle}\n`, 'utf-8'));
-
-        const { toRelPath } = await import('../core/storage');
         const { DEFAULT_SIZES } = await import('../core/canvas-model');
-        const relPath = toRelPath(noteUri.fsPath, document.uri);
+        const initialContent = `# ${title}\n`;
         const newNode = {
           id: require('uuid').v4(),
           node_type: 'note' as const,
-          title: displayTitle,
+          title,
           position: { x: 0, y: 0 },
           size: DEFAULT_SIZES['note'],
-          file_path: relPath,
-          meta: { content_preview: `# ${displayTitle}\n` },
+          meta: {
+            content_preview: initialContent,
+            staging_origin: 'draft' as const,
+            staging_materialize_kind: 'note' as const,
+            staging_initial_content: initialContent,
+          },
         };
         webview.postMessage({ type: 'stageNodes', nodes: [newNode] });
         break;
@@ -480,23 +480,23 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         });
         if (inputTitle === undefined) { break; }  // user cancelled
         const title = inputTitle.trim() || '实验记录';
-        const notesDir = await ensureNotesDir(canvasDir);
-        const { uri: fileUri, display: displayTitle } = await uniqueFile(notesDir, title, '.md');
         const date = new Date().toISOString().slice(0, 10);
-        const content = `# ${displayTitle}\n\n- **状态**: 进行中\n- **日期**: ${date}\n- **参数**: \n- **结果**: \n`;
-        await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf-8'));
-
-        const { toRelPath } = await import('../core/storage');
+        const content = `# ${title}\n\n- **状态**: 进行中\n- **日期**: ${date}\n- **参数**: \n- **结果**: \n`;
         const { DEFAULT_SIZES } = await import('../core/canvas-model');
-        const relPath = toRelPath(fileUri.fsPath, document.uri);
         const newNode = {
           id: require('uuid').v4(),
           node_type: 'experiment_log' as const,
-          title: displayTitle,
+          title,
           position: { x: 0, y: 0 },
           size: DEFAULT_SIZES['experiment_log'],
-          file_path: relPath,
-          meta: { experiment_status: 'running', experiment_date: date, content_preview: content },
+          meta: {
+            experiment_status: 'running',
+            experiment_date: date,
+            content_preview: content,
+            staging_origin: 'draft' as const,
+            staging_materialize_kind: 'experiment_log' as const,
+            staging_initial_content: content,
+          },
         };
         webview.postMessage({ type: 'stageNodes', nodes: [newNode] });
         break;
@@ -510,24 +510,82 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         });
         if (inputTitle === undefined) { break; }  // user cancelled
         const title = inputTitle.trim() || '任务清单';
-        const notesDir = await ensureNotesDir(canvasDir);
-        const { uri: fileUri, display: displayTitle } = await uniqueFile(notesDir, title, '.md');
-        const content = `# ${displayTitle}\n\n*暂无任务*\n`;
-        await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf-8'));
-
-        const { toRelPath } = await import('../core/storage');
+        const content = `# ${title}\n\n*暂无任务*\n`;
         const { DEFAULT_SIZES } = await import('../core/canvas-model');
-        const relPath = toRelPath(fileUri.fsPath, document.uri);
         const newNode = {
           id: require('uuid').v4(),
           node_type: 'task' as const,
-          title: displayTitle,
+          title,
           position: { x: 0, y: 0 },
           size: DEFAULT_SIZES['task'],
-          file_path: relPath,
-          meta: { task_items: [], content_preview: content },
+          meta: {
+            task_items: [],
+            content_preview: content,
+            staging_origin: 'draft' as const,
+            staging_materialize_kind: 'task' as const,
+            staging_initial_content: content,
+          },
         };
         webview.postMessage({ type: 'stageNodes', nodes: [newNode] });
+        break;
+      }
+
+      case 'materializeStagingNode': {
+        const sourceNodeId = msg['sourceNodeId'] as string;
+        const nodeType = msg['nodeType'] as 'note' | 'experiment_log' | 'task';
+        const rawTitle = msg['title'] as string;
+        const content = msg['content'] as string;
+        const position = msg['position'] as { x: number; y: number } | undefined;
+        if (!sourceNodeId || !nodeType || !rawTitle || !position) { break; }
+        try {
+          const title = rawTitle.trim() || (
+            nodeType === 'note' ? '新建笔记' :
+            nodeType === 'experiment_log' ? '实验记录' :
+            '任务清单'
+          );
+          const notesDir = await ensureNotesDir(canvasDir);
+          const { uri: fileUri, display: displayTitle } = await uniqueFile(notesDir, title, '.md');
+          await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content || `# ${displayTitle}\n`, 'utf-8'));
+
+          const { toRelPath } = await import('../core/storage');
+          const { extractPreviewWithMeta } = await import('../core/content-extractor');
+          const relPath = toRelPath(fileUri.fsPath, document.uri);
+          const previewData = await extractPreviewWithMeta(fileUri, nodeType);
+          const stagedNode = document.data.stagingNodes?.find(node => node.id === sourceNodeId);
+          const baseMeta = { ...(stagedNode?.meta ?? {}) };
+          delete baseMeta.staging_origin;
+          delete baseMeta.staging_materialize_kind;
+          delete baseMeta.staging_initial_content;
+
+          const newNode: CanvasNode = {
+            id: sourceNodeId,
+            node_type: nodeType,
+            title: displayTitle,
+            position: { x: 0, y: 0 },
+            size: stagedNode?.size ?? ({
+              note: { width: 280, height: 160 },
+              experiment_log: { width: 320, height: 300 },
+              task: { width: 300, height: 240 },
+            }[nodeType]),
+            file_path: relPath,
+            meta: {
+              ...baseMeta,
+              content_preview: previewData.preview || content,
+              file_missing: false,
+              ai_readable_chars: previewData.ai_readable_chars,
+              ai_readable_pages: previewData.ai_readable_pages,
+              has_unreadable_content: previewData.has_unreadable_content || undefined,
+              unreadable_hint: previewData.unreadable_hint,
+              csv_rows: previewData.csv_rows,
+              csv_cols: previewData.csv_cols,
+            },
+          };
+
+          webview.postMessage({ type: 'stagingNodeMaterialized', sourceNodeId, node: newNode, position });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'stagingNodeMaterializeFailed', sourceNodeId, message });
+        }
         break;
       }
 
@@ -765,6 +823,25 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         const { canvas, targetNode } = await this._prepareExecutionContext(msg, document, 'triggerNodeId');
         runPipeline(targetNode.id, canvas, document.uri, webview).catch(e => {
           webview.postMessage({ type: 'error', message: `Pipeline 执行失败: ${String(e)}` });
+        });
+        break;
+      }
+
+      case 'runBlueprint': {
+        const nodeId = msg['nodeId'] as string;
+        if (!nodeId) { break; }
+        const canvas = await this._prepareExecutionCanvas(msg, document);
+        const targetNode = canvas.nodes.find(node => node.id === nodeId);
+        if (!targetNode) {
+          webview.postMessage({ type: 'error', message: '找不到蓝图实例容器。' });
+          break;
+        }
+        if (!isBlueprintInstanceContainerNode(targetNode)) {
+          webview.postMessage({ type: 'error', message: '蓝图运行入口只能绑定到正式蓝图实例容器。' });
+          break;
+        }
+        runBlueprintInstance(targetNode.id, canvas, document.uri, webview).catch(e => {
+          webview.postMessage({ type: 'error', message: `蓝图执行失败: ${String(e)}` });
         });
         break;
       }
@@ -1179,6 +1256,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       aiHubMixApiKey:           ai.get<string>('aiHubMixApiKey', ''),
       aiHubMixImageGenModel:    ai.get<string>('aiHubMixImageGenModel', ''),
       aiHubMixImageEditModel:   ai.get<string>('aiHubMixImageEditModel', ''),
+      aiHubMixImageFusionModel: ai.get<string>('aiHubMixImageFusionModel', ''),
+      aiHubMixImageGroupModel:  ai.get<string>('aiHubMixImageGroupModel', ''),
       aiHubMixTtsModel:         ai.get<string>('aiHubMixTtsModel', ''),
       aiHubMixSttModel:         ai.get<string>('aiHubMixSttModel', ''),
       aiHubMixVideoGenModel:    ai.get<string>('aiHubMixVideoGenModel', ''),
@@ -1203,6 +1282,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'aiHubMixApiKey':          await ai.update('aiHubMixApiKey', value, target);          break;
       case 'aiHubMixImageGenModel':   await ai.update('aiHubMixImageGenModel', value, target);   break;
       case 'aiHubMixImageEditModel':  await ai.update('aiHubMixImageEditModel', value, target);  break;
+      case 'aiHubMixImageFusionModel': await ai.update('aiHubMixImageFusionModel', value, target); break;
+      case 'aiHubMixImageGroupModel':  await ai.update('aiHubMixImageGroupModel', value, target);  break;
       case 'aiHubMixTtsModel':        await ai.update('aiHubMixTtsModel', value, target);        break;
       case 'aiHubMixSttModel':        await ai.update('aiHubMixSttModel', value, target);        break;
       case 'aiHubMixVideoGenModel':   await ai.update('aiHubMixVideoGenModel', value, target);   break;

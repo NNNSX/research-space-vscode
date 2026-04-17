@@ -1,5 +1,6 @@
 import type { BlueprintDraft, BlueprintDefinition, BlueprintSlotDef } from '../blueprint/blueprint-types';
 import type { BlueprintRegistryEntry } from '../blueprint/blueprint-registry';
+import type { BlueprintReplacementMode } from '../blueprint/blueprint-types';
 
 // ── AI Model info ────────────────────────────────────────────────────────────
 export interface ModelInfo {
@@ -31,6 +32,8 @@ export interface SettingsSnapshot {
   aiHubMixApiKey?: string;          // AIHubMix API Key for multimodal tools (v0.5.0)
   aiHubMixImageGenModel?: string;   // Default model for image generation (v0.6.2)
   aiHubMixImageEditModel?: string;  // Default model for image editing (v0.6.2)
+  aiHubMixImageFusionModel?: string; // Default model for image fusion (v2.1.0-alpha.29)
+  aiHubMixImageGroupModel?: string;  // Default model for grouped image output (v2.1.0-alpha.29)
   aiHubMixTtsModel?: string;        // Default model for TTS (v0.6.2)
   aiHubMixSttModel?: string;        // Default model for STT (v0.6.2)
   aiHubMixVideoGenModel?: string;   // Default model for video generation (v0.6.2)
@@ -99,6 +102,11 @@ export interface NodeMeta {
   csv_rows?: number;                 // CSV/TSV row count (excluding header)
   csv_cols?: number;                 // CSV/TSV column count
 
+  // Staging metadata
+  staging_origin?: 'workspace_file' | 'draft';
+  staging_materialize_kind?: 'note' | 'experiment_log' | 'task';
+  staging_initial_content?: string;
+
   // Group hub metadata
   hub_group_id?: string;             // visual node-group container id
 
@@ -114,8 +122,17 @@ export interface NodeMeta {
   blueprint_input_slot_defs?: BlueprintSlotDef[];
   blueprint_output_slot_defs?: BlueprintSlotDef[];
   blueprint_instance_id?: string;
+  blueprint_bound_instance_id?: string;
+  blueprint_bound_slot_id?: string;
+  blueprint_bound_slot_title?: string;
+  blueprint_bound_slot_kind?: 'input' | 'output';
   blueprint_placeholder_kind?: 'input' | 'output';
   blueprint_placeholder_slot_id?: string;
+  blueprint_placeholder_title?: string;
+  blueprint_placeholder_accepts?: Array<Exclude<NodeType, 'function' | 'group_hub'>>;
+  blueprint_placeholder_required?: boolean;
+  blueprint_placeholder_allow_multiple?: boolean;
+  blueprint_placeholder_replacement_mode?: BlueprintReplacementMode;
   blueprint_placeholder_hint?: string;
 }
 
@@ -302,6 +319,22 @@ export function isFunctionNode(node: CanvasNode | undefined | null): node is Can
   return !!node && node.node_type === 'function';
 }
 
+export function isBlueprintPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && !!node.meta?.blueprint_placeholder_kind;
+}
+
+export function isBlueprintInputPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && node.meta?.blueprint_placeholder_kind === 'input';
+}
+
+export function isBlueprintOutputPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && node.meta?.blueprint_placeholder_kind === 'output';
+}
+
+export function isBlueprintInstanceContainerNode(node: CanvasNode | undefined | null): node is CanvasNode {
+  return !!node && node.node_type === 'blueprint' && !!node.meta?.blueprint_instance_id;
+}
+
 /**
  * Group hubs are first-class canvas nodes. Their rendered body may be visually
  * transparent so grouped children stay interactive, but their graph semantics
@@ -336,6 +369,14 @@ export type WebviewMessage =
   | { type: 'newNote'; title: string }
   | { type: 'newExperimentLog'; title: string }
   | { type: 'newTask'; title: string }
+  | {
+      type: 'materializeStagingNode';
+      sourceNodeId: string;
+      nodeType: 'note' | 'experiment_log' | 'task';
+      title: string;
+      position: { x: number; y: number };
+      content: string;
+    }
   | { type: 'syncDataNodeFile'; nodeId: string; content: string }
   | { type: 'deleteNote'; filePath: string }
   | { type: 'renameNode'; nodeId: string; newTitle: string }
@@ -349,6 +390,7 @@ export type WebviewMessage =
   | { type: 'requestFileContent'; filePath: string; requestId: string }
   | { type: 'previewFile'; filePath: string }
   | { type: 'runPipeline'; triggerNodeId: string; canvas?: CanvasFile }
+  | { type: 'runBlueprint'; nodeId: string; canvas?: CanvasFile }
   | { type: 'createBlueprintDraft'; selectedNodeIds: string[]; canvas?: CanvasFile }
   | { type: 'saveBlueprintDraft'; draft: BlueprintDefinition }
   | { type: 'requestBlueprintIndex' }
@@ -398,6 +440,8 @@ export type ExtensionMessage =
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
   | { type: 'outputHistory'; nodeId: string; entries: OutputHistoryEntry[] }
   | { type: 'fileContent'; requestId: string; content: string; language?: string }
+  | { type: 'stagingNodeMaterialized'; sourceNodeId: string; node: CanvasNode; position: { x: number; y: number } }
+  | { type: 'stagingNodeMaterializeFailed'; sourceNodeId: string; message: string }
   | { type: 'blueprintDraftCreated'; draft: BlueprintDraft }
   | { type: 'blueprintDraftSaved'; entry: BlueprintRegistryEntry }
   | { type: 'blueprintIndex'; entries: BlueprintRegistryEntry[] }

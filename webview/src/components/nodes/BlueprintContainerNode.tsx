@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { CanvasNode } from '../../../../src/core/canvas-model';
 import type { BlueprintSlotDef } from '../../../../src/blueprint/blueprint-types';
+import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
 import { closeAllCanvasContextMenus } from '../../utils/context-menu';
@@ -20,9 +21,12 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
   const blueprint = data as CanvasNode;
   const accent = blueprint.meta?.blueprint_color ?? '#2f7d68';
   const edges = useCanvasStore(s => s.edges);
+  const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
+  const pipelineState = useCanvasStore(s => s.pipelineState);
   const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
   const inputSlots = blueprint.meta?.blueprint_input_slot_defs ?? [];
   const outputSlots = blueprint.meta?.blueprint_output_slot_defs ?? [];
+  const instanceId = blueprint.meta?.blueprint_instance_id;
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -34,14 +38,80 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
     for (const slot of inputSlots) {
       bindings.set(slot.id, 0);
     }
+    if (!instanceId) {
+      for (const edge of edges) {
+        if (edge.target !== id || edge.data?.edge_type !== 'data_flow') { continue; }
+        const slotId = edge.data?.role ?? edge.targetHandle;
+        if (!slotId) { continue; }
+        bindings.set(slotId, (bindings.get(slotId) ?? 0) + 1);
+      }
+      return bindings;
+    }
+
+    const replacedBindings = canvasNodes.filter(node =>
+      node.meta?.blueprint_bound_instance_id === instanceId &&
+      node.meta?.blueprint_bound_slot_kind !== 'output' &&
+      !!node.meta?.blueprint_bound_slot_id
+    );
+    for (const node of replacedBindings) {
+      const slotId = node.meta?.blueprint_bound_slot_id;
+      if (!slotId) { continue; }
+      bindings.set(slotId, (bindings.get(slotId) ?? 0) + 1);
+    }
+
+    const placeholderNodes = canvasNodes.filter(node =>
+      node.meta?.blueprint_instance_id === instanceId &&
+      node.meta?.blueprint_placeholder_kind === 'input' &&
+      !!node.meta?.blueprint_placeholder_slot_id
+    );
+    const placeholderIdToSlotId = new Map(
+      placeholderNodes.map(node => [node.id, node.meta?.blueprint_placeholder_slot_id ?? ''])
+    );
     for (const edge of edges) {
-      if (edge.target !== id || edge.data?.edge_type !== 'data_flow') { continue; }
-      const slotId = edge.data?.role ?? edge.targetHandle;
+      if (edge.data?.edge_type !== 'data_flow') { continue; }
+      const slotId = placeholderIdToSlotId.get(edge.target);
       if (!slotId) { continue; }
       bindings.set(slotId, (bindings.get(slotId) ?? 0) + 1);
     }
     return bindings;
-  }, [edges, id, inputSlots]);
+  }, [canvasNodes, edges, id, inputSlots, instanceId]);
+
+  const instanceChildren = useMemo(() => {
+    if (!instanceId) { return []; }
+    return canvasNodes.filter(node =>
+      node.id !== blueprint.id &&
+      (
+        node.meta?.blueprint_instance_id === instanceId ||
+        node.meta?.blueprint_bound_instance_id === instanceId
+      )
+    );
+  }, [blueprint.id, canvasNodes, instanceId]);
+  const outputBindings = useMemo(() => {
+    const bindings = new Map<string, number>();
+    for (const slot of outputSlots) {
+      bindings.set(slot.id, 0);
+    }
+    if (!instanceId) { return bindings; }
+    for (const node of canvasNodes) {
+      if (
+        node.meta?.blueprint_bound_instance_id === instanceId &&
+        node.meta?.blueprint_bound_slot_kind === 'output' &&
+        node.meta?.blueprint_bound_slot_id
+      ) {
+        const slotId = node.meta.blueprint_bound_slot_id;
+        bindings.set(slotId, (bindings.get(slotId) ?? 0) + 1);
+      }
+    }
+    return bindings;
+  }, [canvasNodes, instanceId, outputSlots]);
+
+  const internalFunctionNodes = useMemo(() => {
+    if (!instanceId) { return []; }
+    return canvasNodes.filter(node =>
+      node.meta?.blueprint_instance_id === instanceId &&
+      node.node_type === 'function'
+    );
+  }, [canvasNodes, instanceId]);
 
   const inputPortStyle = useMemo(() => buildNodePortStyle(accent, 'in'), [accent]);
   const outputPortStyle = useMemo(() => buildNodePortStyle(accent, 'out'), [accent]);
@@ -51,6 +121,36 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
   const validationColor = missingRequiredCount === 0
     ? accent
     : 'var(--vscode-inputValidation-warningBorder, #b89500)';
+  const instanceFunctionNodeIds = useMemo(() => new Set(internalFunctionNodes.map(node => node.id)), [internalFunctionNodes]);
+  const instancePipelineState = useMemo(() => {
+    if (!pipelineState || instanceFunctionNodeIds.size === 0) { return null; }
+    const matches = Object.keys(pipelineState.nodeStatuses).some(nodeId => instanceFunctionNodeIds.has(nodeId));
+    return matches ? pipelineState : null;
+  }, [instanceFunctionNodeIds, pipelineState]);
+  const instanceDoneCount = instancePipelineState
+    ? internalFunctionNodes.filter(node => instancePipelineState.nodeStatuses[node.id] === 'done').length
+    : internalFunctionNodes.filter(node => node.meta?.fn_status === 'done').length;
+  const instanceFailedCount = instancePipelineState
+    ? internalFunctionNodes.filter(node => instancePipelineState.nodeStatuses[node.id] === 'failed').length
+    : internalFunctionNodes.filter(node => node.meta?.fn_status === 'error').length;
+  const instanceRunning = !!instancePipelineState?.isRunning;
+  const instanceRunBlocked = missingRequiredCount > 0 || internalFunctionNodes.length === 0 || !!pipelineState?.isRunning;
+  const instanceStatusLabel = missingRequiredCount > 0
+    ? '等待输入补齐'
+    : instanceRunning
+      ? `运行中 ${instanceDoneCount}/${internalFunctionNodes.length}`
+      : instanceFailedCount > 0
+        ? `已结束（失败 ${instanceFailedCount}）`
+        : instanceDoneCount > 0
+          ? '最近一次运行完成'
+          : '结构已接通';
+  const runButtonTitle = missingRequiredCount > 0
+    ? '请先补齐必填输入后再运行'
+    : pipelineState?.isRunning
+      ? '当前已有 Pipeline / 蓝图执行中'
+      : internalFunctionNodes.length === 0
+        ? '当前蓝图实例内没有可执行的功能节点'
+        : '运行该蓝图实例内部工作流';
 
   return (
     <div
@@ -81,6 +181,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
       }}
     >
       <div
+        className="rs-blueprint-header"
         style={{
           height: 40,
           display: 'flex',
@@ -153,6 +254,51 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
             <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>输入校验</div>
             <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--vscode-foreground)' }}>{validationLabel}</div>
           </div>
+          <div
+            style={{
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: `1px solid ${withAlpha(accent, 0.26, 'var(--vscode-panel-border)')}`,
+              background: withAlpha(accent, 0.04, 'transparent'),
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 10,
+              alignItems: 'center',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>实例阶段</div>
+              <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700 }}>{instanceStatusLabel}</div>
+            </div>
+            <button
+              type="button"
+              disabled={instanceRunBlocked}
+              title={runButtonTitle}
+              onClick={() => {
+                if (instanceRunBlocked) { return; }
+                postMessage({
+                  type: 'runBlueprint',
+                  nodeId: blueprint.id,
+                  canvas: useCanvasStore.getState().canvasFile ?? undefined,
+                });
+              }}
+              style={{
+                borderRadius: 6,
+                border: `1px solid ${withAlpha(accent, 0.34, 'var(--vscode-panel-border)')}`,
+                background: instanceRunBlocked
+                  ? withAlpha(accent, 0.12, 'transparent')
+                  : withAlpha(accent, 0.18, 'transparent'),
+                color: accent,
+                padding: '6px 10px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: instanceRunBlocked ? 'not-allowed' : 'pointer',
+                opacity: instanceRunBlocked ? 0.72 : 1,
+              }}
+            >
+              {instanceRunning ? '▶ 运行中…' : '▶ 运行'}
+            </button>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
             <Stat label="输入" value={String(blueprint.meta?.blueprint_input_slots ?? '—')} accent={accent} />
             <Stat label="中间" value={String(blueprint.meta?.blueprint_intermediate_slots ?? '—')} accent={accent} />
@@ -162,6 +308,11 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
           <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
             必填输入 {requiredInputCount}，当前已满足 {Math.max(0, requiredInputCount - missingRequiredCount)}。
           </div>
+          {instanceId && (
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+              实例内节点 {instanceChildren.length} 个，当前容器已替代普通画板作为蓝图实例外壳。
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
@@ -175,6 +326,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
             <OutputSlotRow
               key={slot.id}
               slot={slot}
+              count={outputBindings.get(slot.id) ?? 0}
               accent={accent}
             />
           ))}
@@ -193,7 +345,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
         {blueprint.meta?.blueprint_file_path ?? '未绑定蓝图文件'}
       </div>
 
-      {inputSlots.map((slot, index) => {
+      {!instanceId && inputSlots.map((slot, index) => {
         const top = inputSlots.length <= 1
           ? 74
           : 74 + (index * Math.max(44, 132 / Math.max(1, inputSlots.length - 1)));
@@ -218,20 +370,22 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
         );
       })}
 
-      <Handle
-        className={NODE_PORT_CLASSNAME}
-        type="source"
-        position={Position.Right}
-        id={NODE_PORT_IDS.out}
-        title={getNodePortLabel('out')}
-        aria-label={getNodePortLabel('out')}
-        data-rs-port-label={getNodePortLabel('out')}
-        isConnectable={false}
-        isConnectableStart={false}
-        isConnectableEnd={false}
-        style={{ ...outputPortStyle, opacity: 0 }}
-      />
-      {outputSlots.map((slot, index) => {
+      {!instanceId && (
+        <Handle
+          className={NODE_PORT_CLASSNAME}
+          type="source"
+          position={Position.Right}
+          id={NODE_PORT_IDS.out}
+          title={getNodePortLabel('out')}
+          aria-label={getNodePortLabel('out')}
+          data-rs-port-label={getNodePortLabel('out')}
+          isConnectable={false}
+          isConnectableStart={false}
+          isConnectableEnd={false}
+          style={{ ...outputPortStyle, opacity: 0 }}
+        />
+      )}
+      {!instanceId && outputSlots.map((slot, index) => {
         const top = outputSlots.length <= 1
           ? 74
           : 74 + (index * Math.max(44, 132 / Math.max(1, outputSlots.length - 1)));
@@ -319,14 +473,15 @@ function Stat({ label, value, accent }: { label: string; value: string; accent: 
   );
 }
 
-function OutputSlotRow({ slot, accent }: { slot: BlueprintSlotDef; accent: string }) {
+function OutputSlotRow({ slot, count, accent }: { slot: BlueprintSlotDef; count: number; accent: string }) {
+  const filled = count > 0;
   return (
     <div
       style={{
         padding: '8px 10px',
         borderRadius: 8,
-        border: `1px solid ${withAlpha(accent, 0.22, 'var(--vscode-panel-border)')}`,
-        background: withAlpha(accent, 0.04, 'transparent'),
+        border: `1px solid ${filled ? withAlpha(accent, 0.3, 'var(--vscode-panel-border)') : withAlpha(accent, 0.22, 'var(--vscode-panel-border)')}`,
+        background: filled ? withAlpha(accent, 0.07, 'transparent') : withAlpha(accent, 0.04, 'transparent'),
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
@@ -334,12 +489,13 @@ function OutputSlotRow({ slot, accent }: { slot: BlueprintSlotDef; accent: strin
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
         <span style={{ fontSize: 11, fontWeight: 700 }}>{slot.title}</span>
-        <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
-          输出
+        <span style={{ fontSize: 10, color: filled ? accent : 'var(--vscode-descriptionForeground)' }}>
+          {filled ? `已回填 ${count}` : '待回填'}
         </span>
       </div>
       <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.4 }}>
         {slot.accepts.join(', ')}
+        {slot.allow_multiple ? ' · 多输出' : ' · 单输出'}
       </div>
     </div>
   );

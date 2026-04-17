@@ -7,7 +7,13 @@ import {
   type EdgeChange,
   type Connection,
 } from '@xyflow/react';
-import { isDataNode, isGroupHubNodeType, isHubEdgeType } from '../../../src/core/canvas-model';
+import {
+  isBlueprintInstanceContainerNode,
+  isBlueprintInputPlaceholderNode,
+  isDataNode,
+  isGroupHubNodeType,
+  isHubEdgeType,
+} from '../../../src/core/canvas-model';
 import type {
   CanvasFile,
   CanvasNode,
@@ -212,6 +218,7 @@ interface CanvasState {
   lastError: string;
   modelCache: Record<string, ModelInfo[]>;
   stagingNodes: CanvasNode[];
+  pendingStagingMaterializations: Record<string, { position: { x: number; y: number } }>;
   settings: SettingsSnapshot | null;
   settingsPanelOpen: boolean;
   toolDefs: JsonToolDef[];
@@ -235,6 +242,7 @@ interface CanvasState {
   previewNodeId: string | null;
   blueprintDraft: BlueprintDraft | null;
   blueprintIndex: BlueprintRegistryEntry[];
+  blueprintReplacementTargetNodeId: string | null;
   pipelineState: PipelineState | null;
   saveState: CanvasSaveState;
   saveDueAt: number | null;
@@ -274,6 +282,8 @@ interface CanvasState {
   addToStaging(nodes: CanvasNode[]): void;
   removeFromStaging(nodeId: string): void;
   commitStagingNode(nodeId: string, position: { x: number; y: number }): void;
+  resolveStagingMaterialization(sourceNodeId: string, node: CanvasNode, position: { x: number; y: number }): void;
+  failStagingMaterialization(sourceNodeId: string): void;
   createFunctionNode(tool: AiTool | string, position: { x: number; y: number }): void;
   createBlueprintInstance(entry: BlueprintRegistryEntry, position?: { x: number; y: number }): void;
   instantiateBlueprintDefinition(
@@ -458,6 +468,53 @@ function buildBlueprintMetaFromEntry(
   };
 }
 
+function computeBlueprintContainerBounds(nodes: CanvasNode[]): Rect {
+  const TOP_PAD = 64;
+  const SIDE_PAD = 28;
+  const BOTTOM_PAD = 28;
+  if (nodes.length === 0) {
+    return {
+      x: 0,
+      y: 0,
+      width: Math.max(DEFAULT_SIZES.blueprint.width, 700),
+      height: Math.max(DEFAULT_SIZES.blueprint.height, 320),
+    };
+  }
+
+  const minX = Math.min(...nodes.map(node => node.position.x));
+  const minY = Math.min(...nodes.map(node => node.position.y));
+  const maxX = Math.max(...nodes.map(node => node.position.x + node.size.width));
+  const maxY = Math.max(...nodes.map(node => node.position.y + node.size.height));
+
+  return {
+    x: minX - SIDE_PAD,
+    y: minY - TOP_PAD,
+    width: Math.max(DEFAULT_SIZES.blueprint.width, maxX - minX + SIDE_PAD * 2),
+    height: Math.max(DEFAULT_SIZES.blueprint.height, maxY - minY + TOP_PAD + BOTTOM_PAD),
+  };
+}
+
+function createBlueprintContainerCanvasNode(
+  entry: BlueprintRegistryEntry,
+  definition: BlueprintDefinition,
+  instanceId: string,
+  bounds: Rect,
+): CanvasNode {
+  return {
+    id: uuid(),
+    node_type: 'blueprint',
+    title: entry.title,
+    position: { x: bounds.x, y: bounds.y },
+    size: { width: bounds.width, height: bounds.height },
+    meta: {
+      ...buildBlueprintMetaFromEntry(entry),
+      blueprint_instance_id: instanceId,
+      blueprint_input_slot_defs: definition.input_slots,
+      blueprint_output_slot_defs: definition.output_slots,
+    },
+  };
+}
+
 function syncBlueprintNodeFromEntry(node: FlowNode, entry: BlueprintRegistryEntry): FlowNode {
   const size = computeBlueprintInstanceSize(entry);
   return {
@@ -565,6 +622,11 @@ function createBlueprintPlaceholderNode(
       blueprint_color: definition.color,
       blueprint_placeholder_kind: slot.kind === 'input' ? 'input' : 'output',
       blueprint_placeholder_slot_id: slot.id,
+      blueprint_placeholder_title: slot.title,
+      blueprint_placeholder_accepts: [...slot.accepts],
+      blueprint_placeholder_required: slot.required,
+      blueprint_placeholder_allow_multiple: slot.allow_multiple,
+      blueprint_placeholder_replacement_mode: slot.replacement_mode,
       blueprint_placeholder_hint: slot.binding_hint,
       content_preview: slot.binding_hint ?? (slot.kind === 'input'
         ? '将外部输入节点拖到此处，或直接把外部节点连到此占位节点。'
@@ -636,7 +698,7 @@ function buildBlueprintInstanceArtifacts(
   definition: BlueprintDefinition,
   toolDefs: JsonToolDef[],
   origin: { x: number; y: number },
-): { nodes: FlowNode[]; edges: FlowEdge[]; board: Board } {
+): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const instanceId = uuid();
   const nodeIdByBlueprintRef = new Map<string, string>();
   const instantiatedNodes: CanvasNode[] = [];
@@ -677,6 +739,10 @@ function buildBlueprintInstanceArtifacts(
     instantiatedNodes.push(node);
   }
 
+  const containerBounds = computeBlueprintContainerBounds(instantiatedNodes);
+  const containerNode = createBlueprintContainerCanvasNode(entry, definition, instanceId, containerBounds);
+  instantiatedNodes.push(containerNode);
+
   const flowNodes: FlowNode[] = instantiatedNodes.map(node => ({
     id: node.id,
     type: nodeTypeToFlowType(node.node_type),
@@ -684,6 +750,7 @@ function buildBlueprintInstanceArtifacts(
     data: node,
     width: node.size.width,
     height: node.size.height,
+    zIndex: isBlueprintInstanceContainerNode(node) ? -1 : undefined,
   }));
 
   const flowEdges: FlowEdge[] = [];
@@ -708,25 +775,7 @@ function buildBlueprintInstanceArtifacts(
     });
   }
 
-  const minX = Math.min(...instantiatedNodes.map(node => node.position.x));
-  const minY = Math.min(...instantiatedNodes.map(node => node.position.y));
-  const maxX = Math.max(...instantiatedNodes.map(node => node.position.x + node.size.width));
-  const maxY = Math.max(...instantiatedNodes.map(node => node.position.y + node.size.height));
-  const PAD = 28;
-  const board: Board = {
-    id: uuid(),
-    name: `${entry.title} · 蓝图`,
-    color: hexToRgba(entry.color, 0.1),
-    borderColor: entry.color,
-    bounds: {
-      x: minX - PAD,
-      y: minY - PAD,
-      width: Math.max(320, maxX - minX + PAD * 2),
-      height: Math.max(220, maxY - minY + PAD * 2),
-    },
-  };
-
-  return { nodes: flowNodes, edges: flowEdges, board };
+  return { nodes: flowNodes, edges: flowEdges };
 }
 
 function markPersistedFromExternal(file: CanvasFile) {
@@ -804,6 +853,7 @@ let _dragUndoPushed = false;
 // Captured once at drag-start in BoardOverlay; cleared on mouseup.
 // moveBoard reads this set rather than dynamically scanning for overlaps.
 let _boardDragMembers = new Set<string>();
+const BLUEPRINT_REPLACEMENT_SNAP_DISTANCE = 132;
 
 export function startBoardDrag(boardId: string, nodes: FlowNode[], boards: Board[]) {
   const board = boards.find(b => b.id === boardId);
@@ -925,6 +975,65 @@ function syncGroupHubNodes(nodes: FlowNode[], nodeGroups: NodeGroup[]): FlowNode
   });
 }
 
+function getBlueprintContainerMemberIds(instanceId: string, nodes: FlowNode[]): string[] {
+  return nodes
+    .filter(node =>
+      node.data.id !== undefined &&
+      node.data.meta?.blueprint_instance_id === instanceId &&
+      !isBlueprintInstanceContainerNode(node.data)
+    )
+    .map(node => node.id);
+}
+
+function getBlueprintContainerBoundExternalIds(instanceId: string, nodes: FlowNode[]): string[] {
+  return nodes
+    .filter(node =>
+      node.data.meta?.blueprint_bound_instance_id === instanceId &&
+      node.data.meta?.blueprint_instance_id !== instanceId
+    )
+    .map(node => node.id);
+}
+
+function recalcBlueprintContainersForInstanceIds(
+  nodes: FlowNode[],
+  instanceIds: Iterable<string>,
+): FlowNode[] {
+  const changedInstanceIds = Array.from(new Set(Array.from(instanceIds).filter(Boolean)));
+  if (changedInstanceIds.length === 0) { return nodes; }
+  const targetSet = new Set(changedInstanceIds);
+
+  return nodes.map(node => {
+    if (!isBlueprintInstanceContainerNode(node.data)) { return node; }
+    const instanceId = node.data.meta?.blueprint_instance_id;
+    if (!instanceId || !targetSet.has(instanceId)) { return node; }
+
+    const memberNodes = nodes
+      .filter(candidate =>
+        candidate.id !== node.id &&
+        (
+          candidate.data.meta?.blueprint_instance_id === instanceId ||
+          candidate.data.meta?.blueprint_bound_instance_id === instanceId
+        )
+      )
+      .map(candidate => candidate.data);
+    if (memberNodes.length === 0) { return node; }
+
+    const bounds = computeBlueprintContainerBounds(memberNodes);
+    return {
+      ...node,
+      position: { x: bounds.x, y: bounds.y },
+      data: {
+        ...node.data,
+        position: { x: bounds.x, y: bounds.y },
+        size: { width: bounds.width, height: bounds.height },
+      },
+      width: bounds.width,
+      height: bounds.height,
+      zIndex: -1,
+    };
+  });
+}
+
 function recalcGroupsForNodeIds(nodeGroups: NodeGroup[], nodes: FlowNode[], nodeIds: Iterable<string>): NodeGroup[] {
   const changedIds = new Set(nodeIds);
   if (changedIds.size === 0) { return nodeGroups; }
@@ -932,6 +1041,309 @@ function recalcGroupsForNodeIds(nodeGroups: NodeGroup[], nodes: FlowNode[], node
     const needRecalc = group.nodeIds.some(id => changedIds.has(id));
     return needRecalc ? { ...group, bounds: calcGroupBounds(nodes, group.nodeIds, group.bounds) } : group;
   });
+}
+
+function getCanvasNodeRect(node: Pick<CanvasNode, 'position' | 'size'>): Rect {
+  return {
+    x: node.position.x,
+    y: node.position.y,
+    width: node.size.width,
+    height: node.size.height,
+  };
+}
+
+function getRectCenter(rect: Rect): { x: number; y: number } {
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+function calcRectOverlapArea(a: Rect, b: Rect): number {
+  const overlapWidth = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const overlapHeight = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return overlapWidth * overlapHeight;
+}
+
+function canReplaceBlueprintPlaceholderWithNode(
+  placeholderNode: CanvasNode,
+  draggedNode: CanvasNode,
+  flowEdges: FlowEdge[],
+): boolean {
+  if (!isBlueprintInputPlaceholderNode(placeholderNode)) { return false; }
+  if (placeholderNode.meta?.blueprint_placeholder_replacement_mode !== 'replace_with_bound_node') { return false; }
+  if (!isDataNode(draggedNode) || !!draggedNode.meta?.blueprint_placeholder_kind) { return false; }
+  if (
+    draggedNode.meta?.blueprint_instance_id &&
+    draggedNode.meta.blueprint_instance_id === placeholderNode.meta?.blueprint_instance_id
+  ) {
+    return false;
+  }
+
+  const accepts = placeholderNode.meta?.blueprint_placeholder_accepts ?? [];
+  if (accepts.length > 0 && !accepts.includes(draggedNode.node_type)) { return false; }
+  if (placeholderNode.meta?.blueprint_placeholder_allow_multiple) { return false; }
+
+  return !flowEdges.some(edge =>
+    edge.target === placeholderNode.id &&
+    edge.data?.edge_type === 'data_flow' &&
+    edge.source !== draggedNode.id
+  );
+}
+
+function findBlueprintPlaceholderReplacementTarget(
+  draggedNode: CanvasNode,
+  flowNodes: FlowNode[],
+  flowEdges: FlowEdge[],
+): FlowNode | null {
+  if (!isDataNode(draggedNode) || !!draggedNode.meta?.blueprint_placeholder_kind) { return null; }
+  const draggedRect = getCanvasNodeRect(draggedNode);
+  const draggedCenter = getRectCenter(draggedRect);
+
+  let best: { node: FlowNode; score: number } | null = null;
+  for (const candidate of flowNodes) {
+    if (candidate.id === draggedNode.id) { continue; }
+    const candidateNode = candidate.data;
+    if (!canReplaceBlueprintPlaceholderWithNode(candidateNode, draggedNode, flowEdges)) { continue; }
+
+    const candidateRect = getCanvasNodeRect(candidateNode);
+    const overlapArea = calcRectOverlapArea(draggedRect, candidateRect);
+    const candidateCenter = getRectCenter(candidateRect);
+    const distance = Math.hypot(draggedCenter.x - candidateCenter.x, draggedCenter.y - candidateCenter.y);
+    const snapDistance = Math.max(
+      88,
+      Math.min(
+        BLUEPRINT_REPLACEMENT_SNAP_DISTANCE,
+        Math.max(candidateRect.width, candidateRect.height) * 0.55,
+      ),
+    );
+
+    if (overlapArea <= 0 && distance > snapDistance) { continue; }
+    const overlapBonus = overlapArea > 0 ? overlapArea / Math.max(1, candidateRect.width * candidateRect.height) : 0;
+    const score = overlapBonus > 0 ? -overlapBonus : distance / snapDistance;
+    if (!best || score < best.score) {
+      best = { node: candidate, score };
+    }
+  }
+
+  return best?.node ?? null;
+}
+
+function sameEdgeSemantics(a: FlowEdge, b: FlowEdge): boolean {
+  return (
+    a.source === b.source &&
+    a.target === b.target &&
+    normalizeNodePortId(a.sourceHandle) === normalizeNodePortId(b.sourceHandle) &&
+    normalizeNodePortId(a.targetHandle) === normalizeNodePortId(b.targetHandle) &&
+    (a.data?.edge_type ?? 'reference') === (b.data?.edge_type ?? 'reference') &&
+    (a.data?.role ?? '') === (b.data?.role ?? '')
+  );
+}
+
+function applyBlueprintPlaceholderReplacement(
+  draggedNodeId: string,
+  placeholderNodeId: string,
+  flowNodes: FlowNode[],
+  flowEdges: FlowEdge[],
+): { nodes: FlowNode[]; edges: FlowEdge[] } {
+  const placeholderFlowNode = flowNodes.find(node => node.id === placeholderNodeId);
+  const draggedFlowNode = flowNodes.find(node => node.id === draggedNodeId);
+  if (!placeholderFlowNode || !draggedFlowNode) {
+    return { nodes: flowNodes, edges: flowEdges };
+  }
+
+  const replacementPosition = { ...placeholderFlowNode.position };
+  const placeholderNode = placeholderFlowNode.data;
+  const nextNodes = flowNodes
+    .filter(node => node.id !== placeholderNodeId)
+    .map(node => {
+      if (node.id !== draggedNodeId) { return node; }
+      return {
+        ...node,
+        position: replacementPosition,
+        data: {
+          ...node.data,
+          position: replacementPosition,
+          meta: {
+            ...(node.data.meta ?? {}),
+            blueprint_bound_instance_id: placeholderNode.meta?.blueprint_instance_id,
+            blueprint_bound_slot_id: placeholderNode.meta?.blueprint_placeholder_slot_id,
+            blueprint_bound_slot_title: placeholderNode.meta?.blueprint_placeholder_title,
+            blueprint_bound_slot_kind: 'input',
+          },
+        },
+      };
+    });
+
+  const nextEdges: FlowEdge[] = [];
+  for (const edge of flowEdges) {
+    const touchesPlaceholder = edge.source === placeholderNodeId || edge.target === placeholderNodeId;
+    if (!touchesPlaceholder) {
+      nextEdges.push(edge);
+      continue;
+    }
+
+    if (edge.target === placeholderNodeId && edge.data?.edge_type === 'data_flow') {
+      continue;
+    }
+
+    if (edge.source === placeholderNodeId) {
+      const reboundEdge: FlowEdge = {
+        ...edge,
+        id: uuid(),
+        source: draggedNodeId,
+      };
+      if (!nextEdges.some(existing => sameEdgeSemantics(existing, reboundEdge))) {
+        nextEdges.push(reboundEdge);
+      }
+    }
+  }
+
+  return { nodes: nextNodes, edges: nextEdges };
+}
+
+function applyBlueprintOutputFill(
+  generatedNode: CanvasNode,
+  generatedEdge: CanvasEdge,
+  flowNodes: FlowNode[],
+  flowEdges: FlowEdge[],
+): { nodes: FlowNode[]; edges: FlowEdge[]; filledInstanceId?: string } {
+  const sourceFn = flowNodes.find(node => node.id === generatedEdge.source)?.data;
+  const instanceId = sourceFn?.meta?.blueprint_instance_id;
+
+  const appendNormally = (): { nodes: FlowNode[]; edges: FlowEdge[]; filledInstanceId?: string } => ({
+    nodes: [
+      ...flowNodes,
+      {
+        id: generatedNode.id,
+        type: nodeTypeToFlowType(generatedNode.node_type),
+        position: generatedNode.position,
+        data: generatedNode,
+        width: generatedNode.size.width,
+        height: generatedNode.size.height,
+      },
+    ],
+    edges: [
+      ...flowEdges,
+      {
+        id: generatedEdge.id,
+        source: generatedEdge.source,
+        target: generatedEdge.target,
+        type: 'custom',
+        data: { edge_type: generatedEdge.edge_type },
+        animated: generatedEdge.edge_type === 'ai_generated',
+      },
+    ],
+    filledInstanceId: instanceId,
+  });
+
+  if (!sourceFn || !instanceId) {
+    return appendNormally();
+  }
+
+  const directBlueprintTargets = flowEdges
+    .filter(edge =>
+      edge.source === generatedEdge.source &&
+      (edge.data?.edge_type === 'ai_generated' || edge.data?.edge_type === 'data_flow')
+    )
+    .map(edge => flowNodes.find(node => node.id === edge.target)?.data)
+    .filter((node): node is CanvasNode => !!node);
+
+  const outputPlaceholderNode = directBlueprintTargets.find(node =>
+    node.meta?.blueprint_instance_id === instanceId &&
+    node.meta?.blueprint_placeholder_kind === 'output'
+  );
+
+  const existingBoundOutputNode = directBlueprintTargets.find(node =>
+    node.meta?.blueprint_bound_instance_id === instanceId &&
+    node.meta?.blueprint_bound_slot_kind === 'output'
+  );
+
+  const outputTargetNode = outputPlaceholderNode ?? existingBoundOutputNode;
+  const intermediateTargetNode = directBlueprintTargets.find(node =>
+    node.meta?.blueprint_instance_id === instanceId &&
+    !node.meta?.blueprint_placeholder_kind
+  );
+  const fillMode: 'output' | 'intermediate' | null = outputTargetNode
+    ? 'output'
+    : (intermediateTargetNode ? 'intermediate' : null);
+  const fillTargetNode = outputTargetNode ?? intermediateTargetNode;
+
+  if (!fillMode || !fillTargetNode) {
+    return appendNormally();
+  }
+
+  const slotId = fillTargetNode.meta?.blueprint_placeholder_slot_id ?? fillTargetNode.meta?.blueprint_bound_slot_id;
+  const slotTitle = fillTargetNode.meta?.blueprint_placeholder_title ?? fillTargetNode.meta?.blueprint_bound_slot_title ?? fillTargetNode.title;
+  const filledNode: CanvasNode = {
+    ...generatedNode,
+    title: slotTitle ?? generatedNode.title,
+    position: { ...fillTargetNode.position },
+    meta: {
+      ...(generatedNode.meta ?? {}),
+      ...(fillMode === 'output'
+        ? {
+            blueprint_bound_instance_id: instanceId,
+            blueprint_bound_slot_id: slotId,
+            blueprint_bound_slot_title: slotTitle,
+            blueprint_bound_slot_kind: 'output' as const,
+          }
+        : {
+            blueprint_instance_id: instanceId,
+            blueprint_def_id: sourceFn.meta?.blueprint_def_id,
+            blueprint_color: sourceFn.meta?.blueprint_color,
+          }),
+    },
+  };
+
+  const nextNodes = flowNodes
+    .filter(node => node.id !== fillTargetNode.id)
+    .concat({
+      id: filledNode.id,
+      type: nodeTypeToFlowType(filledNode.node_type),
+      position: filledNode.position,
+      data: filledNode,
+      width: filledNode.size.width,
+      height: filledNode.size.height,
+    });
+
+  const nextEdges: FlowEdge[] = [];
+  for (const edge of flowEdges) {
+    const touchesFillTarget = edge.source === fillTargetNode.id || edge.target === fillTargetNode.id;
+    if (!touchesFillTarget) {
+      nextEdges.push(edge);
+      continue;
+    }
+
+    if (
+      edge.source === generatedEdge.source &&
+      edge.target === fillTargetNode.id &&
+      (edge.data?.edge_type === 'ai_generated' || edge.data?.edge_type === 'data_flow')
+    ) {
+      continue;
+    }
+
+    const reboundEdge: FlowEdge = {
+      ...edge,
+      id: uuid(),
+      source: edge.source === fillTargetNode.id ? filledNode.id : edge.source,
+      target: edge.target === fillTargetNode.id ? filledNode.id : edge.target,
+    };
+    if (!nextEdges.some(existing => sameEdgeSemantics(existing, reboundEdge))) {
+      nextEdges.push(reboundEdge);
+    }
+  }
+
+  const generatedFlowEdge: FlowEdge = {
+    id: generatedEdge.id,
+    source: generatedEdge.source,
+    target: filledNode.id,
+    type: 'custom',
+    data: { edge_type: generatedEdge.edge_type },
+    animated: generatedEdge.edge_type === 'ai_generated',
+  };
+  if (!nextEdges.some(existing => sameEdgeSemantics(existing, generatedFlowEdge))) {
+    nextEdges.push(generatedFlowEdge);
+  }
+
+  return { nodes: nextNodes, edges: nextEdges, filledInstanceId: instanceId };
 }
 
 function normalizeNodeGroups(file: CanvasFile): CanvasFile {
@@ -1031,6 +1443,18 @@ function canvasToFlow(
           pointerEvents: 'none',
           overflow: 'visible',
         };
+      } else if (isBlueprintInstanceContainerNode(n)) {
+        base.zIndex = -1;
+        base.draggable = true;
+        base.selectable = true;
+        base.deletable = true;
+        base.focusable = true;
+        base.connectable = false;
+        base.dragHandle = '.rs-blueprint-header';
+        base.style = {
+          ...(base.style ?? {}),
+          overflow: 'visible',
+        };
       }
       return base;
     });
@@ -1102,6 +1526,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   lastError: '',
   modelCache: {},
   stagingNodes: [],
+  pendingStagingMaterializations: {},
   settings: null,
   settingsPanelOpen: false,
   toolDefs: [],
@@ -1125,6 +1550,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   previewNodeId: null,
   blueprintDraft: null,
   blueprintIndex: [],
+  blueprintReplacementTargetNodeId: null,
   pipelineState: null,
   saveState: 'saved',
   saveDueAt: null,
@@ -1313,6 +1739,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       searchMatches: [],
       searchIndex: -1,
       blueprintDraft: null,
+      blueprintReplacementTargetNodeId: null,
       saveState: 'saved',
       saveDueAt: null,
       lastSavedAt: Date.now(),
@@ -1322,16 +1749,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   onNodesChange(changes) {
+    const stateAtStart = get();
+    const normalizedChanges: NodeChange[] = [];
+    for (const change of changes) {
+      if (change.type === 'remove') {
+        const targetNode = stateAtStart.nodes.find(node => node.id === change.id)?.data;
+        if (isBlueprintInstanceContainerNode(targetNode)) {
+          const instanceId = targetNode.meta?.blueprint_instance_id;
+          if (instanceId) {
+            normalizedChanges.push(change);
+            for (const memberId of getBlueprintContainerMemberIds(instanceId, stateAtStart.nodes)) {
+              normalizedChanges.push({ type: 'remove', id: memberId });
+            }
+            continue;
+          }
+        }
+      }
+      normalizedChanges.push(change);
+    }
+
     // Undo: snapshot before node deletion
-    const hasRemove = changes.some(c => c.type === 'remove');
+    const hasRemove = normalizedChanges.some(c => c.type === 'remove');
     if (hasRemove) {
       get().pushUndo();
       try { usePetStore.getState().notifyCanvasEvent('nodeDeleted'); } catch { /* pet may not be initialized */ }
     }
 
-    const stateAtStart = get();
     const expandedChanges: NodeChange[] = [];
-    for (const change of changes) {
+    for (const change of normalizedChanges) {
       if (change.type === 'position') {
         const group = stateAtStart.nodeGroups.find(item => item.hubNodeId === change.id);
         if (group) {
@@ -1357,6 +1802,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           }
           continue;
         }
+
+        const blueprintContainer = stateAtStart.nodes.find(node => node.id === change.id)?.data;
+        if (isBlueprintInstanceContainerNode(blueprintContainer)) {
+          const fromPosition = blueprintContainer.position;
+          const toPosition = change.position ?? fromPosition;
+          const dx = toPosition.x - fromPosition.x;
+          const dy = toPosition.y - fromPosition.y;
+          const instanceId = blueprintContainer.meta?.blueprint_instance_id;
+          const memberIds = instanceId ? [
+            ...getBlueprintContainerMemberIds(instanceId, stateAtStart.nodes),
+            ...getBlueprintContainerBoundExternalIds(instanceId, stateAtStart.nodes),
+          ] : [];
+
+          if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01 || change.dragging !== undefined) {
+            for (const memberId of memberIds) {
+              const memberNode = stateAtStart.nodes.find(node => node.id === memberId);
+              if (!memberNode) { continue; }
+              expandedChanges.push({
+                ...change,
+                id: memberId,
+                position: {
+                  x: memberNode.position.x + dx,
+                  y: memberNode.position.y + dy,
+                },
+              });
+            }
+          }
+        }
       }
       expandedChanges.push(change);
     }
@@ -1379,6 +1852,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set(state => {
       if (!state.canvasFile) { return {}; }
       const updated = applyNodeChanges(expandedChanges, state.nodes) as FlowNode[];
+      const activelyDraggedNode = expandedChanges
+        .filter((change): change is Extract<NodeChange, { type: 'position' }> => change.type === 'position' && !!change.dragging)
+        .map(change => updated.find(node => node.id === change.id)?.data)
+        .find((node): node is CanvasNode => !!node);
+      const activelyDraggedIds = expandedChanges
+        .filter((change): change is Extract<NodeChange, { type: 'position' }> => change.type === 'position' && !!change.dragging)
+        .map(change => change.id);
+      const replacementPreviewNodeId = activelyDraggedIds.length === 1
+        && activelyDraggedNode
+        ? findBlueprintPlaceholderReplacementTarget(activelyDraggedNode, updated, state.edges)?.id ?? null
+        : null;
 
       const removedIds = new Set(
         expandedChanges.filter(c => c.type === 'remove').map(c => c.id)
@@ -1386,6 +1870,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const movedIds = new Set(
         expandedChanges.filter(c => c.type === 'position').map(c => c.id)
       );
+      const changedBlueprintInstanceIds = new Set<string>();
+      for (const node of updated) {
+        if (removedIds.has(node.id)) { continue; }
+        if (movedIds.has(node.id) && node.data.meta?.blueprint_instance_id) {
+          changedBlueprintInstanceIds.add(node.data.meta.blueprint_instance_id);
+        }
+        if (movedIds.has(node.id) && node.data.meta?.blueprint_bound_instance_id) {
+          changedBlueprintInstanceIds.add(node.data.meta.blueprint_bound_instance_id);
+        }
+      }
 
       let nodeGroups = state.nodeGroups;
       if (removedIds.size > 0) {
@@ -1402,7 +1896,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
       const activeHubIds = new Set(nodeGroups.map(group => group.hubNodeId));
       const prunedNodes = updated.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id));
-      const prunedEdges = state.edges.filter(edge => {
+      let prunedEdges = state.edges.filter(edge => {
         if (isHubEdgeType(edge.data?.edge_type)) {
           return activeHubIds.has(edge.target);
         }
@@ -1410,11 +1904,42 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const targetExists = prunedNodes.some(node => node.id === edge.target);
         return sourceExists && targetExists;
       });
-      const syncedNodes = syncGroupHubNodes(prunedNodes, nodeGroups);
+      let finalNodes = prunedNodes;
+      let replacementTargetNodeId = replacementPreviewNodeId;
+
+      if (dragEnded && expandedChanges.length > 0) {
+        const droppedIds = Array.from(new Set(
+          expandedChanges
+            .filter((change): change is Extract<NodeChange, { type: 'position' }> => change.type === 'position')
+            .map(change => change.id)
+        ));
+        if (droppedIds.length === 1) {
+          const draggedNode = finalNodes.find(node => node.id === droppedIds[0])?.data;
+          const replacementTarget = draggedNode
+            ? findBlueprintPlaceholderReplacementTarget(draggedNode, finalNodes, prunedEdges)
+            : null;
+          if (draggedNode && replacementTarget) {
+            const replaced = applyBlueprintPlaceholderReplacement(
+              draggedNode.id,
+              replacementTarget.id,
+              finalNodes,
+              prunedEdges,
+            );
+            finalNodes = replaced.nodes;
+            prunedEdges = replaced.edges;
+            removedIds.add(replacementTarget.id);
+          }
+        }
+        replacementTargetNodeId = null;
+      }
+      let syncedNodes = syncGroupHubNodes(finalNodes, nodeGroups);
+      if (changedBlueprintInstanceIds.size > 0) {
+        syncedNodes = recalcBlueprintContainersForInstanceIds(syncedNodes, changedBlueprintInstanceIds);
+      }
 
       // Clean up fullContentCache for deleted nodes
       let newCache = state.fullContentCache;
-      if (hasRemove) {
+      if (removedIds.size > 0) {
         const updatedIds = new Set(syncedNodes.map(n => n.id));
         const staleIds = Object.keys(state.fullContentCache).filter(id => !updatedIds.has(id));
         if (staleIds.length > 0) {
@@ -1430,14 +1955,40 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const searchIndex = searchMatches.length === 0
         ? -1
         : Math.min(Math.max(state.searchIndex, 0), searchMatches.length - 1);
-      const newFile: CanvasFile = { ...state.canvasFile, nodes: syncedCanvasNodes, edges: syncedCanvasEdges, nodeGroups };
+      const remainingRemovedInstanceIds = new Set(
+        normalizedChanges
+          .filter((change): change is Extract<NodeChange, { type: 'remove' }> => change.type === 'remove')
+          .map(change => state.nodes.find(node => node.id === change.id)?.data.meta?.blueprint_instance_id)
+          .filter((value): value is string => !!value)
+      );
+      const reboundCanvasNodes = syncedCanvasNodes.map(node => {
+        if (!node.meta?.blueprint_bound_instance_id || !remainingRemovedInstanceIds.has(node.meta.blueprint_bound_instance_id)) {
+          return node;
+        }
+        const { blueprint_bound_instance_id, blueprint_bound_slot_id, blueprint_bound_slot_title, blueprint_bound_slot_kind, ...restMeta } = node.meta;
+        return { ...node, meta: restMeta };
+      });
+      const reboundFlowNodes = syncedNodes.map(node => {
+        if (!node.data.meta?.blueprint_bound_instance_id || !remainingRemovedInstanceIds.has(node.data.meta.blueprint_bound_instance_id)) {
+          return node;
+        }
+        const { blueprint_bound_instance_id, blueprint_bound_slot_id, blueprint_bound_slot_title, blueprint_bound_slot_kind, ...restMeta } = node.data.meta;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            meta: restMeta,
+          },
+        };
+      });
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: reboundCanvasNodes, edges: syncedCanvasEdges, nodeGroups };
 
       if (!isDragging || dragEnded) {
         debouncedSave(newFile);
       }
 
       return {
-        nodes: syncedNodes,
+        nodes: reboundFlowNodes,
         edges: prunedEdges,
         canvasFile: newFile,
         fullContentCache: newCache,
@@ -1445,6 +1996,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         selectedNodeIds: state.selectedNodeIds.filter(id => !removedIds.has(id)),
         searchMatches,
         searchIndex,
+        blueprintReplacementTargetNodeId: replacementTargetNodeId,
       };
     });
   },
@@ -1498,8 +2050,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       sourceNode && targetNode &&
       targetNode.node_type === 'blueprint';
 
+    const isDataToBlueprintInputPlaceholder =
+      sourceNode && targetNode &&
+      (isDataNode(sourceNode) || sourceNode.node_type === 'group_hub') &&
+      isBlueprintInputPlaceholderNode(targetNode);
+
     if (isDataToBlueprint && targetNode) {
       get()._createEdge(connection, connection.targetHandle ?? undefined);
+      return;
+    }
+
+    if (isDataToBlueprintInputPlaceholder && targetNode) {
+      get()._createEdge(connection, targetNode.meta?.blueprint_placeholder_slot_id);
       return;
     }
 
@@ -1678,34 +2240,31 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (!state.canvasFile) { return {}; }
       if (state.nodes.some(n => n.id === node.id)) { return {}; }
 
-      const newFlowNode: FlowNode = {
-        id: node.id,
-        type: nodeTypeToFlowType(node.node_type),
-        position: node.position,
-        data: node,
-        width: node.size.width,
-        height: node.size.height,
-      };
-      const newFlowEdge: FlowEdge = {
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: 'custom',
-        data: { edge_type: edge.edge_type },
-        animated: edge.edge_type === 'ai_generated',
-      };
-
-      const updatedNodes = [...state.nodes, newFlowNode];
-      const updatedEdges = [...state.edges, newFlowEdge];
+      const filled = applyBlueprintOutputFill(node, edge, state.nodes, state.edges);
+      let updatedNodes = filled.nodes;
+      const updatedEdges = filled.edges;
+      if (filled.filledInstanceId) {
+        updatedNodes = recalcBlueprintContainersForInstanceIds(updatedNodes, [filled.filledInstanceId]);
+      }
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
       const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      const updatedNodeIds = new Set(updatedNodes.map(item => item.id));
+      const nextFullContentCache = Object.fromEntries(
+        Object.entries(state.fullContentCache).filter(([nodeId]) => updatedNodeIds.has(nodeId))
+      );
 
       if ((node.node_type === 'image' && node.meta?.display_mode !== 'mermaid' || node.node_type === 'video' || node.node_type === 'audio' || node.node_type === 'paper') && node.file_path) {
         postMessage({ type: 'requestImageUri', filePath: node.file_path });
       }
 
       debouncedSave(newFile, 'immediate');
-      return { nodes: updatedNodes, edges: updatedEdges, canvasFile: newFile, aiOutputRunId: runId };
+      return {
+        nodes: updatedNodes,
+        edges: updatedEdges,
+        canvasFile: newFile,
+        aiOutputRunId: runId,
+        fullContentCache: nextFullContentCache,
+      };
     });
   },
 
@@ -1926,11 +2485,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   removeFromStaging(nodeId) {
     set(state => {
       if (!state.canvasFile) { return {}; }
-      const removed = state.stagingNodes.find(n => n.id === nodeId);
-      // If removing a note that has a file path, delete the file too
-      if (removed?.node_type === 'note' && removed.file_path) {
-        postMessage({ type: 'deleteNote', filePath: removed.file_path });
-      }
+      if (state.pendingStagingMaterializations[nodeId]) { return {}; }
       const stagingNodes = state.stagingNodes.filter(n => n.id !== nodeId);
       const newFile: CanvasFile = { ...state.canvasFile, stagingNodes };
       debouncedSave(newFile, 'immediate');
@@ -1943,6 +2498,32 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set(state => {
       const node = state.stagingNodes.find(n => n.id === nodeId);
       if (!node || !state.canvasFile) { return {}; }
+      if (state.pendingStagingMaterializations[nodeId]) { return {}; }
+
+      const needsMaterialization =
+        !node.file_path &&
+        node.meta?.staging_origin === 'draft' &&
+        (
+          node.meta?.staging_materialize_kind === 'note' ||
+          node.meta?.staging_materialize_kind === 'experiment_log' ||
+          node.meta?.staging_materialize_kind === 'task'
+        );
+      if (needsMaterialization) {
+        postMessage({
+          type: 'materializeStagingNode',
+          sourceNodeId: node.id,
+          nodeType: node.meta?.staging_materialize_kind,
+          title: node.title,
+          position,
+          content: node.meta?.staging_initial_content ?? node.meta?.content_preview ?? '',
+        });
+        return {
+          pendingStagingMaterializations: {
+            ...state.pendingStagingMaterializations,
+            [nodeId]: { position },
+          },
+        };
+      }
 
       const remainingStaging = state.stagingNodes.filter(n => n.id !== nodeId);
 
@@ -1962,6 +2543,44 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
 
       const placed: CanvasNode = { ...node, position };
+      const replacementTarget = findBlueprintPlaceholderReplacementTarget(placed, state.nodes, state.edges);
+      if (replacementTarget) {
+        const placedFlowNode: FlowNode = {
+          id: placed.id,
+          type: nodeTypeToFlowType(placed.node_type),
+          position,
+          data: placed,
+          width: placed.size.width,
+          height: placed.size.height,
+        };
+        const { nodes: replacedNodes, edges: replacedEdges } = applyBlueprintPlaceholderReplacement(
+          placed.id,
+          replacementTarget.id,
+          [...state.nodes, placedFlowNode],
+          state.edges,
+        );
+        const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(replacedNodes, replacedEdges);
+        const newFile: CanvasFile = {
+          ...state.canvasFile,
+          nodes: cnNodes,
+          edges: cnEdges,
+          stagingNodes: remainingStaging,
+        };
+
+        if ((placed.node_type === 'image' && placed.meta?.display_mode !== 'mermaid' || placed.node_type === 'video' || placed.node_type === 'audio' || placed.node_type === 'paper') && placed.file_path) {
+          postMessage({ type: 'requestImageUri', filePath: placed.file_path });
+        }
+
+        debouncedSave(newFile, 'immediate');
+        return {
+          nodes: replacedNodes,
+          edges: replacedEdges,
+          canvasFile: newFile,
+          stagingNodes: remainingStaging,
+          blueprintReplacementTargetNodeId: null,
+        };
+      }
+
       const flowNode: FlowNode = {
         id: placed.id,
         type: nodeTypeToFlowType(placed.node_type),
@@ -1984,7 +2603,102 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
 
       debouncedSave(newFile, 'immediate');
-      return { nodes: updatedNodes, canvasFile: newFile, stagingNodes: remainingStaging };
+      return {
+        nodes: updatedNodes,
+        canvasFile: newFile,
+        stagingNodes: remainingStaging,
+        blueprintReplacementTargetNodeId: null,
+      };
+    });
+  },
+
+  resolveStagingMaterialization(sourceNodeId, node, position) {
+    get().pushUndo();
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      if (!state.pendingStagingMaterializations[sourceNodeId]) { return {}; }
+      const pendingMap = { ...state.pendingStagingMaterializations };
+      delete pendingMap[sourceNodeId];
+
+      const remainingStaging = state.stagingNodes.filter(item => item.id !== sourceNodeId);
+      const placed: CanvasNode = { ...node, position };
+      const replacementTarget = findBlueprintPlaceholderReplacementTarget(placed, state.nodes, state.edges);
+      if (replacementTarget) {
+        const placedFlowNode: FlowNode = {
+          id: placed.id,
+          type: nodeTypeToFlowType(placed.node_type),
+          position,
+          data: placed,
+          width: placed.size.width,
+          height: placed.size.height,
+        };
+        const { nodes: replacedNodes, edges: replacedEdges } = applyBlueprintPlaceholderReplacement(
+          placed.id,
+          replacementTarget.id,
+          [...state.nodes, placedFlowNode],
+          state.edges,
+        );
+        const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(replacedNodes, replacedEdges);
+        const newFile: CanvasFile = {
+          ...state.canvasFile,
+          nodes: cnNodes,
+          edges: cnEdges,
+          stagingNodes: remainingStaging,
+        };
+
+        if (((placed.node_type === 'image' && placed.meta?.display_mode !== 'mermaid') || placed.node_type === 'video' || placed.node_type === 'audio' || placed.node_type === 'paper') && placed.file_path) {
+          postMessage({ type: 'requestImageUri', filePath: placed.file_path });
+        }
+
+        debouncedSave(newFile, 'immediate');
+        return {
+          nodes: replacedNodes,
+          edges: replacedEdges,
+          canvasFile: newFile,
+          stagingNodes: remainingStaging,
+          blueprintReplacementTargetNodeId: null,
+          pendingStagingMaterializations: pendingMap,
+        };
+      }
+
+      const flowNode: FlowNode = {
+        id: placed.id,
+        type: nodeTypeToFlowType(placed.node_type),
+        position,
+        data: placed,
+        width: placed.size.width,
+        height: placed.size.height,
+      };
+      const updatedNodes = [...state.nodes, flowNode];
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
+      const newFile: CanvasFile = {
+        ...state.canvasFile,
+        nodes: cnNodes,
+        edges: cnEdges,
+        stagingNodes: remainingStaging,
+      };
+
+      if (((placed.node_type === 'image' && placed.meta?.display_mode !== 'mermaid') || placed.node_type === 'video' || placed.node_type === 'audio' || placed.node_type === 'paper') && placed.file_path) {
+        postMessage({ type: 'requestImageUri', filePath: placed.file_path });
+      }
+
+      debouncedSave(newFile, 'immediate');
+      return {
+        nodes: updatedNodes,
+        canvasFile: newFile,
+        stagingNodes: remainingStaging,
+        blueprintReplacementTargetNodeId: null,
+        pendingStagingMaterializations: pendingMap,
+      };
+    });
+  },
+
+  failStagingMaterialization(sourceNodeId) {
+    set(state => {
+      if (!state.pendingStagingMaterializations[sourceNodeId]) { return {}; }
+      const pendingMap = { ...state.pendingStagingMaterializations };
+      delete pendingMap[sourceNodeId];
+      return { pendingStagingMaterializations: pendingMap };
     });
   },
 
@@ -2068,7 +2782,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set(state => {
       if (!state.canvasFile) { return {}; }
       const resolvedPosition = position ?? calcNewNodePosition(state.canvasFile.nodes);
-      const { nodes: blueprintNodes, edges: blueprintEdges, board } = buildBlueprintInstanceArtifacts(
+      const { nodes: blueprintNodes, edges: blueprintEdges } = buildBlueprintInstanceArtifacts(
         entry,
         definition,
         state.toolDefs,
@@ -2076,19 +2790,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       );
       const updatedNodes = [...state.nodes, ...blueprintNodes];
       const updatedEdges = [...state.edges, ...blueprintEdges];
-      const newBoards = [...state.boards, board];
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
       const newFile: CanvasFile = {
         ...state.canvasFile,
         nodes: cnNodes,
         edges: cnEdges,
-        boards: newBoards,
       };
       debouncedSave(newFile, 'immediate');
       return {
         nodes: updatedNodes,
         edges: updatedEdges,
-        boards: newBoards,
         canvasFile: newFile,
       };
     });

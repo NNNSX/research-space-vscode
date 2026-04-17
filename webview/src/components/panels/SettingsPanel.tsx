@@ -455,6 +455,7 @@ export function SettingsPanel() {
               options={[
                 { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
                 { value: 'gemini-3-pro-image-preview',     label: 'Gemini 3 Pro Image Preview' },
+                { value: 'doubao-seedream-5.0-lite',       label: 'Doubao Seedream 5.0 Lite' },
               ]}
               onChange={v => sendSetting('aiHubMixImageGenModel', v)}
             />
@@ -465,8 +466,31 @@ export function SettingsPanel() {
               options={[
                 { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
                 { value: 'gemini-3-pro-image-preview',     label: 'Gemini 3 Pro Image Preview' },
+                { value: 'doubao-seedream-5.0-lite',       label: 'Doubao Seedream 5.0 Lite' },
               ]}
               onChange={v => sendSetting('aiHubMixImageEditModel', v)}
+            />
+          </Field>
+          <Field label="多图融合默认模型">
+            <MultimodalModelSelect
+              value={settings.aiHubMixImageFusionModel || 'doubao-seedream-4-0-250828'}
+              options={[
+                { value: 'doubao-seedream-4-0-250828', label: 'Doubao Seedream 4.0' },
+                { value: 'doubao-seedream-4-5-250828', label: 'Doubao Seedream 4.5' },
+                { value: 'doubao-seedream-5.0-lite',   label: 'Doubao Seedream 5.0 Lite' },
+              ]}
+              onChange={v => sendSetting('aiHubMixImageFusionModel', v)}
+            />
+          </Field>
+          <Field label="组图输出默认模型">
+            <MultimodalModelSelect
+              value={settings.aiHubMixImageGroupModel || 'doubao-seedream-4-0-250828'}
+              options={[
+                { value: 'doubao-seedream-4-0-250828', label: 'Doubao Seedream 4.0' },
+                { value: 'doubao-seedream-4-5-250828', label: 'Doubao Seedream 4.5' },
+                { value: 'doubao-seedream-5.0-lite',   label: 'Doubao Seedream 5.0 Lite' },
+              ]}
+              onChange={v => sendSetting('aiHubMixImageGroupModel', v)}
             />
           </Field>
           <Field label="TTS 默认模型">

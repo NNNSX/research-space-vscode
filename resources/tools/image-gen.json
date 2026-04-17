@@ -1,7 +1,7 @@
 {
   "id": "image-gen",
   "name": "图像生成",
-  "description": "根据文字描述生成图像（Gemini，需 AIHubMix Key）",
+  "description": "根据文字描述生成图像（Gemini / Doubao，需 AIHubMix Key）",
   "icon": "image",
   "supportsImages": false,
   "outputNodeType": "image",
@@ -13,7 +13,8 @@
       "label": "模型",
       "options": [
         "gemini-3.1-flash-image-preview",
-        "gemini-3-pro-image-preview"
+        "gemini-3-pro-image-preview",
+        "doubao-seedream-5.0-lite"
       ],
       "default": ""
     },
@@ -31,10 +32,32 @@
       "default": "1:1"
     },
     {
+      "name": "size",
+      "type": "select",
+      "label": "输出尺寸（Doubao）",
+      "options": [
+        "2k",
+        "3k"
+      ],
+      "default": "2k"
+    },
+    {
       "name": "style_hint",
       "type": "text",
       "label": "风格提示（可选）",
       "default": ""
+    },
+    {
+      "name": "web_search",
+      "type": "boolean",
+      "label": "启用联网检索（Doubao）",
+      "default": false
+    },
+    {
+      "name": "watermark",
+      "type": "boolean",
+      "label": "添加水印（Doubao）",
+      "default": true
     }
   ],
   "paramMaps": {},

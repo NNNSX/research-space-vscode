@@ -77,6 +77,9 @@ function resolveCardContentMode(node: CanvasNode, width?: number, height?: numbe
 export const DataNode = memo(DataNodeInner);
 
 function DataNodeInner({ data, selected }: DataNodeProps) {
+  const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
+  const edges = useCanvasStore(s => s.edges);
+  const blueprintReplacementTargetNodeId = useCanvasStore(s => s.blueprintReplacementTargetNodeId);
   const imageUriMap = useCanvasStore(s => s.imageUriMap);
   const nodeDefs = useCanvasStore(s => s.nodeDefs);
   const previewNodeSize = useCanvasStore(s => s.previewNodeSize);
@@ -88,6 +91,9 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
   const nodeDef = nodeDefs.find(d => d.id === data.node_type);
   const isBlueprintPlaceholder = !!data.meta?.blueprint_placeholder_kind;
+  const blueprintBoundKind = data.meta?.blueprint_bound_slot_kind;
+  const isBlueprintBoundNode = !!blueprintBoundKind;
+  const isReplacementTarget = blueprintReplacementTargetNodeId === data.id;
   const accentColor = data.meta?.blueprint_color
     ?? nodeDef?.color
     ?? FALLBACK_COLORS[data.node_type]
@@ -114,6 +120,22 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const displayContent = desiredCardContentMode === 'full'
     ? (fullContent ?? data.meta?.content_preview)
     : data.meta?.content_preview;
+  const placeholderBindingInfo = useMemo(() => {
+    if (data.meta?.blueprint_placeholder_kind !== 'input') { return null; }
+    const bindingEdges = edges.filter(edge =>
+      edge.target === data.id && edge.data?.edge_type === 'data_flow'
+    );
+    const boundNodeTitles = bindingEdges
+      .map(edge => canvasNodes.find(node => node.id === edge.source)?.title)
+      .filter((title): title is string => !!title);
+    return {
+      count: bindingEdges.length,
+      accepts: data.meta?.blueprint_placeholder_accepts ?? [],
+      required: !!data.meta?.blueprint_placeholder_required,
+      allowMultiple: !!data.meta?.blueprint_placeholder_allow_multiple,
+      titles: boundNodeTitles,
+    };
+  }, [canvasNodes, data.id, data.meta?.blueprint_placeholder_accepts, data.meta?.blueprint_placeholder_allow_multiple, data.meta?.blueprint_placeholder_kind, data.meta?.blueprint_placeholder_required, edges]);
 
   // ── Context menu state ──
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -172,13 +194,15 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         width: '100%',
         height: '100%',
         background: 'var(--vscode-editor-background)',
-        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px ${isBlueprintPlaceholder ? 'dashed' : 'solid'} ${selected ? accentColor : (isBlueprintPlaceholder ? withAlpha(accentColor, 0.85, 'var(--vscode-panel-border)') : 'var(--vscode-panel-border)')}`,
+        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : (isReplacementTarget ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH)}px ${isBlueprintPlaceholder ? 'dashed' : 'solid'} ${selected || isReplacementTarget ? accentColor : (isBlueprintPlaceholder ? withAlpha(accentColor, 0.85, 'var(--vscode-panel-border)') : 'var(--vscode-panel-border)')}`,
         borderRadius: NODE_RADIUS,
         display: 'flex',
         /* NO overflow:hidden here — it clips the ReactFlow Handle dots */
         cursor: 'default',
         boxShadow: selected
           ? `0 0 0 1px ${withAlpha(accentColor, 0.2, 'transparent')}, 0 10px 24px ${withAlpha(accentColor, 0.16, 'rgba(0,0,0,0.18)')}`
+          : isReplacementTarget
+            ? `0 0 0 2px ${withAlpha(accentColor, 0.24, 'transparent')}, 0 0 0 8px ${withAlpha(accentColor, 0.10, 'transparent')}, 0 12px 28px ${withAlpha(accentColor, 0.18, 'rgba(0,0,0,0.20)')}`
           : '0 3px 10px rgba(0,0,0,0.18)',
         position: 'relative',
       }}
@@ -263,6 +287,50 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
               flexShrink: 0,
             }}>
               {data.meta?.blueprint_placeholder_kind === 'input' ? '输入占位' : '输出占位'}
+            </span>
+          )}
+          {placeholderBindingInfo && (
+            <span title="蓝图输入绑定状态" style={{
+              background: placeholderBindingInfo.count > 0
+                ? withAlpha(accentColor, 0.14, 'transparent')
+                : 'var(--vscode-inputValidation-warningBackground)',
+              color: placeholderBindingInfo.count > 0
+                ? accentColor
+                : 'var(--vscode-inputValidation-warningForeground)',
+              border: `1px solid ${placeholderBindingInfo.count > 0 ? withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)') : 'var(--vscode-inputValidation-warningBorder)'}`,
+              borderRadius: 4,
+              fontSize: 10,
+              padding: '1px 5px',
+              flexShrink: 0,
+            }}>
+              {placeholderBindingInfo.count > 0 ? `已绑定 ${placeholderBindingInfo.count}` : '待绑定'}
+            </span>
+          )}
+          {isBlueprintBoundNode && (
+            <span title="该节点已回填到蓝图实例槽位" style={{
+              background: withAlpha(accentColor, 0.12, 'transparent'),
+              color: accentColor,
+              border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+              borderRadius: 4,
+              fontSize: 10,
+              padding: '1px 5px',
+              flexShrink: 0,
+            }}>
+              {blueprintBoundKind === 'output' ? '输出回填' : '输入接管'}
+            </span>
+          )}
+          {isReplacementTarget && (
+            <span title="拖到此处松手即可替换输入占位" style={{
+              background: withAlpha(accentColor, 0.16, 'transparent'),
+              color: accentColor,
+              border: `1px solid ${withAlpha(accentColor, 0.42, 'var(--vscode-panel-border)')}`,
+              borderRadius: 4,
+              fontSize: 10,
+              padding: '1px 5px',
+              flexShrink: 0,
+              fontWeight: 700,
+            }}>
+              松手替换
             </span>
           )}
         </div>
@@ -377,7 +445,53 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
             </div>
           )}
 
-          {data.node_type === 'ai_output' && (data.meta?.ai_provider || data.meta?.ai_model) && (
+          {isBlueprintBoundNode && data.meta?.blueprint_bound_slot_title && (
+            <div style={{
+              fontSize: 10,
+              color: 'var(--vscode-descriptionForeground)',
+              lineHeight: 1.4,
+              wordBreak: 'break-word',
+            }}>
+              槽位：{data.meta.blueprint_bound_slot_title}
+            </div>
+          )}
+
+          {placeholderBindingInfo && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div style={{
+                fontSize: 10,
+                color: placeholderBindingInfo.count > 0 ? accentColor : 'var(--vscode-inputValidation-warningForeground)',
+                fontWeight: 600,
+              }}>
+                {placeholderBindingInfo.required ? '必填输入槽位' : '可选输入槽位'}
+                {' · '}
+                {placeholderBindingInfo.allowMultiple ? '允许多绑定' : '单绑定'}
+              </div>
+              {placeholderBindingInfo.accepts.length > 0 && (
+                <div style={{
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                  lineHeight: 1.4,
+                  wordBreak: 'break-word',
+                }}>
+                  接受类型：{placeholderBindingInfo.accepts.join(' / ')}
+                </div>
+              )}
+              {placeholderBindingInfo.titles.length > 0 && (
+                <div style={{
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                  lineHeight: 1.4,
+                  wordBreak: 'break-word',
+                }}>
+                  当前绑定：{placeholderBindingInfo.titles.slice(0, 3).join('、')}
+                  {placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}
+                </div>
+              )}
+            </div>
+          )}
+
+          {PREVIEWABLE.has(data.node_type) && (data.meta?.ai_provider || data.meta?.ai_model) && (
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
               {data.meta.ai_provider && (
                 <span style={{

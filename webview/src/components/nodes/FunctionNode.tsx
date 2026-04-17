@@ -48,6 +48,8 @@ const TOOL_ICONS: Record<string, string> = {
   // 多模态工具
   'image-gen':     '🖼',
   'image-edit':    '✏️',
+  'image-fusion':  '🧩',
+  'image-group-output': '🖼️',
   tts:             '🔊',
   stt:             '🎵',
   'video-gen':     '🎬',
@@ -149,6 +151,162 @@ function FunctionNodeInner({ id, data, selected }: FunctionNodeProps) {
   );
 }
 
+function isDoubaoImageModel(model: string): boolean {
+  return /^doubao-seedream-/i.test(model);
+}
+
+function resolveVisibleOptionalParams(
+  toolId: string,
+  params: ParamDef[],
+  effectiveModel: string,
+): ParamDef[] {
+  if (toolId === 'image-gen') {
+    const isDoubao = isDoubaoImageModel(effectiveModel);
+    return params.filter(param => {
+      if (isDoubao) {
+        return param.name !== 'aspect_ratio';
+      }
+      return !['size', 'web_search', 'watermark'].includes(param.name);
+    });
+  }
+
+  if (toolId === 'image-edit') {
+    const isDoubao = isDoubaoImageModel(effectiveModel);
+    return params.filter(param => {
+      if (isDoubao) {
+        return param.name !== 'aspect_ratio';
+      }
+      return !['size', 'watermark'].includes(param.name);
+    });
+  }
+
+  return params;
+}
+
+function buildToolWarnings(args: {
+  toolId: string;
+  toolDef: NonNullable<ReturnType<typeof useCanvasStore.getState>['toolDefs'][number]> | undefined;
+  upstreamNodes: CanvasNode[];
+  promptParamValue: string;
+  chatDraft: string;
+  queryValue: string;
+  styleHintValue: string;
+  motionPromptValue: string;
+}): string[] {
+  const {
+    toolId,
+    toolDef,
+    upstreamNodes,
+    promptParamValue,
+    chatDraft,
+    queryValue,
+    styleHintValue,
+    motionPromptValue,
+  } = args;
+
+  const warnings: string[] = [];
+  const imageCount = upstreamNodes.filter(node => node.node_type === 'image').length;
+  const audioCount = upstreamNodes.filter(node => node.node_type === 'audio').length;
+  const textCount = upstreamNodes.filter(node =>
+    node.node_type === 'paper'
+    || node.node_type === 'note'
+    || node.node_type === 'code'
+    || node.node_type === 'ai_output'
+    || node.node_type === 'data'
+  ).length;
+
+  if (toolId === 'chat') {
+    if (!chatDraft.trim()) {
+      warnings.push('💬 需先输入对话 Prompt');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'rag') {
+    if (!queryValue) {
+      warnings.push('❓ 需先填写问题');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'image-gen') {
+    if (textCount === 0 && !styleHintValue) {
+      warnings.push('📝 需连接文本节点提供图像描述');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'image-edit') {
+    if (imageCount === 0) {
+      warnings.push('🖼 需连接图像节点作为参考图');
+    }
+    if (textCount === 0) {
+      warnings.push('📝 需连接文本节点作为编辑提示词');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'image-fusion') {
+    if (imageCount < 2) {
+      warnings.push('🧩 需至少连接 2 个图像节点');
+    }
+    if (!promptParamValue) {
+      warnings.push('✏️ 需填写融合指令');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'image-group-output') {
+    if (textCount === 0 && !promptParamValue) {
+      warnings.push('📝 需提供组图描述：请连接文本节点，或在参数里填写');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'image-to-video') {
+    if (imageCount === 0) {
+      warnings.push('🖼 需连接图像节点');
+    }
+    if (!motionPromptValue && textCount === 0) {
+      warnings.push('🎬 建议提供运动描述：可连接文本节点，或填写运动描述');
+    }
+    return warnings;
+  }
+
+  if (toolId === 'video-gen') {
+    if (!motionPromptValue && textCount === 0) {
+      warnings.push('🎬 需提供文本描述：请连接文本节点，或填写运动描述');
+    }
+    return warnings;
+  }
+
+  if (toolDef?.apiType === 'tts') {
+    if (textCount === 0) {
+      warnings.push('📝 需连接文本节点（笔记 / AI 输出）');
+    }
+    return warnings;
+  }
+
+  if (toolDef?.apiType === 'stt') {
+    if (audioCount === 0) {
+      warnings.push('🎵 需连接音频节点');
+    }
+    return warnings;
+  }
+
+  const requiredSlots = toolDef?.slots?.filter(slot => slot.required) ?? [];
+  if (requiredSlots.length > 0 && upstreamNodes.length === 0) {
+    warnings.push(`📎 需连接：${requiredSlots.map(slot => slot.label).join('、')}`);
+    return warnings;
+  }
+
+  if (toolDef?.apiType !== 'chat' && upstreamNodes.length === 0) {
+    warnings.push('📎 需连接输入数据节点');
+  }
+
+  return warnings;
+}
+
 function FullFunctionNode({
   id,
   data,
@@ -222,6 +380,8 @@ function FullFunctionNode({
   const MULTIMODAL_SETTINGS_KEY: Record<string, keyof typeof settings> = {
     'image-gen':      'aiHubMixImageGenModel',
     'image-edit':     'aiHubMixImageEditModel',
+    'image-fusion':   'aiHubMixImageFusionModel',
+    'image-group-output': 'aiHubMixImageGroupModel',
     'tts':            'aiHubMixTtsModel',
     'stt':            'aiHubMixSttModel',
     'video-gen':      'aiHubMixVideoGenModel',
@@ -249,6 +409,31 @@ function FullFunctionNode({
   // Guard: ensure input_schema is always an array
   const inputSchema = Array.isArray(data.meta?.input_schema) ? data.meta!.input_schema : [];
   const schema = parseInputParams(inputSchema);
+  const toolModelParam = toolDef?.params.find(param => param.name === 'model');
+  const effectiveMultimodalModel = isMultimodal
+    ? String(
+        (data.meta?.param_values?.['model'] as string | undefined)
+        || globalDefaultModel
+        || toolModelParam?.default
+        || toolModelParam?.options?.[0]
+        || ''
+      )
+    : '';
+  const visibleOptionalParams = resolveVisibleOptionalParams(tool, schema.optional, effectiveMultimodalModel);
+  const promptParamValue = String((data.meta?.param_values?.['prompt'] as string | undefined) ?? '').trim();
+  const queryValue = String((data.meta?.param_values?.['query'] as string | undefined) ?? '').trim();
+  const styleHintValue = String((data.meta?.param_values?.['style_hint'] as string | undefined) ?? '').trim();
+  const motionPromptValue = String((data.meta?.param_values?.['motion_prompt'] as string | undefined) ?? '').trim();
+  const toolWarnings = buildToolWarnings({
+    toolId: tool,
+    toolDef,
+    upstreamNodes,
+    promptParamValue,
+    chatDraft,
+    queryValue,
+    styleHintValue,
+    motionPromptValue,
+  });
 
   // ── Provider change ────────────────────────────────────────────────────────
   const handleProviderChange = useCallback((newProvider: string) => {
@@ -502,16 +687,10 @@ function FullFunctionNode({
     }
   })();
 
-  useEffect(() => {
-    updateNodeInternals(id);
-    const raf = window.requestAnimationFrame(() => updateNodeInternals(id));
-    return () => window.cancelAnimationFrame(raf);
-  }, [id, updateNodeInternals, promptOpen, inputsOpen, upstreamNodes.length, showIssueBanner, effectiveProgressText, pipelineNodeStatus, countdown]);
-
-  useEffect(() => {
+  const scheduleNodeHeightSync = useCallback(() => {
     const el = contentRef.current;
     if (!el) { return; }
-    const raf = window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       const currentWidth = data.size?.width ?? 280;
       const currentHeight = data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT;
       const contentHeight = Math.max(el.scrollHeight, el.clientHeight);
@@ -521,9 +700,20 @@ function FullFunctionNode({
       );
       if (Math.abs(requiredHeight - currentHeight) > 2) {
         updateNodeSize(id, currentWidth, requiredHeight);
+      } else {
+        updateNodeInternals(id);
       }
     });
+  }, [data.size?.height, data.size?.width, id, updateNodeInternals, updateNodeSize]);
+
+  useEffect(() => {
+    updateNodeInternals(id);
+    const raf = window.requestAnimationFrame(() => updateNodeInternals(id));
     return () => window.cancelAnimationFrame(raf);
+  }, [id, updateNodeInternals, promptOpen, inputsOpen, upstreamNodes.length, showIssueBanner, effectiveProgressText, pipelineNodeStatus, countdown]);
+
+  useEffect(() => {
+    scheduleNodeHeightSync();
   }, [
     countdown,
     data.size?.height,
@@ -535,19 +725,19 @@ function FullFunctionNode({
     promptOpen,
     showIssueBanner,
     tool,
-    updateNodeSize,
     upstreamNodes.length,
+    scheduleNodeHeightSync,
   ]);
 
   useEffect(() => {
     const el = contentRef.current;
     if (!el || typeof ResizeObserver === 'undefined') { return; }
     const observer = new ResizeObserver(() => {
-      updateNodeInternals(id);
+      scheduleNodeHeightSync();
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [id, updateNodeInternals]);
+  }, [scheduleNodeHeightSync]);
 
   return (
     <div
@@ -799,16 +989,20 @@ function FullFunctionNode({
           {upstreamNodes.length === 0 && (() => {
             // Determine the hint based on tool type
             let hint = '';
-            if (toolDef?.apiType === 'image_edit') {
-              hint = '🖼 需连接图像节点作为参考图';
+            if (toolDef?.id === 'image-fusion') {
+              hint = '🧩 需至少连接 2 个图像节点；融合指令请在下方参数中填写';
+            } else if (toolDef?.apiType === 'image_edit') {
+              hint = '🖼 需连接图像节点作为参考图，并连接文本节点作为编辑提示词';
+            } else if (toolDef?.id === 'image-group-output') {
+              hint = '📝 可连接文本节点提供组图描述，或直接在下方参数中填写';
+            } else if (toolDef?.id === 'image-gen') {
+              hint = '📝 需连接文本节点提供描述；下方只补充模型、风格与输出参数';
             } else if (toolDef?.id === 'image-to-video') {
               hint = '🖼 需连接图像节点实现图生视频';
             } else if (toolDef?.apiType === 'stt') {
               hint = '🎵 需连接音频节点进行转录';
             } else if (toolDef?.apiType === 'tts') {
               hint = '📝 需连接文本节点（笔记 / AI 输出）作为输入';
-            } else if (toolDef?.apiType === 'image_generation') {
-              hint = '📝 可连接文本节点提供描述，或直接在参数中填写';
             } else if (toolDef?.apiType === 'video_generation') {
               hint = '📝 可连接文本节点提供描述，或直接在参数中填写';
             } else if (toolDef?.slots && toolDef.slots.length > 0) {
@@ -832,25 +1026,23 @@ function FullFunctionNode({
               </div>
             );
           })()}
-          {/* Specific multimodal warnings when wrong type is connected */}
-          {upstreamNodes.length > 0 && toolDef?.apiType === 'image_edit' && upstreamNodes.every(n => n.node_type !== 'image') && (
-            <div style={{
-              fontSize: 10, padding: '5px 8px', borderRadius: 4,
-              background: 'var(--vscode-inputValidation-warningBackground, #3a2e00)',
-              color: 'var(--vscode-inputValidation-warningForeground, #ffcc00)',
-              border: '1px solid var(--vscode-inputValidation-warningBorder, #ffcc0060)',
-            }}>
-              🖼 需连接图像节点作为参考图
-            </div>
-          )}
-          {upstreamNodes.length > 0 && toolDef?.apiType === 'stt' && upstreamNodes.every(n => n.node_type !== 'audio') && (
-            <div style={{
-              fontSize: 10, padding: '5px 8px', borderRadius: 4,
-              background: 'var(--vscode-inputValidation-warningBackground, #3a2e00)',
-              color: 'var(--vscode-inputValidation-warningForeground, #ffcc00)',
-              border: '1px solid var(--vscode-inputValidation-warningBorder, #ffcc0060)',
-            }}>
-              🎵 需连接音频节点进行转录
+          {toolWarnings.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {toolWarnings.map((warning, index) => (
+                <div
+                  key={`${tool}-warning-${index}`}
+                  style={{
+                    fontSize: 10,
+                    padding: '5px 8px',
+                    borderRadius: 4,
+                    background: 'var(--vscode-inputValidation-warningBackground, #3a2e00)',
+                    color: 'var(--vscode-inputValidation-warningForeground, #ffcc00)',
+                    border: '1px solid var(--vscode-inputValidation-warningBorder, #ffcc0060)',
+                  }}
+                >
+                  {warning}
+                </div>
+              ))}
             </div>
           )}
 
@@ -930,11 +1122,11 @@ function FullFunctionNode({
           )}
 
           {/* Optional tool params */}
-          {schema.optional.length > 0 && (
+          {visibleOptionalParams.length > 0 && (
             <>
               <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {schema.optional.map(p => (
+                {visibleOptionalParams.map(p => (
                   <ParamControl key={p.name} param={p} nodeData={data} globalDefaultModel={globalDefaultModel} isMultimodal={isMultimodal} />
                 ))}
               </div>
@@ -1143,9 +1335,13 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
   // We read raw stored value; empty means "global"
   const storedValue = nodeData.meta?.param_values?.[param.name];
   const isModelParam = param.name === 'model';
+  const isDraftTextareaParam =
+    param.type === 'text'
+    && isMultimodal
+    && (param.name === 'instruction' || param.name === 'prompt');
 
   // Displayed/effective value for non-model params: use default if missing
-  const currentValue = (storedValue ?? param.default) as string | number;
+  const currentValue = (storedValue ?? param.default) as string | number | boolean;
 
   // For model params: if stored is empty/undefined, treat as global (show '' in select)
   const modelSelectValue = isModelParam
@@ -1159,6 +1355,11 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
     && !knownOptions.includes(modelSelectValue);
   const [customMode, setCustomMode] = useState(isCustomValue);
   const [customDraft, setCustomDraft] = useState(isCustomValue ? modelSelectValue : '');
+  const [draftTextareaValue, setDraftTextareaValue] = useState(
+    isDraftTextareaParam ? String(currentValue ?? '') : ''
+  );
+  const draftTextareaSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const draftTextareaComposingRef = useRef(false);
 
   // Sync customMode/draft when node data changes externally (undo/redo)
   useEffect(() => {
@@ -1169,6 +1370,32 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
     if (isNowCustom) { setCustomDraft(sv); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeData.meta?.param_values?.[param.name]]);
+
+  useEffect(() => {
+    if (!isDraftTextareaParam) { return; }
+    const nextValue = String((nodeData.meta?.param_values?.[param.name] ?? param.default ?? ''));
+    setDraftTextareaValue(prev => (prev === nextValue ? prev : nextValue));
+  }, [isDraftTextareaParam, nodeData.meta?.param_values?.[param.name], param.default, param.name]);
+
+  useEffect(() => () => {
+    if (draftTextareaSaveTimer.current) {
+      clearTimeout(draftTextareaSaveTimer.current);
+    }
+  }, []);
+
+  const persistDraftTextarea = useCallback((value: string, immediate = false) => {
+    if (!isDraftTextareaParam) { return; }
+    if (draftTextareaSaveTimer.current) {
+      clearTimeout(draftTextareaSaveTimer.current);
+    }
+    if (immediate) {
+      updateNodeParamValue(nodeData.id, param.name, value);
+      return;
+    }
+    draftTextareaSaveTimer.current = setTimeout(() => {
+      updateNodeParamValue(nodeData.id, param.name, value);
+    }, 400);
+  }, [isDraftTextareaParam, nodeData.id, param.name, updateNodeParamValue]);
 
   const labelStyle: React.CSSProperties = {
     fontSize: 11,
@@ -1279,6 +1506,57 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
   }
 
   if (param.type === 'text') {
+    if (isDraftTextareaParam) {
+      const helperText = nodeData.meta?.ai_tool === 'image-edit'
+        ? '这里只填写编辑指令；左侧输入端仅用于连接参考图像。'
+        : nodeData.meta?.ai_tool === 'image-fusion'
+          ? '连接至少 2 张图像；这里填写融合目标与保留约束。'
+          : '这里填写组图主题与连贯性要求；也可连接文本节点补充描述。';
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)' }}>{param.label}</span>
+          <textarea
+            className="nodrag"
+            value={draftTextareaValue}
+            onChange={e => {
+              const nextValue = e.target.value;
+              setDraftTextareaValue(nextValue);
+              if (!draftTextareaComposingRef.current) {
+                persistDraftTextarea(nextValue);
+              }
+            }}
+            onCompositionStart={() => {
+              draftTextareaComposingRef.current = true;
+            }}
+            onCompositionEnd={e => {
+              draftTextareaComposingRef.current = false;
+              const nextValue = e.currentTarget.value;
+              setDraftTextareaValue(nextValue);
+              persistDraftTextarea(nextValue, true);
+            }}
+            onBlur={() => persistDraftTextarea(draftTextareaValue, true)}
+            onKeyDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            placeholder={param.name === 'instruction'
+              ? '例如：保留主体构图，把背景改成夜景霓虹街道，并增强电影感光影'
+              : '例如：生成一组共 4 张连贯插画，表现同一庭院角落的四季变迁'}
+            rows={4}
+            style={{
+              ...inputBase,
+              width: '100%',
+              resize: 'vertical',
+              lineHeight: 1.5,
+              fontFamily: 'var(--vscode-font-family, sans-serif)',
+              boxSizing: 'border-box',
+            }}
+          />
+          <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
+            {helperText}
+          </span>
+        </div>
+      );
+    }
+
     const isQuery = param.name === 'query';
     if (isQuery) {
       return (
@@ -1325,6 +1603,20 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
           style={{ ...inputBase, width: 70, flex: 'none' }}
         />
       </div>
+    );
+  }
+
+  if (param.type === 'boolean') {
+    return (
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={Boolean(currentValue)}
+          onChange={e => updateNodeParamValue(nodeData.id, param.name, e.target.checked)}
+          style={{ cursor: 'pointer' }}
+        />
+        <span style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)' }}>{param.label}</span>
+      </label>
     );
   }
 
