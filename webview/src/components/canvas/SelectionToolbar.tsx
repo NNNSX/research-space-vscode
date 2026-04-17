@@ -48,6 +48,10 @@ export function SelectionToolbar() {
   const pipelineHeads = getPipelineHeadNodes(selectedNodeIds);
   const hasPipeline = pipelineHeads.length > 0;
   const shouldShowToolbar = selectedNodeIds.length >= 2;
+  const selectedFunctionCount = selectedNodeIds.reduce((count, id) => {
+    const node = nodes.find(item => item.id === id);
+    return count + (node?.data.node_type === 'function' ? 1 : 0);
+  }, 0);
 
   if (!shouldShowToolbar) { return null; }
 
@@ -75,6 +79,14 @@ export function SelectionToolbar() {
     setGroupDialogOpen(false);
   };
 
+  const handleCreateBlueprint = () => {
+    postMessage({
+      type: 'createBlueprintDraft',
+      selectedNodeIds,
+      canvas: canvasFile ?? undefined,
+    });
+  };
+
   return ReactDOM.createPortal(
     <div
       style={{
@@ -100,6 +112,24 @@ export function SelectionToolbar() {
       }}>
         {selectedNodeIds.length} 个节点
       </span>
+      {selectedFunctionCount > 0 && (
+        <button
+          onClick={handleCreateBlueprint}
+          style={{
+            background: '#2f7d68',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 4,
+            padding: '4px 12px',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+          title="把当前选中的工作流提取成蓝图草稿"
+        >
+          🔧 创建蓝图
+        </button>
+      )}
       <button
         onClick={handleMove}
         style={{

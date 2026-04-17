@@ -1,9 +1,12 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
+import { postMessage } from '../../bridge';
 import type { RuntimeToolDef } from '../../../../src/ai/tool-registry';
+import type { BlueprintRegistryEntry } from '../../../../src/blueprint/blueprint-registry';
 
 export const DRAG_TOOL_KEY = 'application/rs-tool';
+export const DRAG_BLUEPRINT_KEY = 'application/rs-blueprint';
 
 // ── Category definitions ──────────────────────────────────────────────────────
 
@@ -106,6 +109,52 @@ function ToolRow({ tool }: { tool: RuntimeToolDef }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function BlueprintRow({ entry }: { entry: BlueprintRegistryEntry }) {
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.setData(DRAG_BLUEPRINT_KEY, JSON.stringify(entry));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
+  return (
+    <div
+      draggable
+      onDragStart={handleDragStart}
+      title={`${entry.title}\n拖出到画布以实例化蓝图`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 8px',
+        background: 'var(--vscode-editor-background)',
+        border: '1px solid var(--vscode-panel-border)',
+        borderRadius: 6,
+        cursor: 'grab',
+        userSelect: 'none',
+      }}
+    >
+      <span style={{ fontSize: 14, flexShrink: 0, color: entry.color }}>⬚</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {entry.title}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {entry.description || entry.file_name}
+        </div>
+      </div>
+      <button
+        title="直接加载到画布"
+        onClick={e => {
+          e.stopPropagation();
+          postMessage({ type: 'instantiateBlueprint', filePath: entry.file_path });
+        }}
+        style={actionBtnStyle}
+      >
+        +
+      </button>
     </div>
   );
 }
@@ -508,6 +557,7 @@ function AiPromptModal({ onClose }: { onClose: () => void }) {
 export function AiToolsPanel() {
   const aiToolsPanelOpen = useCanvasStore(s => s.aiToolsPanelOpen);
   const toolDefs = useCanvasStore(s => s.toolDefs) as RuntimeToolDef[];
+  const blueprintIndex = useCanvasStore(s => s.blueprintIndex);
 
   const [search, setSearch] = useState('');
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
@@ -613,6 +663,43 @@ export function AiToolsPanel() {
 
       {/* Tool list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 6px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {blueprintIndex.length > 0 && (
+          <div style={{ marginBottom: 6 }}>
+            <button
+              onClick={() => toggleCat('_blueprints')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                width: '100%',
+                padding: '5px 4px',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--vscode-sideBarSectionHeader-foreground)',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.03em',
+                borderRadius: 4,
+              }}
+            >
+              <span style={{ fontSize: 10, width: 12, textAlign: 'center', flexShrink: 0,
+                transition: 'transform 0.15s', transform: collapsedCats.has('_blueprints') ? 'rotate(-90deg)' : 'rotate(0deg)' }}>
+                ▾
+              </span>
+              <span style={{ fontSize: 13 }}>⬚</span>
+              <span>蓝图库</span>
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--vscode-descriptionForeground)', fontWeight: 400 }}>
+                {blueprintIndex.length}
+              </span>
+            </button>
+            {!collapsedCats.has('_blueprints') && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, paddingLeft: 4, paddingTop: 2 }}>
+                {blueprintIndex.map(entry => <BlueprintRow key={entry.file_path} entry={entry} />)}
+              </div>
+            )}
+          </div>
+        )}
         {toolDefs.length === 0 ? (
           <div style={{ padding: 12, fontSize: 11, color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>
             加载工具中…

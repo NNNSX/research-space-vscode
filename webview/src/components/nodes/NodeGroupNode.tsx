@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ReactDOM from 'react-dom';
 import {
   Handle,
   Position,
@@ -8,7 +7,8 @@ import {
 } from '@xyflow/react';
 import type { CanvasNode } from '../../../../src/core/canvas-model';
 import { useCanvasStore } from '../../stores/canvas-store';
-import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 import {
   ensureNodeChromeStyles,
   NODE_BORDER_WIDTH,
@@ -39,7 +39,9 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
   const deleteNodeGroup = useCanvasStore(s => s.deleteNodeGroup);
   const toggleNodeGroupCollapse = useCanvasStore(s => s.toggleNodeGroupCollapse);
   const renameNodeGroup = useCanvasStore(s => s.renameNodeGroup);
+  const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
   const updateNodeInternals = useUpdateNodeInternals();
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -75,7 +77,7 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
   }, [group, nameDraft, renameNodeGroup]);
 
   const portStyle = useMemo<React.CSSProperties>(() => ({
-    ...buildNodePortStyle(group?.borderColor ?? '#d8b648'),
+    ...buildNodePortStyle(group?.borderColor ?? '#d8b648', 'out'),
   }), [group?.borderColor]);
 
   if (!group) { return null; }
@@ -94,6 +96,7 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
   return (
     <>
       <div
+        ref={rootRef}
         style={{
           width,
           height,
@@ -109,7 +112,13 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setCtxMenu({ x: e.clientX, y: e.clientY });
+              closeAllCanvasContextMenus();
+              selectExclusiveNode(id);
+              const rect = rootRef.current?.getBoundingClientRect();
+              setCtxMenu({
+                x: rect ? e.clientX - rect.left + 8 : 12,
+                y: rect ? e.clientY - rect.top + 8 : 12,
+              });
             }}
             className="rs-group-header"
             style={{
@@ -146,7 +155,13 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                setCtxMenu({ x: e.clientX, y: e.clientY });
+                closeAllCanvasContextMenus();
+                selectExclusiveNode(id);
+                const rect = rootRef.current?.getBoundingClientRect();
+                setCtxMenu({
+                  x: rect ? e.clientX - rect.left + 8 : 12,
+                  y: rect ? e.clientY - rect.top + 8 : 12,
+                });
               }}
               className="rs-group-header"
               style={{
@@ -227,16 +242,22 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
           type="target"
           position={Position.Left}
           id={NODE_PORT_IDS.in}
+          title={getNodePortLabel('in')}
+          aria-label={getNodePortLabel('in')}
+          data-rs-port-label={getNodePortLabel('in')}
           isConnectable
           isConnectableStart={false}
           isConnectableEnd
-          style={portStyle}
+          style={buildNodePortStyle(group?.borderColor ?? '#d8b648', 'in')}
         />
         <Handle
           className={NODE_PORT_CLASSNAME}
           type="source"
           position={Position.Right}
           id={NODE_PORT_IDS.out}
+          title={getNodePortLabel('out')}
+          aria-label={getNodePortLabel('out')}
+          data-rs-port-label={getNodePortLabel('out')}
           isConnectable
           isConnectableStart
           isConnectableEnd={false}
@@ -294,24 +315,12 @@ function GroupMenu({ x, y, onRename, onToggle, onDelete, onClose }: {
   onDelete: () => void;
   onClose: () => void;
 }) {
-  React.useEffect(() => {
-    const close = () => onClose();
-    const timer = setTimeout(() => {
-      window.addEventListener('click', close);
-      window.addEventListener('contextmenu', close);
-      window.addEventListener('keydown', close);
-    }, 0);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('click', close);
-      window.removeEventListener('contextmenu', close);
-      window.removeEventListener('keydown', close);
-    };
-  }, [onClose]);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  useCanvasContextMenuAutoClose(true, onClose, menuRef);
 
-  return ReactDOM.createPortal(
-    <div style={{
-      position: 'fixed',
+  return (
+    <div ref={menuRef} style={{
+      position: 'absolute',
       left: x,
       top: y,
       zIndex: 10020,
@@ -321,12 +330,12 @@ function GroupMenu({ x, y, onRename, onToggle, onDelete, onClose }: {
       boxShadow: '0 6px 16px rgba(0,0,0,0.35)',
       minWidth: 130,
       overflow: 'hidden',
+      pointerEvents: 'auto',
     }}>
       <MenuItem label="重命名" onClick={onRename} />
       <MenuItem label="折叠/展开" onClick={onToggle} />
       <MenuItem label="删除组" onClick={onDelete} danger />
-    </div>,
-    document.body
+    </div>
   );
 }
 

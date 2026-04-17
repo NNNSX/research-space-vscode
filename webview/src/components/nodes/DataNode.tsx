@@ -12,7 +12,8 @@ import { NodeContextMenu } from './NodeContextMenu';
 import { ExperimentLogBody } from './ExperimentLogBody';
 import { TaskBody } from './TaskBody';
 import { AiReadabilityBadge } from './AiReadabilityBadge';
-import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { closeAllCanvasContextMenus } from '../../utils/context-menu';
 import {
   ensureNodeChromeStyles,
   NODE_BORDER_WIDTH,
@@ -82,10 +83,15 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
   const openPreview = useCanvasStore(s => s.openPreview);
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
+  const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
 
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
   const nodeDef = nodeDefs.find(d => d.id === data.node_type);
-  const accentColor = nodeDef?.color ?? FALLBACK_COLORS[data.node_type] ?? 'var(--vscode-foreground)';
+  const isBlueprintPlaceholder = !!data.meta?.blueprint_placeholder_kind;
+  const accentColor = data.meta?.blueprint_color
+    ?? nodeDef?.color
+    ?? FALLBACK_COLORS[data.node_type]
+    ?? 'var(--vscode-foreground)';
   const nodeIcon    = nodeDef?.icon  ?? FALLBACK_ICONS[data.node_type]  ?? '📁';
   const previewType = nodeDef?.previewType ?? (
     data.node_type === 'note' || data.node_type === 'ai_output' ? 'markdown' : 'text'
@@ -146,8 +152,11 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setCtxMenu({ x: e.clientX, y: e.clientY });
-  }, []);
+    closeAllCanvasContextMenus();
+    selectExclusiveNode(data.id);
+    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+    setCtxMenu({ x: e.clientX - rect.left + 8, y: e.clientY - rect.top + 8 });
+  }, [data.id, selectExclusiveNode]);
 
   useEffect(() => {
     if (!shouldHydrateCardContent || !data.file_path) { return; }
@@ -163,7 +172,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         width: '100%',
         height: '100%',
         background: 'var(--vscode-editor-background)',
-        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px solid ${selected ? accentColor : 'var(--vscode-panel-border)'}`,
+        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px ${isBlueprintPlaceholder ? 'dashed' : 'solid'} ${selected ? accentColor : (isBlueprintPlaceholder ? withAlpha(accentColor, 0.85, 'var(--vscode-panel-border)') : 'var(--vscode-panel-border)')}`,
         borderRadius: NODE_RADIUS,
         display: 'flex',
         /* NO overflow:hidden here — it clips the ReactFlow Handle dots */
@@ -241,6 +250,19 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
               borderRadius: 4, fontSize: 10, padding: '1px 5px', flexShrink: 0,
             }}>
               缺失
+            </span>
+          )}
+          {isBlueprintPlaceholder && (
+            <span title="蓝图占位节点" style={{
+              background: withAlpha(accentColor, 0.12, 'transparent'),
+              color: accentColor,
+              border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+              borderRadius: 4,
+              fontSize: 10,
+              padding: '1px 5px',
+              flexShrink: 0,
+            }}>
+              {data.meta?.blueprint_placeholder_kind === 'input' ? '输入占位' : '输出占位'}
             </span>
           )}
         </div>
@@ -392,20 +414,26 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         type="source"
         position={Position.Right}
         id={NODE_PORT_IDS.out}
+        title={getNodePortLabel('out')}
+        aria-label={getNodePortLabel('out')}
+        data-rs-port-label={getNodePortLabel('out')}
         isConnectable
         isConnectableStart
         isConnectableEnd={false}
-        style={buildNodePortStyle(accentColor)}
+        style={buildNodePortStyle(accentColor, 'out')}
       />
       <Handle
         className={NODE_PORT_CLASSNAME}
         type="target"
         position={Position.Left}
         id={NODE_PORT_IDS.in}
+        title={getNodePortLabel('in')}
+        aria-label={getNodePortLabel('in')}
+        data-rs-port-label={getNodePortLabel('in')}
         isConnectable
         isConnectableStart={false}
         isConnectableEnd
-        style={buildNodePortStyle(accentColor)}
+        style={buildNodePortStyle(accentColor, 'in')}
       />
 
       {/* Context menu */}

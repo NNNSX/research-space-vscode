@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { ReactFlowProvider, useNodesInitialized } from '@xyflow/react';
 import { Canvas } from './components/canvas/Canvas';
+import { CreateBlueprintDialog } from './components/dialogs/CreateBlueprintDialog';
 import { PetWidget } from './components/pet/PetWidget';
 import { useCanvasStore } from './stores/canvas-store';
 import { usePetStore } from './stores/pet-store';
@@ -252,6 +253,12 @@ export function App() {
   const runAutosaveCheck = useCanvasStore(s => s.runAutosaveCheck);
   const markSaveSuccess = useCanvasStore(s => s.markSaveSuccess);
   const markSaveError = useCanvasStore(s => s.markSaveError);
+  const blueprintDraft = useCanvasStore(s => s.blueprintDraft);
+  const blueprintIndex = useCanvasStore(s => s.blueprintIndex);
+  const setBlueprintDraft = useCanvasStore(s => s.setBlueprintDraft);
+  const clearBlueprintDraft = useCanvasStore(s => s.clearBlueprintDraft);
+  const setBlueprintIndex = useCanvasStore(s => s.setBlueprintIndex);
+  const instantiateBlueprintDefinition = useCanvasStore(s => s.instantiateBlueprintDefinition);
   const lastInitialCanvasLoadStats = useCanvasStore(s => s.lastInitialCanvasLoadStats);
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
@@ -570,6 +577,24 @@ export function App() {
           }
           break;
         }
+        case 'blueprintDraftCreated':
+          if (msg.draft) {
+            setBlueprintDraft(msg.draft);
+          }
+          break;
+        case 'blueprintDraftSaved':
+          clearBlueprintDraft();
+          break;
+        case 'blueprintIndex':
+          if (Array.isArray(msg.entries)) {
+            setBlueprintIndex(msg.entries);
+          }
+          break;
+        case 'blueprintInstantiated':
+          if (msg.entry && msg.definition) {
+            instantiateBlueprintDefinition(msg.entry, msg.definition, msg.position);
+          }
+          break;
         // ── Pipeline progress messages ──
         case 'pipelineStarted': {
           const pm = msg as { pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number };
@@ -666,6 +691,14 @@ export function App() {
             <Canvas />
           </ReactFlowProvider>
         </div>
+        {blueprintDraft && (
+          <CreateBlueprintDialog
+            draft={blueprintDraft}
+            existingBlueprints={blueprintIndex}
+            onSave={nextDraft => postMessage({ type: 'saveBlueprintDraft', draft: nextDraft })}
+            onClose={clearBlueprintDraft}
+          />
+        )}
         <InitialCanvasLoadingNotice />
         {lastError && <ErrorToast message={lastError} onClose={clearError} />}
       </div>

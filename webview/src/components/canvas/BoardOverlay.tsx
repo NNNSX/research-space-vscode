@@ -1,8 +1,8 @@
 import React, { useCallback, useRef, useState } from 'react';
-import ReactDOM from 'react-dom';
 import { ViewportPortal, useReactFlow } from '@xyflow/react';
 import type { Board } from '../../../../src/core/canvas-model';
 import { useCanvasStore, startBoardDrag, endBoardDrag } from '../../stores/canvas-store';
+import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
 // ── Color presets (shared with BoardDropdown) ────────────────────────────────
 
@@ -65,6 +65,7 @@ function BoardOverlay({ board }: BoardOverlayProps) {
   const setActiveBoardId = useCanvasStore(s => s.setActiveBoardId);
   const { screenToFlowPosition } = useReactFlow();
   const { bounds, name, id, color, borderColor } = board;
+  const rootRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -155,7 +156,13 @@ function BoardOverlay({ board }: BoardOverlayProps) {
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setCtxMenu({ x: e.clientX, y: e.clientY });
+    closeAllCanvasContextMenus();
+    setActiveBoardId(id);
+    const rect = rootRef.current?.getBoundingClientRect();
+    setCtxMenu({
+      x: rect ? e.clientX - rect.left + 8 : 12,
+      y: rect ? e.clientY - rect.top + 8 : 12,
+    });
   }, []);
 
   const handleDelete = useCallback(() => {
@@ -191,6 +198,7 @@ function BoardOverlay({ board }: BoardOverlayProps) {
   return (
     <>
       <div
+        ref={rootRef}
         onClick={handleClick}
         style={{
           position: 'absolute',
@@ -219,6 +227,7 @@ function BoardOverlay({ board }: BoardOverlayProps) {
             pointerEvents: 'auto',
             cursor: dragging ? 'grabbing' : 'grab',
             userSelect: 'none',
+            boxShadow: isActive ? '0 0 0 2px rgba(255,255,255,0.28), 0 10px 28px rgba(0,0,0,0.28)' : undefined,
           }}
         >
           <span style={{ fontSize: 22 }}>📋</span>
@@ -236,10 +245,11 @@ function BoardOverlay({ board }: BoardOverlayProps) {
             width: '100%',
             height: bounds.height,
             background: color,
-            border: `1.5px solid ${borderColor}`,
+            border: `${isActive ? 2 : 1.5}px solid ${borderColor}`,
             borderRadius: '0 0 6px 6px',
             position: 'relative',
             pointerEvents: 'none',
+            boxShadow: isActive ? `0 0 0 2px ${hexToRgbaLocal(borderColor, 0.18)}` : undefined,
           }}
         >
           {/* Resize handles — show on active/hover */}
@@ -301,34 +311,20 @@ function BoardContextMenu({ x, y, onEdit, onDelete, onClose }: {
   onDelete: () => void;
   onClose: () => void;
 }) {
-  React.useEffect(() => {
-    const close = () => onClose();
-    const closeKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    const tid = setTimeout(() => {
-      window.addEventListener('click', close);
-      window.addEventListener('contextmenu', close);
-      window.addEventListener('keydown', closeKey);
-    }, 0);
-    return () => {
-      clearTimeout(tid);
-      window.removeEventListener('click', close);
-      window.removeEventListener('contextmenu', close);
-      window.removeEventListener('keydown', closeKey);
-    };
-  }, [onClose]);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  useCanvasContextMenuAutoClose(true, onClose, menuRef);
 
-  return ReactDOM.createPortal(
-    <div style={{
-      position: 'fixed', left: x, top: y,
+  return (
+    <div ref={menuRef} style={{
+      position: 'absolute', left: x, top: y,
       background: 'var(--vscode-menu-background, var(--vscode-editor-background))',
       border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
       borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
-      zIndex: 99999, minWidth: 140, overflow: 'hidden', fontSize: 12,
+      zIndex: 99999, minWidth: 140, overflow: 'hidden', fontSize: 12, pointerEvents: 'auto',
     }} onClick={e => e.stopPropagation()}>
       <CtxItem label="✎ 编辑画板" onClick={() => { onEdit(); onClose(); }} />
       <CtxItem label="🗑 删除画板" onClick={() => { onDelete(); onClose(); }} danger />
-    </div>,
-    document.body
+    </div>
   );
 }
 

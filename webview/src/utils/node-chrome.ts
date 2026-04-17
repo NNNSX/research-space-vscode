@@ -24,6 +24,20 @@ export function ensureNodeChromeStyles() {
   const style = document.createElement('style');
   style.id = NODE_CHROME_STYLE_ID;
   style.textContent = `
+    @keyframes rsPortPulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(255,255,255,0.10), 0 0 0 0 rgba(0,0,0,0.18);
+        transform: translate(-50%, -50%) scale(1);
+      }
+      50% {
+        box-shadow: 0 0 0 4px rgba(255,255,255,0.12), 0 0 0 8px rgba(0,0,0,0.10);
+        transform: translate(-50%, -50%) scale(1.08);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(255,255,255,0.10), 0 0 0 0 rgba(0,0,0,0.18);
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
     .rs-node-surface {
       transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
     }
@@ -44,6 +58,7 @@ export function ensureNodeChromeStyles() {
       box-shadow: none !important;
       pointer-events: all;
       overflow: visible;
+      transition: filter 160ms ease, opacity 160ms ease;
     }
     .rs-node-port::before {
       content: '';
@@ -56,8 +71,41 @@ export function ensureNodeChromeStyles() {
       border-radius: 999px;
       background: var(--rs-port-color, var(--vscode-editor-foreground));
       border: 2px solid var(--vscode-editor-background);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.12);
       box-sizing: border-box;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.14);
+      transition: box-shadow 160ms ease, transform 160ms ease, opacity 160ms ease;
+    }
+    .rs-node-port::after {
+      content: attr(data-rs-port-label);
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, calc(-100% - 10px));
+      background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000 8%);
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      line-height: 1.2;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+    .rs-node-port:hover {
+      filter: drop-shadow(0 0 1px var(--vscode-editor-background)) drop-shadow(0 0 3px rgba(255,255,255,0.22)) drop-shadow(0 0 5px rgba(0,0,0,0.34));
+    }
+    .rs-node-port:hover::before,
+    .rs-node-port:focus-visible::before {
+      animation: rsPortPulse 1.25s ease-in-out infinite;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.24), 0 0 0 6px color-mix(in srgb, var(--rs-port-color, #fff) 20%, transparent);
+    }
+    .rs-node-port:hover::after,
+    .rs-node-port:focus-visible::after {
+      opacity: 1;
+      transform: translate(-50%, calc(-100% - 14px));
     }
   `;
   document.head.appendChild(style);

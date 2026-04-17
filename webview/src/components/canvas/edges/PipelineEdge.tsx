@@ -68,18 +68,32 @@ export function PipelineEdge({
   });
 
   return (
-    <BaseEdge
-      id={id}
-      path={edgePath}
-      markerEnd={markerEnd}
-      style={{
-        stroke: color,
-        strokeWidth,
-        strokeDasharray: '8,4',
-        opacity: 0.9,
-        animation: animated ? 'rsPipelineFlow 0.6s linear infinite' : undefined,
-        transition: 'stroke 0.3s, stroke-width 0.3s',
-      }}
-    />
+    <>
+      {selected && (
+        <BaseEdge
+          id={`${id}-halo`}
+          path={edgePath}
+          style={{
+            stroke: color,
+            strokeWidth: 8,
+            opacity: 0.22,
+          }}
+        />
+      )}
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          stroke: color,
+          strokeWidth: selected ? Math.max(strokeWidth, 3.2) : strokeWidth,
+          strokeDasharray: '8,4',
+          opacity: selected ? 1 : 0.9,
+          animation: animated ? 'rsPipelineFlow 0.6s linear infinite' : undefined,
+          transition: 'stroke 0.3s, stroke-width 0.3s',
+          filter: selected ? `drop-shadow(0 0 6px ${color})` : undefined,
+        }}
+      />
+    </>
   );
 }

@@ -4,6 +4,7 @@ import {
   Background,
   MiniMap,
   BackgroundVariant,
+  ViewportPortal,
   useReactFlow,
   useOnSelectionChange,
   type NodeTypes,
@@ -19,11 +20,12 @@ import { wouldCreateCycle } from '../../utils/graph-utils';
 import { DataNode } from '../nodes/DataNode';
 import { FunctionNode } from '../nodes/FunctionNode';
 import { NodeGroupNode } from '../nodes/NodeGroupNode';
+import { BlueprintContainerNode } from '../nodes/BlueprintContainerNode';
 import { CustomEdge } from './edges/CustomEdge';
 import { PipelineEdge } from './edges/PipelineEdge';
 import { RolePickerDialog } from './RolePickerDialog';
 import { Toolbar } from '../panels/Toolbar';
-import { AiToolsPanel, DRAG_TOOL_KEY } from '../panels/AiToolsPanel';
+import { AiToolsPanel, DRAG_BLUEPRINT_KEY, DRAG_TOOL_KEY } from '../panels/AiToolsPanel';
 import { AiOutputPanel } from '../panels/AiOutputPanel';
 import { StagingPanel, STAGING_NODE_KEY } from '../panels/StagingPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
@@ -33,13 +35,15 @@ import { BoardOverlays } from './BoardOverlay';
 import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
 import { PipelineToolbar } from '../pipeline/PipelineToolbar';
-import { isGroupHubNode } from '../../../../src/core/canvas-model';
+import { isDataNode, isGroupHubNode } from '../../../../src/core/canvas-model';
 import type { AiTool } from '../../../../src/core/canvas-model';
+import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
 const nodeTypes: NodeTypes = {
   dataNode: DataNode,
   functionNode: FunctionNode,
   nodeGroup: NodeGroupNode,
+  blueprintNode: BlueprintContainerNode,
 };
 
 const edgeTypes: EdgeTypes = {
@@ -73,6 +77,8 @@ export function Canvas() {
   const selectionMode = useCanvasStore(s => s.selectionMode);
   const undo = useCanvasStore(s => s.undo);
   const redo = useCanvasStore(s => s.redo);
+  const selectExclusiveEdge = useCanvasStore(s => s.selectExclusiveEdge);
+  const clearSelection = useCanvasStore(s => s.clearSelection);
   const saveNow = useCanvasStore(s => s.saveNow);
   const initialCanvasLoadActive = useCanvasStore(s => s.initialCanvasLoadActive);
   const initialCanvasLoadSessionId = useCanvasStore(s => s.currentInitialCanvasLoadStats?.sessionId ?? null);
@@ -82,6 +88,7 @@ export function Canvas() {
 
   // Drag-over overlay state (shows big hint when dragging files onto canvas)
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [edgeContextMenu, setEdgeContextMenu] = useState<{ edgeId: string; x: number; y: number } | null>(null);
   const dragLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Undo / Redo keyboard shortcuts
@@ -160,6 +167,22 @@ export function Canvas() {
         return targetNode.node_type === 'function' || isGroupHubNode(targetNode);
       }
 
+      if (targetNode.node_type === 'blueprint') {
+        if (!connection.targetHandle) { return false; }
+        if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) { return false; }
+        const slot = targetNode.meta?.blueprint_input_slot_defs?.find(item => item.id === connection.targetHandle);
+        if (!slot) { return false; }
+        if (!slot.allow_multiple) {
+          const alreadyBound = state.canvasFile.edges.some(edge =>
+            edge.target === connection.target &&
+            edge.targetHandle === connection.targetHandle &&
+            edge.edge_type === 'data_flow'
+          );
+          if (alreadyBound) { return false; }
+        }
+        return true;
+      }
+
       if (targetNode.node_type === 'function') {
         return sourceNode.node_type !== 'function';
       }
@@ -172,6 +195,7 @@ export function Canvas() {
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (
       e.dataTransfer.types.includes(DRAG_TOOL_KEY) ||
+      e.dataTransfer.types.includes(DRAG_BLUEPRINT_KEY) ||
       e.dataTransfer.types.includes(STAGING_NODE_KEY) ||
       e.dataTransfer.types.includes('Files') ||
       e.dataTransfer.types.includes('text/uri-list')
@@ -210,6 +234,20 @@ export function Canvas() {
       if (toolId) {
         const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
         createFunctionNode(toolId, pos);
+      }
+      return;
+    }
+
+    if (e.dataTransfer.types.includes(DRAG_BLUEPRINT_KEY)) {
+      const raw = e.dataTransfer.getData(DRAG_BLUEPRINT_KEY);
+      if (raw) {
+        try {
+          const entry = JSON.parse(raw) as import('../../../../src/blueprint/blueprint-registry').BlueprintRegistryEntry;
+          const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+          postMessage({ type: 'instantiateBlueprint', filePath: entry.file_path, position: pos });
+        } catch {
+          // Ignore malformed drag payload.
+        }
       }
       return;
     }
@@ -254,6 +292,20 @@ export function Canvas() {
       .map(e => ({ type: 'remove' as const, id: e.id }));
     if (changes.length > 0) { onEdgesChange(changes); }
   }, [onEdgesChange]);
+
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    closeAllCanvasContextMenus();
+    selectExclusiveEdge(edge.id);
+  }, [selectExclusiveEdge]);
+
+  const handleEdgeContextMenu = useCallback((event: React.MouseEvent, edge: Edge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeAllCanvasContextMenus();
+    selectExclusiveEdge(edge.id);
+    const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    setEdgeContextMenu({ edgeId: edge.id, x: pos.x + 10, y: pos.y + 10 });
+  }, [screenToFlowPosition, selectExclusiveEdge]);
 
   // Canvas-wide shortcuts (excluding input/textarea/contenteditable)
   useEffect(() => {
@@ -415,6 +467,13 @@ export function Canvas() {
           onDrop={handleDrop}
           onNodesDelete={handleNodesDelete}
           onEdgesDelete={handleEdgesDelete}
+          onEdgeClick={handleEdgeClick}
+          onEdgeContextMenu={handleEdgeContextMenu}
+          onPaneClick={() => {
+            closeAllCanvasContextMenus();
+            setEdgeContextMenu(null);
+            clearSelection();
+          }}
           selectionOnDrag={selectionMode}
           panOnDrag={!selectionMode}
           minZoom={0.05}
@@ -439,6 +498,18 @@ export function Canvas() {
             nodeColor="var(--vscode-badge-background)"
           />
           <BoardOverlays />
+          {edgeContextMenu && (
+            <EdgeContextMenu
+              edgeId={edgeContextMenu.edgeId}
+              x={edgeContextMenu.x}
+              y={edgeContextMenu.y}
+              onDelete={() => {
+                onEdgesChange([{ type: 'remove', id: edgeContextMenu.edgeId }]);
+                setEdgeContextMenu(null);
+              }}
+              onClose={() => setEdgeContextMenu(null)}
+            />
+          )}
         </ReactFlow>
         <AiToolsPanel />
         <AiOutputPanel />
@@ -497,5 +568,71 @@ export function Canvas() {
         )}
       </div>
     </div>
+  );
+}
+
+function EdgeContextMenu({
+  edgeId,
+  x,
+  y,
+  onDelete,
+  onClose,
+}: {
+  edgeId: string;
+  x: number;
+  y: number;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  useCanvasContextMenuAutoClose(true, onClose, menuRef);
+
+  return (
+    <ViewportPortal>
+      <div
+        ref={menuRef}
+        style={{
+          position: 'absolute',
+          left: x,
+          top: y,
+          background: 'var(--vscode-menu-background, var(--vscode-editor-background))',
+          border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
+          borderRadius: 6,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+          zIndex: 10050,
+          minWidth: 160,
+          overflow: 'hidden',
+          fontSize: 12,
+          pointerEvents: 'auto',
+        }}
+        onClick={event => event.stopPropagation()}
+        onContextMenu={event => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <button
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          style={{
+            display: 'block',
+            width: '100%',
+            padding: '7px 14px',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--vscode-errorForeground, #f48771)',
+            fontSize: 12,
+            textAlign: 'left',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+          title={`删除连接线 ${edgeId}`}
+        >
+          🗑 删除连接线
+        </button>
+      </div>
+    </ViewportPortal>
   );
 }

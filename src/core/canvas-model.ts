@@ -1,3 +1,6 @@
+import type { BlueprintDraft, BlueprintDefinition, BlueprintSlotDef } from '../blueprint/blueprint-types';
+import type { BlueprintRegistryEntry } from '../blueprint/blueprint-registry';
+
 // ── AI Model info ────────────────────────────────────────────────────────────
 export interface ModelInfo {
   id: string;          // Model identifier passed to the API
@@ -37,7 +40,7 @@ export interface SettingsSnapshot {
 
 // ── Node types ─────────────────────────────────────────────────────────────
 export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data';
-export type NodeType = DataNodeType | 'function' | 'group_hub';
+export type NodeType = DataNodeType | 'function' | 'group_hub' | 'blueprint';
 export type FnStatus = 'idle' | 'running' | 'done' | 'error';
 export type RunIssueKind = 'missing_input' | 'missing_config' | 'run_failed' | 'skipped';
 export type AiTool = 'summarize' | 'polish' | 'review' | 'translate' | 'draw' | 'rag' | 'chat';
@@ -98,6 +101,22 @@ export interface NodeMeta {
 
   // Group hub metadata
   hub_group_id?: string;             // visual node-group container id
+
+  // Blueprint instance metadata
+  blueprint_def_id?: string;
+  blueprint_file_path?: string;
+  blueprint_color?: string;
+  blueprint_version?: string;
+  blueprint_input_slots?: number;
+  blueprint_output_slots?: number;
+  blueprint_intermediate_slots?: number;
+  blueprint_function_count?: number;
+  blueprint_input_slot_defs?: BlueprintSlotDef[];
+  blueprint_output_slot_defs?: BlueprintSlotDef[];
+  blueprint_instance_id?: string;
+  blueprint_placeholder_kind?: 'input' | 'output';
+  blueprint_placeholder_slot_id?: string;
+  blueprint_placeholder_hint?: string;
 }
 
 // ── Canvas node ─────────────────────────────────────────────────────────────
@@ -330,6 +349,10 @@ export type WebviewMessage =
   | { type: 'requestFileContent'; filePath: string; requestId: string }
   | { type: 'previewFile'; filePath: string }
   | { type: 'runPipeline'; triggerNodeId: string; canvas?: CanvasFile }
+  | { type: 'createBlueprintDraft'; selectedNodeIds: string[]; canvas?: CanvasFile }
+  | { type: 'saveBlueprintDraft'; draft: BlueprintDefinition }
+  | { type: 'requestBlueprintIndex' }
+  | { type: 'instantiateBlueprint'; filePath: string; position?: { x: number; y: number } }
   | { type: 'pipelinePause'; pipelineId: string }
   | { type: 'pipelineResume'; pipelineId: string }
   | { type: 'pipelineCancel'; pipelineId: string }
@@ -375,6 +398,10 @@ export type ExtensionMessage =
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
   | { type: 'outputHistory'; nodeId: string; entries: OutputHistoryEntry[] }
   | { type: 'fileContent'; requestId: string; content: string; language?: string }
+  | { type: 'blueprintDraftCreated'; draft: BlueprintDraft }
+  | { type: 'blueprintDraftSaved'; entry: BlueprintRegistryEntry }
+  | { type: 'blueprintIndex'; entries: BlueprintRegistryEntry[] }
+  | { type: 'blueprintInstantiated'; entry: BlueprintRegistryEntry; definition: BlueprintDefinition; position?: { x: number; y: number } }
   | { type: 'error'; message: string }
   | { type: 'pipelineStarted'; pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number }
   | { type: 'pipelineNodeStart'; pipelineId: string; nodeId: string }
@@ -394,6 +421,7 @@ export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> 
   video:           { width: 280, height: 180 },
   experiment_log:  { width: 320, height: 300 },
   group_hub:       { width: 220, height: 140 },
+  blueprint:       { width: 320, height: 180 },
   task:            { width: 300, height: 240 },
   data:            { width: 320, height: 200 },
   function:        { width: 280, height: 220 },

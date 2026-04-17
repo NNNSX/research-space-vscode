@@ -38,6 +38,10 @@ export function CustomEdge({
     if (edgeData.roleLabel) { return edgeData.roleLabel; }
     // Find the target function node's tool and look up the slot label
     const targetNode = canvasNodes?.find(n => n.id === target);
+    if (targetNode?.node_type === 'blueprint') {
+      const slot = targetNode.meta?.blueprint_input_slot_defs?.find(s => s.id === edgeData.role);
+      return slot?.title ?? edgeData.role;
+    }
     const toolId = targetNode?.meta?.ai_tool as string | undefined;
     const toolDef = toolId ? toolDefs.find(d => d.id === toolId) : undefined;
     const slot = toolDef?.slots?.find(s => s.name === edgeData.role);
@@ -51,15 +55,27 @@ export function CustomEdge({
 
   return (
     <>
+      {selected && (
+        <BaseEdge
+          id={`${id}-halo`}
+          path={edgePath}
+          style={{
+            stroke: color,
+            strokeWidth: 8,
+            opacity: 0.22,
+          }}
+        />
+      )}
       <BaseEdge
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
         style={{
           stroke: color,
-          strokeWidth: selected ? 2.5 : 1.5,
+          strokeWidth: selected ? 3.2 : 1.5,
           strokeDasharray: edgeType === 'reference' ? '5,5' : undefined,
-          opacity: 0.85,
+          opacity: selected ? 1 : 0.85,
+          filter: selected ? `drop-shadow(0 0 6px ${color})` : undefined,
         }}
       />
       {edgeData?.label && (

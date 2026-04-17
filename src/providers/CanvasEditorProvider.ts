@@ -10,6 +10,7 @@ import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
 import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
 import { extractPreviewWithMeta } from '../core/content-extractor';
+import { listBlueprintDefinitions, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -199,6 +200,11 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     webviewPanel.webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
     // Push node defs (always available since loaded in constructor)
     webviewPanel.webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
+    listBlueprintDefinitions(canvasDir).then(entries => {
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries });
+    }).catch(() => {
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries: [] });
+    });
 
     // Load canvas-scoped custom tools, set up hot-reload watcher, then push tool defs
     // Ensure builtins are loaded first to avoid sending an empty tool list
@@ -222,6 +228,18 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     toolsWatcher.onDidChange(refreshTools);
     toolsWatcher.onDidDelete(refreshTools);
     panelDisposables.push(toolsWatcher);
+
+    const blueprintsWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(canvasDir, 'blueprints/*.blueprint.json')
+    );
+    const refreshBlueprints = async () => {
+      const entries = await listBlueprintDefinitions(canvasDir);
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries });
+    };
+    blueprintsWatcher.onDidCreate(refreshBlueprints);
+    blueprintsWatcher.onDidChange(refreshBlueprints);
+    blueprintsWatcher.onDidDelete(refreshBlueprints);
+    panelDisposables.push(blueprintsWatcher);
   }
 
   async saveCustomDocument(
@@ -316,6 +334,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
         webview.postMessage({ type: 'toolDefs', tools: this._registry.getAll() });
         webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
+        webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
         // Send pet state
         {
           const petSettings = readPetSettings();
@@ -747,6 +766,77 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         runPipeline(targetNode.id, canvas, document.uri, webview).catch(e => {
           webview.postMessage({ type: 'error', message: `Pipeline 执行失败: ${String(e)}` });
         });
+        break;
+      }
+
+      case 'createBlueprintDraft': {
+        const selectedNodeIds = Array.isArray(msg['selectedNodeIds'])
+          ? (msg['selectedNodeIds'] as unknown[]).filter((id): id is string => typeof id === 'string' && id.length > 0)
+          : [];
+        if (selectedNodeIds.length === 0) {
+          webview.postMessage({ type: 'toastError', message: '请先选择一段工作流，再创建蓝图。' });
+          break;
+        }
+        try {
+          const canvas = (msg['canvas'] as import('../core/canvas-model').CanvasFile | undefined) ?? document.data;
+          const { buildBlueprintDraftFromSelection } = await import('../blueprint/blueprint-builder');
+          const draft = buildBlueprintDraftFromSelection(selectedNodeIds, canvas);
+          webview.postMessage({ type: 'blueprintDraftCreated', draft });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `创建蓝图草稿失败: ${String(e)}` });
+        }
+        break;
+      }
+
+      case 'saveBlueprintDraft': {
+        const draft = msg['draft'];
+        if (!draft || typeof draft !== 'object') {
+          webview.postMessage({ type: 'toastError', message: '蓝图草稿无效，无法保存。' });
+          break;
+        }
+        try {
+          const entry = await saveBlueprintDefinition(
+            canvasDir,
+            draft as import('../blueprint/blueprint-types').BlueprintDefinition,
+          );
+          webview.postMessage({ type: 'blueprintDraftSaved', entry });
+          webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `保存蓝图失败: ${String(e)}` });
+        }
+        break;
+      }
+
+      case 'requestBlueprintIndex': {
+        try {
+          webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `读取蓝图库失败: ${String(e)}` });
+        }
+        break;
+      }
+
+      case 'instantiateBlueprint': {
+        const filePath = msg['filePath'];
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+          webview.postMessage({ type: 'toastError', message: '蓝图文件路径无效，无法实例化。' });
+          break;
+        }
+        try {
+          const { readBlueprintDefinition } = await import('../blueprint/blueprint-registry');
+          const entries = await listBlueprintDefinitions(canvasDir);
+          const entry = entries.find(item => item.file_path === filePath);
+          if (!entry) {
+            throw new Error(`找不到蓝图索引：${filePath}`);
+          }
+          const definition = await readBlueprintDefinition(filePath);
+          const position = (msg['position'] && typeof msg['position'] === 'object')
+            ? (msg['position'] as { x: number; y: number })
+            : undefined;
+          webview.postMessage({ type: 'blueprintInstantiated', entry, definition, position });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `读取蓝图定义失败: ${String(e)}` });
+        }
         break;
       }
 

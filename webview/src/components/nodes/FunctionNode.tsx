@@ -5,7 +5,8 @@ import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
 import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
-import { buildNodePortStyle, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
+import { closeAllCanvasContextMenus } from '../../utils/context-menu';
 import {
   ensureNodeChromeStyles,
   NODE_BORDER_WIDTH,
@@ -166,6 +167,7 @@ function FullFunctionNode({
   const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
   const updateInputOrder = useCanvasStore(s => s.updateInputOrder);
   const getUpstreamNodes = useCanvasStore(s => s.getUpstreamNodes);
+  const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
   const modelCache = useCanvasStore(s => s.modelCache);
   const settings = useCanvasStore(s => s.settings);
   const toolDefs = useCanvasStore(s => s.toolDefs);
@@ -551,7 +553,14 @@ function FullFunctionNode({
     <div
       ref={rootRef}
       className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
-      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+      onContextMenu={e => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeAllCanvasContextMenus();
+        selectExclusiveNode(data.id);
+        const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+        setCtxMenu({ x: e.clientX - rect.left + 8, y: e.clientY - rect.top + 8 });
+      }}
       style={{
       width: '100%',
       height: '100%',
@@ -983,20 +992,26 @@ function FullFunctionNode({
         type="target"
         position={Position.Left}
         id={NODE_PORT_IDS.in}
+        title={getNodePortLabel('in')}
+        aria-label={getNodePortLabel('in')}
+        data-rs-port-label={getNodePortLabel('in')}
         isConnectable
         isConnectableStart={false}
         isConnectableEnd
-        style={buildNodePortStyle(effectiveStatusColor)}
+        style={buildNodePortStyle(effectiveStatusColor, 'in')}
       />
       <Handle
         className={NODE_PORT_CLASSNAME}
         type="source"
         position={Position.Right}
         id={NODE_PORT_IDS.out}
+        title={getNodePortLabel('out')}
+        aria-label={getNodePortLabel('out')}
+        data-rs-port-label={getNodePortLabel('out')}
         isConnectable
         isConnectableStart
         isConnectableEnd={false}
-        style={buildNodePortStyle(effectiveStatusColor)}
+        style={buildNodePortStyle(effectiveStatusColor, 'out')}
       />
 
       {/* Context menu */}

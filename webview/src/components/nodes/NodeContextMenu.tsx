@@ -1,7 +1,7 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
+import { useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
 interface NodeContextMenuProps {
   nodeId: string;
@@ -22,6 +22,7 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
   const [renaming, setRenaming] = React.useState(false);
   const [draft, setDraft] = React.useState(nodeTitle);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
 
   // Auto-focus input when rename mode activates
   React.useEffect(() => {
@@ -31,23 +32,7 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
     }
   }, [renaming]);
 
-  // Close on outside click/key — but NOT while renaming (let Enter/Escape handle it)
-  React.useEffect(() => {
-    if (renaming) { return; }
-    const close = () => onClose();
-    const closeKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { onClose(); } };
-    const tid = setTimeout(() => {
-      window.addEventListener('click', close);
-      window.addEventListener('contextmenu', close);
-      window.addEventListener('keydown', closeKey);
-    }, 0);
-    return () => {
-      clearTimeout(tid);
-      window.removeEventListener('click', close);
-      window.removeEventListener('contextmenu', close);
-      window.removeEventListener('keydown', closeKey);
-    };
-  }, [renaming, onClose]);
+  useCanvasContextMenuAutoClose(!renaming, onClose, menuRef);
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -142,10 +127,11 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
     </>
   );
 
-  const menu = (
+  return (
     <div
+      ref={menuRef}
       style={{
-        position: 'fixed',
+        position: 'absolute',
         left: x,
         top: y,
         background: 'var(--vscode-menu-background, var(--vscode-editor-background))',
@@ -156,6 +142,7 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
         minWidth: renaming ? 220 : 160,
         overflow: 'hidden',
         fontSize: 12,
+        pointerEvents: 'auto',
       }}
       onClick={e => e.stopPropagation()}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
@@ -163,8 +150,6 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
       {content}
     </div>
   );
-
-  return ReactDOM.createPortal(menu, document.body);
 }
 
 function MenuItem({

@@ -29,6 +29,8 @@ import { postMessage } from '../bridge';
 import { wouldCreateCycle } from '../utils/graph-utils';
 import { normalizeNodePortId } from '../utils/node-port';
 import { usePetStore } from './pet-store';
+import type { BlueprintDataNodeDef, BlueprintDefinition, BlueprintDraft, BlueprintSlotDef } from '../../../src/blueprint/blueprint-types';
+import type { BlueprintRegistryEntry } from '../../../src/blueprint/blueprint-registry';
 
 // ── ReactFlow node/edge shapes ──────────────────────────────────────────────
 export interface FlowNode {
@@ -60,6 +62,7 @@ export interface FlowEdge {
   data?: { edge_type: CanvasEdge['edge_type']; label?: string; synthetic?: boolean; role?: string };
   animated?: boolean;
   hidden?: boolean;
+  selected?: boolean;
 }
 
 // ── Store state ─────────────────────────────────────────────────────────────
@@ -230,6 +233,8 @@ interface CanvasState {
   redoStack: CanvasFile[];
   fullContentCache: Record<string, string>;
   previewNodeId: string | null;
+  blueprintDraft: BlueprintDraft | null;
+  blueprintIndex: BlueprintRegistryEntry[];
   pipelineState: PipelineState | null;
   saveState: CanvasSaveState;
   saveDueAt: number | null;
@@ -270,6 +275,12 @@ interface CanvasState {
   removeFromStaging(nodeId: string): void;
   commitStagingNode(nodeId: string, position: { x: number; y: number }): void;
   createFunctionNode(tool: AiTool | string, position: { x: number; y: number }): void;
+  createBlueprintInstance(entry: BlueprintRegistryEntry, position?: { x: number; y: number }): void;
+  instantiateBlueprintDefinition(
+    entry: BlueprintRegistryEntry,
+    definition: BlueprintDefinition,
+    position?: { x: number; y: number },
+  ): void;
   createDataNode(nodeType: 'experiment_log' | 'task', position: { x: number; y: number }): void;
   updateNodeParamValue(nodeId: string, key: string, value: unknown): void;
   updateNodeMeta(nodeId: string, patch: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
@@ -296,6 +307,9 @@ interface CanvasState {
   setNodeDefs(defs: DataNodeDef[]): void;
   setOutputHistory(data: { nodeId: string; entries: import('../../../src/core/canvas-model').OutputHistoryEntry[] } | null): void;
   setSelectedNodeIds(ids: string[]): void;
+  selectExclusiveNode(nodeId: string): void;
+  selectExclusiveEdge(edgeId: string): void;
+  clearSelection(): void;
   setSelectionMode(on: boolean): void;
   // ── Search methods ──
   setSearchOpen(open: boolean): void;
@@ -323,6 +337,9 @@ interface CanvasState {
   addBoardToStaging(name: string, color: string, borderColor: string): void;
   openPreview(nodeId: string): void;
   closePreview(): void;
+  setBlueprintDraft(draft: BlueprintDraft | null): void;
+  clearBlueprintDraft(): void;
+  setBlueprintIndex(entries: BlueprintRegistryEntry[]): void;
   pushUndo(): void;
   undo(): void;
   redo(): void;
@@ -384,6 +401,332 @@ function resetAutosaveWindow() {
 function ensureAutosaveWindow() {
   if (nextAutosaveAt > Date.now()) { return; }
   resetAutosaveWindow();
+}
+
+function computeBlueprintInstanceSize(entry: BlueprintRegistryEntry): { width: number; height: number } {
+  const width = Math.max(DEFAULT_SIZES.blueprint.width, 700);
+  const inputRows = Math.max(1, entry.input_slots);
+  const outputRows = Math.max(1, entry.output_slots);
+  const leftColumnHeight = 28 + inputRows * 62;
+  const middleColumnHeight = 28 + Math.ceil(6 / 2) * 58;
+  const rightColumnHeight = 28 + outputRows * 62;
+  const contentHeight = Math.max(leftColumnHeight, middleColumnHeight, rightColumnHeight);
+  const footerHeight = 56;
+  const height = Math.max(DEFAULT_SIZES.blueprint.height, 40 + 24 + contentHeight + footerHeight);
+  return { width, height };
+}
+
+function computeBlueprintSizeFromCounts(inputSlots: number, outputSlots: number): { width: number; height: number } {
+  const width = Math.max(DEFAULT_SIZES.blueprint.width, 700);
+  const inputRows = Math.max(1, inputSlots);
+  const outputRows = Math.max(1, outputSlots);
+  const leftColumnHeight = 28 + inputRows * 62;
+  const middleColumnHeight = 28 + Math.ceil(6 / 2) * 58;
+  const rightColumnHeight = 28 + outputRows * 62;
+  const contentHeight = Math.max(leftColumnHeight, middleColumnHeight, rightColumnHeight);
+  const footerHeight = 56;
+  const height = Math.max(DEFAULT_SIZES.blueprint.height, 40 + 24 + contentHeight + footerHeight);
+  return { width, height };
+}
+
+function computeBlueprintSizeFromNode(node: CanvasNode): { width: number; height: number } {
+  const inputSlots = node.meta?.blueprint_input_slot_defs?.length
+    ?? node.meta?.blueprint_input_slots
+    ?? 0;
+  const outputSlots = node.meta?.blueprint_output_slot_defs?.length
+    ?? node.meta?.blueprint_output_slots
+    ?? 0;
+  return computeBlueprintSizeFromCounts(inputSlots, outputSlots);
+}
+
+function buildBlueprintMetaFromEntry(
+  entry: BlueprintRegistryEntry,
+  previousMeta?: CanvasNode['meta'],
+): NonNullable<CanvasNode['meta']> {
+  return {
+    ...(previousMeta ?? {}),
+    blueprint_def_id: entry.id,
+    blueprint_file_path: entry.file_path,
+    blueprint_color: entry.color,
+    blueprint_version: entry.version,
+    blueprint_input_slots: entry.input_slots,
+    blueprint_intermediate_slots: entry.intermediate_slots,
+    blueprint_output_slots: entry.output_slots,
+    blueprint_function_count: entry.function_nodes,
+    blueprint_input_slot_defs: entry.input_slot_defs,
+    blueprint_output_slot_defs: entry.output_slot_defs,
+  };
+}
+
+function syncBlueprintNodeFromEntry(node: FlowNode, entry: BlueprintRegistryEntry): FlowNode {
+  const size = computeBlueprintInstanceSize(entry);
+  return {
+    ...node,
+    type: 'blueprintNode',
+    width: size.width,
+    height: size.height,
+    data: {
+      ...node.data,
+      node_type: 'blueprint',
+      title: entry.title,
+      size,
+      meta: buildBlueprintMetaFromEntry(entry, node.data.meta),
+    },
+  };
+}
+
+function hydrateBlueprintNodesFromIndex(
+  nodes: FlowNode[],
+  entries: BlueprintRegistryEntry[],
+): { nodes: FlowNode[]; changed: boolean } {
+  if (nodes.length === 0 || entries.length === 0) {
+    return { nodes, changed: false };
+  }
+
+  const entryById = new Map(entries.map(entry => [entry.id, entry]));
+  const entryByPath = new Map(entries.map(entry => [entry.file_path, entry]));
+  let changed = false;
+
+  const nextNodes = nodes.map(node => {
+    if (node.data.node_type !== 'blueprint') { return node; }
+
+    const matchedEntry = (
+      (node.data.meta?.blueprint_def_id ? entryById.get(node.data.meta.blueprint_def_id) : undefined) ??
+      (node.data.meta?.blueprint_file_path ? entryByPath.get(node.data.meta.blueprint_file_path) : undefined)
+    );
+    if (!matchedEntry) { return node; }
+
+    const nextNode = syncBlueprintNodeFromEntry(node, matchedEntry);
+    const sameTitle = node.data.title === nextNode.data.title;
+    const sameWidth = (node.width ?? node.data.size.width) === nextNode.width;
+    const sameHeight = (node.height ?? node.data.size.height) === nextNode.height;
+    const sameSize =
+      node.data.size.width === nextNode.data.size.width &&
+      node.data.size.height === nextNode.data.size.height;
+    const sameMeta = JSON.stringify(node.data.meta ?? {}) === JSON.stringify(nextNode.data.meta ?? {});
+    if (sameTitle && sameWidth && sameHeight && sameSize && sameMeta) {
+      return node;
+    }
+
+    changed = true;
+    return nextNode;
+  });
+
+  return { nodes: nextNodes, changed };
+}
+
+function normalizeBlueprintNodes(file: CanvasFile): CanvasFile {
+  const nodes = file.nodes ?? [];
+  if (nodes.length === 0) { return file; }
+
+  let changed = false;
+  const nextNodes = nodes.map(node => {
+    if (node.node_type !== 'blueprint') { return node; }
+    const normalizedSize = computeBlueprintSizeFromNode(node);
+    const sameWidth = node.size.width === normalizedSize.width;
+    const sameHeight = node.size.height === normalizedSize.height;
+    if (sameWidth && sameHeight) { return node; }
+    changed = true;
+    return { ...node, size: normalizedSize };
+  });
+
+  return changed ? { ...file, nodes: nextNodes } : file;
+}
+
+function preferredPlaceholderNodeType(slot: BlueprintSlotDef): CanvasNode['node_type'] {
+  if (slot.kind === 'output') { return 'ai_output'; }
+  const preferred = slot.accepts[0];
+  if (preferred === 'paper' || preferred === 'image' || preferred === 'audio' || preferred === 'video') {
+    return 'note';
+  }
+  return preferred ?? 'note';
+}
+
+function createBlueprintPlaceholderNode(
+  slot: BlueprintSlotDef,
+  instanceId: string,
+  definition: BlueprintDefinition,
+  position: { x: number; y: number },
+): CanvasNode {
+  const nodeType = preferredPlaceholderNodeType(slot);
+  const prefix = slot.kind === 'input' ? '[输入占位]' : '[输出占位]';
+  return {
+    id: uuid(),
+    node_type: nodeType,
+    title: `${prefix} ${slot.title}`,
+    position,
+    size: {
+      width: Math.max(220, slot.rect.width || DEFAULT_SIZES[nodeType].width),
+      height: Math.max(120, slot.rect.height || DEFAULT_SIZES[nodeType].height),
+    },
+    meta: {
+      blueprint_instance_id: instanceId,
+      blueprint_def_id: definition.id,
+      blueprint_color: definition.color,
+      blueprint_placeholder_kind: slot.kind === 'input' ? 'input' : 'output',
+      blueprint_placeholder_slot_id: slot.id,
+      blueprint_placeholder_hint: slot.binding_hint,
+      content_preview: slot.binding_hint ?? (slot.kind === 'input'
+        ? '将外部输入节点拖到此处，或直接把外部节点连到此占位节点。'
+        : '运行完成后，最终输出会优先回填到此占位位置。'),
+      card_content_mode: 'preview',
+    },
+  };
+}
+
+function createBlueprintInternalDataNode(
+  nodeDef: BlueprintDataNodeDef,
+  instanceId: string,
+  definition: BlueprintDefinition,
+  position: { x: number; y: number },
+): CanvasNode {
+  const nodeType = nodeDef.node_type;
+  return {
+    id: uuid(),
+    node_type: nodeType,
+    title: nodeDef.title,
+    position,
+    size: {
+      width: Math.max(180, nodeDef.rect.width || DEFAULT_SIZES[nodeType].width),
+      height: Math.max(120, nodeDef.rect.height || DEFAULT_SIZES[nodeType].height),
+    },
+    meta: {
+      blueprint_instance_id: instanceId,
+      blueprint_def_id: definition.id,
+      blueprint_color: definition.color,
+      content_preview: `蓝图内部节点：${nodeDef.title}`,
+      card_content_mode: 'preview',
+    },
+  };
+}
+
+function createBlueprintFunctionCanvasNode(
+  nodeDef: BlueprintDefinition['function_nodes'][number],
+  instanceId: string,
+  definition: BlueprintDefinition,
+  toolDefs: JsonToolDef[],
+  position: { x: number; y: number },
+): CanvasNode {
+  const toolDef = toolDefs.find(tool => tool.id === nodeDef.tool_id);
+  return {
+    id: uuid(),
+    node_type: 'function',
+    title: nodeDef.title,
+    position,
+    size: {
+      width: Math.max(260, nodeDef.rect.width || DEFAULT_SIZES.function.width),
+      height: Math.max(220, nodeDef.rect.height || DEFAULT_SIZES.function.height),
+    },
+    meta: {
+      ai_tool: nodeDef.tool_id,
+      ai_provider: nodeDef.provider,
+      ai_model: nodeDef.model,
+      input_schema: toolDef?.params,
+      param_values: nodeDef.param_values ? { ...nodeDef.param_values } : {},
+      fn_status: 'idle',
+      blueprint_instance_id: instanceId,
+      blueprint_def_id: definition.id,
+      blueprint_color: definition.color,
+    },
+  };
+}
+
+function buildBlueprintInstanceArtifacts(
+  entry: BlueprintRegistryEntry,
+  definition: BlueprintDefinition,
+  toolDefs: JsonToolDef[],
+  origin: { x: number; y: number },
+): { nodes: FlowNode[]; edges: FlowEdge[]; board: Board } {
+  const instanceId = uuid();
+  const nodeIdByBlueprintRef = new Map<string, string>();
+  const instantiatedNodes: CanvasNode[] = [];
+
+  for (const slot of definition.input_slots) {
+    const node = createBlueprintPlaceholderNode(slot, instanceId, definition, {
+      x: origin.x + slot.rect.x,
+      y: origin.y + slot.rect.y,
+    });
+    nodeIdByBlueprintRef.set(`input_slot:${slot.id}`, node.id);
+    instantiatedNodes.push(node);
+  }
+
+  for (const slot of definition.output_slots) {
+    const node = createBlueprintPlaceholderNode(slot, instanceId, definition, {
+      x: origin.x + slot.rect.x,
+      y: origin.y + slot.rect.y,
+    });
+    nodeIdByBlueprintRef.set(`output_slot:${slot.id}`, node.id);
+    instantiatedNodes.push(node);
+  }
+
+  for (const dataNode of definition.data_nodes) {
+    const node = createBlueprintInternalDataNode(dataNode, instanceId, definition, {
+      x: origin.x + dataNode.rect.x,
+      y: origin.y + dataNode.rect.y,
+    });
+    nodeIdByBlueprintRef.set(`data_node:${dataNode.id}`, node.id);
+    instantiatedNodes.push(node);
+  }
+
+  for (const fnNode of definition.function_nodes) {
+    const node = createBlueprintFunctionCanvasNode(fnNode, instanceId, definition, toolDefs, {
+      x: origin.x + fnNode.rect.x,
+      y: origin.y + fnNode.rect.y,
+    });
+    nodeIdByBlueprintRef.set(`function_node:${fnNode.id}`, node.id);
+    instantiatedNodes.push(node);
+  }
+
+  const flowNodes: FlowNode[] = instantiatedNodes.map(node => ({
+    id: node.id,
+    type: nodeTypeToFlowType(node.node_type),
+    position: node.position,
+    data: node,
+    width: node.size.width,
+    height: node.size.height,
+  }));
+
+  const flowEdges: FlowEdge[] = [];
+  for (const edge of definition.edges) {
+    const sourceId = nodeIdByBlueprintRef.get(`${edge.source.kind}:${edge.source.id}`);
+    const targetId = nodeIdByBlueprintRef.get(`${edge.target.kind}:${edge.target.id}`);
+    if (!sourceId || !targetId) { continue; }
+    flowEdges.push({
+      id: uuid(),
+      source: sourceId,
+      target: targetId,
+      type: edge.edge_type === 'pipeline_flow' ? 'pipeline' : 'custom',
+      data: {
+        edge_type: edge.edge_type === 'pipeline_flow' ? 'pipeline_flow' : (
+          edge.source.kind === 'function_node' && edge.target.kind === 'output_slot'
+            ? 'ai_generated'
+            : 'data_flow'
+        ),
+        role: edge.role,
+      },
+      animated: false,
+    });
+  }
+
+  const minX = Math.min(...instantiatedNodes.map(node => node.position.x));
+  const minY = Math.min(...instantiatedNodes.map(node => node.position.y));
+  const maxX = Math.max(...instantiatedNodes.map(node => node.position.x + node.size.width));
+  const maxY = Math.max(...instantiatedNodes.map(node => node.position.y + node.size.height));
+  const PAD = 28;
+  const board: Board = {
+    id: uuid(),
+    name: `${entry.title} · 蓝图`,
+    color: hexToRgba(entry.color, 0.1),
+    borderColor: entry.color,
+    bounds: {
+      x: minX - PAD,
+      y: minY - PAD,
+      width: Math.max(320, maxX - minX + PAD * 2),
+      height: Math.max(220, maxY - minY + PAD * 2),
+    },
+  };
+
+  return { nodes: flowNodes, edges: flowEdges, board };
 }
 
 function markPersistedFromExternal(file: CanvasFile) {
@@ -712,6 +1055,7 @@ function canvasToFlow(
 function nodeTypeToFlowType(t: CanvasNode['node_type']): string {
   if (t === 'function') { return 'functionNode'; }
   if (t === 'group_hub') { return 'nodeGroup'; }
+  if (t === 'blueprint') { return 'blueprintNode'; }
   return 'dataNode';
 }
 
@@ -779,6 +1123,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   redoStack: [],
   fullContentCache: {},
   previewNodeId: null,
+  blueprintDraft: null,
+  blueprintIndex: [],
   pipelineState: null,
   saveState: 'saved',
   saveDueAt: null,
@@ -896,7 +1242,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   initCanvas(data, workspaceRoot) {
-    const normalized = normalizeNodeGroups(data);
+    const normalized = normalizeBlueprintNodes(normalizeNodeGroups(data));
     const nodeGroups = normalized.nodeGroups ?? [];
     const hiddenNodeIds = new Set<string>();
     for (const group of nodeGroups) {
@@ -966,6 +1312,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       searchQuery: '',
       searchMatches: [],
       searchIndex: -1,
+      blueprintDraft: null,
       saveState: 'saved',
       saveDueAt: null,
       lastSavedAt: Date.now(),
@@ -1146,6 +1493,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       sourceNode && targetNode &&
       sourceNode.node_type !== 'function' &&
       targetNode.node_type === 'function';
+
+    const isDataToBlueprint =
+      sourceNode && targetNode &&
+      targetNode.node_type === 'blueprint';
+
+    if (isDataToBlueprint && targetNode) {
+      get()._createEdge(connection, connection.targetHandle ?? undefined);
+      return;
+    }
 
     if (isDataToFunction && sourceNode && targetNode) {
       const toolId = targetNode.meta?.ai_tool as string | undefined;
@@ -1677,6 +2033,67 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
+  createBlueprintInstance(entry, position) {
+    get().pushUndo();
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      const resolvedPosition = position ?? calcNewNodePosition(state.canvasFile.nodes);
+      const size = computeBlueprintInstanceSize(entry);
+      const node: CanvasNode = {
+        id: uuid(),
+        node_type: 'blueprint',
+        title: entry.title,
+        position: resolvedPosition,
+        size,
+        meta: buildBlueprintMetaFromEntry(entry),
+      };
+      const flowNode: FlowNode = {
+        id: node.id,
+        type: 'blueprintNode',
+        position: node.position,
+        data: node,
+        width: size.width,
+        height: size.height,
+      };
+      const updatedNodes = [...state.nodes, flowNode];
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      debouncedSave(newFile, 'immediate');
+      return { nodes: updatedNodes, canvasFile: newFile };
+    });
+  },
+
+  instantiateBlueprintDefinition(entry, definition, position) {
+    get().pushUndo();
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      const resolvedPosition = position ?? calcNewNodePosition(state.canvasFile.nodes);
+      const { nodes: blueprintNodes, edges: blueprintEdges, board } = buildBlueprintInstanceArtifacts(
+        entry,
+        definition,
+        state.toolDefs,
+        resolvedPosition,
+      );
+      const updatedNodes = [...state.nodes, ...blueprintNodes];
+      const updatedEdges = [...state.edges, ...blueprintEdges];
+      const newBoards = [...state.boards, board];
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
+      const newFile: CanvasFile = {
+        ...state.canvasFile,
+        nodes: cnNodes,
+        edges: cnEdges,
+        boards: newBoards,
+      };
+      debouncedSave(newFile, 'immediate');
+      return {
+        nodes: updatedNodes,
+        edges: updatedEdges,
+        boards: newBoards,
+        canvasFile: newFile,
+      };
+    });
+  },
+
   createDataNode(nodeType, position) {
     get().pushUndo();
     set(state => {
@@ -1922,6 +2339,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return { selectedNodeIds: ids };
     });
+  },
+  selectExclusiveNode(nodeId) {
+    set(state => ({
+      nodes: state.nodes.map(node => node.selected === (node.id === nodeId)
+        ? node
+        : { ...node, selected: node.id === nodeId }),
+      edges: state.edges.map(edge => edge.selected ? { ...edge, selected: false } : edge),
+      selectedNodeIds: [nodeId],
+      activeBoardId: null,
+    }));
+  },
+  selectExclusiveEdge(edgeId) {
+    set(state => ({
+      nodes: state.nodes.map(node => node.selected ? { ...node, selected: false } : node),
+      edges: state.edges.map(edge => edge.selected === (edge.id === edgeId)
+        ? edge
+        : { ...edge, selected: edge.id === edgeId }),
+      selectedNodeIds: [],
+      activeBoardId: null,
+    }));
+  },
+  clearSelection() {
+    set(state => ({
+      nodes: state.nodes.map(node => node.selected ? { ...node, selected: false } : node),
+      edges: state.edges.map(edge => edge.selected ? { ...edge, selected: false } : edge),
+      selectedNodeIds: [],
+      activeBoardId: null,
+    }));
   },
   setSelectionMode(on) { set({ selectionMode: on }); },
 
@@ -2267,6 +2712,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // ── Preview ─────────────────────────────────────────────────────────────────
   openPreview(nodeId) { set({ previewNodeId: nodeId }); },
   closePreview() { set({ previewNodeId: null }); },
+  setBlueprintDraft(draft) { set({ blueprintDraft: draft }); },
+  clearBlueprintDraft() { set({ blueprintDraft: null }); },
+  setBlueprintIndex(entries) {
+    set(state => {
+      if (!state.canvasFile) {
+        return { blueprintIndex: entries };
+      }
+
+      const { nodes: hydratedNodes, changed } = hydrateBlueprintNodesFromIndex(state.nodes, entries);
+      if (!changed) {
+        return { blueprintIndex: entries };
+      }
+
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(hydratedNodes, state.edges);
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      debouncedSave(newFile, 'immediate');
+
+      return {
+        blueprintIndex: entries,
+        nodes: hydratedNodes,
+        canvasFile: newFile,
+      };
+    });
+  },
 
   // ── Pipeline state management ──────────────────────────────────────────────
 

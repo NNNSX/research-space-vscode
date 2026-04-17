@@ -464,6 +464,10 @@ async function extractWithTextutil(filePath: string): Promise<string> {
   return normalizeExtractedText(stdout);
 }
 
+function canUseTextutil(): boolean {
+  return process.platform === 'darwin';
+}
+
 function extractPrintableAsciiStrings(buffer: Buffer, minLen = 4): string[] {
   const out: string[] = [];
   let current = '';
@@ -548,14 +552,17 @@ async function extractRtfText(filePath: string): Promise<string> {
 }
 
 async function extractDocLikeText(filePath: string, ext: string): Promise<string> {
-  try {
-    return await extractWithTextutil(filePath);
-  } catch {
-    if (ext === 'rtf') {
-      return extractRtfText(filePath);
+  if (canUseTextutil()) {
+    try {
+      return await extractWithTextutil(filePath);
+    } catch {
+      // fall through to platform-neutral fallback
     }
-    return extractLegacyBinaryText(filePath);
   }
+  if (ext === 'rtf') {
+    return extractRtfText(filePath);
+  }
+  return extractLegacyBinaryText(filePath);
 }
 
 function htmlToPlainText(html: string): string {
