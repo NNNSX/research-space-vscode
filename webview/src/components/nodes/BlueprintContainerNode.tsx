@@ -17,6 +17,18 @@ import {
 } from '../../utils/node-chrome';
 import { NodeContextMenu } from './NodeContextMenu';
 
+function formatBlueprintRunTime(value?: string): string {
+  if (!value) { return '—'; }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) { return '—'; }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
 export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
   const blueprint = data as CanvasNode;
   const accent = blueprint.meta?.blueprint_color ?? '#2f7d68';
@@ -134,16 +146,32 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
     ? internalFunctionNodes.filter(node => instancePipelineState.nodeStatuses[node.id] === 'failed').length
     : internalFunctionNodes.filter(node => node.meta?.fn_status === 'error').length;
   const instanceRunning = !!instancePipelineState?.isRunning;
+  const currentRunningNodeTitle = instancePipelineState?.currentNodeId
+    ? canvasNodes.find(node => node.id === instancePipelineState.currentNodeId)?.title ?? instancePipelineState.currentNodeId
+    : null;
+  const activeWarningCount = instancePipelineState?.validationWarnings.length ?? 0;
+  const lastRunStatus = blueprint.meta?.blueprint_last_run_status;
+  const lastRunSummary = blueprint.meta?.blueprint_last_run_summary;
+  const lastRunFinishedAt = blueprint.meta?.blueprint_last_run_finished_at;
+  const lastSucceededAt = blueprint.meta?.blueprint_last_run_succeeded_at;
+  const lastFailedAt = blueprint.meta?.blueprint_last_run_failed_at;
+  const lastIssueNodeId = blueprint.meta?.blueprint_last_issue_node_id;
+  const lastIssueNodeTitle = blueprint.meta?.blueprint_last_issue_node_title;
+  const cancelRequested = !!instancePipelineState?.cancelRequested;
   const instanceRunBlocked = missingRequiredCount > 0 || internalFunctionNodes.length === 0 || !!pipelineState?.isRunning;
   const instanceStatusLabel = missingRequiredCount > 0
     ? '等待输入补齐'
     : instanceRunning
-      ? `运行中 ${instanceDoneCount}/${internalFunctionNodes.length}`
-      : instanceFailedCount > 0
-        ? `已结束（失败 ${instanceFailedCount}）`
-        : instanceDoneCount > 0
+      ? (cancelRequested ? `取消中 ${instanceDoneCount}/${internalFunctionNodes.length}` : `运行中 ${instanceDoneCount}/${internalFunctionNodes.length}`)
+      : lastRunStatus === 'failed'
+        ? '最近一次运行失败'
+        : lastRunStatus === 'cancelled'
+          ? '最近一次运行已取消'
+          : lastRunStatus === 'succeeded' || instanceDoneCount > 0
           ? '最近一次运行完成'
-          : '结构已接通';
+          : instanceFailedCount > 0
+            ? `已结束（失败 ${instanceFailedCount}）`
+            : '结构已接通';
   const runButtonTitle = missingRequiredCount > 0
     ? '请先补齐必填输入后再运行'
     : pipelineState?.isRunning
@@ -296,7 +324,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
                 opacity: instanceRunBlocked ? 0.72 : 1,
               }}
             >
-              {instanceRunning ? '▶ 运行中…' : '▶ 运行'}
+              {cancelRequested ? '◼ 取消中…' : instanceRunning ? '▶ 运行中…' : '▶ 运行'}
             </button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
@@ -305,8 +333,76 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
             <Stat label="输出" value={String(blueprint.meta?.blueprint_output_slots ?? '—')} accent={accent} />
             <Stat label="功能节点" value={String(blueprint.meta?.blueprint_function_count ?? '—')} accent={accent} />
           </div>
+          {(instanceRunning || lastRunSummary) && (
+            <div
+              style={{
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: `1px solid ${instanceRunning
+                  ? withAlpha(accent, 0.24, 'var(--vscode-panel-border)')
+                  : lastRunStatus === 'failed'
+                  ? 'var(--vscode-inputValidation-errorBorder, #be1100)'
+                  : withAlpha(accent, 0.24, 'var(--vscode-panel-border)')}`,
+                background: instanceRunning
+                  ? withAlpha(accent, 0.05, 'transparent')
+                  : lastRunStatus === 'failed'
+                    ? 'color-mix(in srgb, var(--vscode-editor-background) 90%, #be1100 10%)'
+                    : withAlpha(accent, 0.04, 'transparent'),
+              }}
+            >
+              <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
+                {instanceRunning ? '当前步骤' : '最近运行'}
+              </div>
+              <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, lineHeight: 1.45 }}>
+                {instanceRunning
+                  ? (currentRunningNodeTitle ?? '等待当前层节点完成')
+                  : lastRunSummary}
+              </div>
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+                {instanceRunning
+                  ? (cancelRequested
+                    ? '已发出取消请求，当前节点结束后停止。'
+                    : activeWarningCount > 0
+                      ? `当前预检警告 ${activeWarningCount} 条`
+                      : '继续沿实例内部拓扑执行')
+                  : `结束时间 ${formatBlueprintRunTime(lastRunFinishedAt)}`}
+              </div>
+              {!instanceRunning && lastIssueNodeTitle && (
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
+                    问题节点：{lastIssueNodeTitle}
+                  </span>
+                  {lastIssueNodeId && (
+                    <button
+                      type="button"
+                      onClick={() => selectExclusiveNode(lastIssueNodeId)}
+                      style={{
+                        borderRadius: 999,
+                        border: `1px solid ${withAlpha(accent, 0.28, 'var(--vscode-panel-border)')}`,
+                        background: withAlpha(accent, 0.08, 'transparent'),
+                        color: accent,
+                        padding: '2px 8px',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      定位节点
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <RunStamp label="最近成功" value={formatBlueprintRunTime(lastSucceededAt)} accent={accent} tone="success" />
+            <RunStamp label="最近失败" value={formatBlueprintRunTime(lastFailedAt)} accent={accent} tone="danger" />
+          </div>
           <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
             必填输入 {requiredInputCount}，当前已满足 {Math.max(0, requiredInputCount - missingRequiredCount)}。
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+            重跑语义：当前重新运行会从头开始，已生成的中间/输出节点默认保留，并在新结果产出后逐步替换。
           </div>
           {instanceId && (
             <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
@@ -497,6 +593,37 @@ function OutputSlotRow({ slot, count, accent }: { slot: BlueprintSlotDef; count:
         {slot.accepts.join(', ')}
         {slot.allow_multiple ? ' · 多输出' : ' · 单输出'}
       </div>
+    </div>
+  );
+}
+
+function RunStamp(
+  { label, value, accent, tone }: { label: string; value: string; accent: string; tone: 'success' | 'danger' }
+) {
+  const border = tone === 'danger'
+    ? 'var(--vscode-inputValidation-errorBorder, #be1100)'
+    : withAlpha(accent, 0.24, 'var(--vscode-panel-border)');
+  const background = tone === 'danger'
+    ? 'color-mix(in srgb, var(--vscode-editor-background) 92%, #be1100 8%)'
+    : withAlpha(accent, 0.04, 'transparent');
+  const color = tone === 'danger'
+    ? 'var(--vscode-inputValidation-errorForeground, #f48771)'
+    : accent;
+  return (
+    <div
+      style={{
+        minWidth: 0,
+        padding: '6px 8px',
+        borderRadius: 999,
+        border: `1px solid ${border}`,
+        background,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+      }}
+    >
+      <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>{label}</span>
+      <span style={{ fontSize: 10, fontWeight: 700, color }}>{value}</span>
     </div>
   );
 }

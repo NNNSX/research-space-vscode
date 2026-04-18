@@ -1,3 +1,6 @@
+import { PET_LEVEL_THRESHOLDS, getExpForNextLevel, getLevelFromExp } from '../../../src/core/pet-state';
+export { getExpForNextLevel, getLevelFromExp } from '../../../src/core/pet-state';
+
 // ── Pet types & definitions ────────────────────────────────────────────────
 
 /** Animation state names */
@@ -329,27 +332,4 @@ export function getMoodCategory(mood: number): 'happy' | 'normal' | 'sad' {
 
 // ── Level thresholds ───────────────────────────────────────────────────────
 
-export const LEVEL_THRESHOLDS = [
-  0,     // Lv 1
-  100,   // Lv 2
-  300,   // Lv 3
-  500,   // Lv 4
-  800,   // Lv 5
-  1100,  // Lv 6
-  1500,  // Lv 7
-  2000,  // Lv 8
-  2500,  // Lv 9
-  3200,  // Lv 10
-];
-
-export function getLevelFromExp(exp: number): number {
-  for (let i = LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
-    if (exp >= LEVEL_THRESHOLDS[i]) { return i + 1; }
-  }
-  return 1;
-}
-
-export function getExpForNextLevel(level: number): number {
-  if (level >= LEVEL_THRESHOLDS.length) { return Infinity; }
-  return LEVEL_THRESHOLDS[level]; // level is 1-based, so index = level
-}
+export const LEVEL_THRESHOLDS = PET_LEVEL_THRESHOLDS;

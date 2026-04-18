@@ -14,13 +14,14 @@ const MINIMIZED_SIZE = 32;
  * drag positioning, and hover opacity.
  */
 export function PetWidget() {
-  const { enabled, mode, widgetLeft, widgetTop, hovered, setAnchor, setHovered } = usePetStore();
+  const { enabled, hydrated, mode, widgetLeft, widgetTop, hovered, setAnchor, setHovered } = usePetStore();
   const tickEngine = usePetStore(s => s.tickEngine);
   const savePetState = usePetStore(s => s.savePetState);
   const saveMemory = usePetStore(s => s.saveMemory);
   const addChatResponse = usePetStore(s => s.addChatResponse);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const saveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stateSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const memorySaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Entrance animation — fade in on first render
@@ -75,22 +76,45 @@ export function PetWidget() {
 
   // Start/stop tick loop
   useEffect(() => {
-    if (!enabled) { return; }
+    if (!enabled || !hydrated) { return; }
 
     tickRef.current = setInterval(() => {
       tickEngine();
     }, TICK_INTERVAL);
 
-    saveRef.current = setInterval(() => {
+    stateSaveRef.current = setInterval(() => {
       savePetState();
+    }, 10_000);
+
+    memorySaveRef.current = setInterval(() => {
       saveMemory();
     }, 60_000);
 
+    const flushPersist = () => {
+      savePetState();
+      saveMemory();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        flushPersist();
+      }
+    };
+
+    window.addEventListener('beforeunload', flushPersist);
+    window.addEventListener('pagehide', flushPersist);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
       if (tickRef.current) { clearInterval(tickRef.current); }
-      if (saveRef.current) { clearInterval(saveRef.current); }
+      if (stateSaveRef.current) { clearInterval(stateSaveRef.current); }
+      if (memorySaveRef.current) { clearInterval(memorySaveRef.current); }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('beforeunload', flushPersist);
+      window.removeEventListener('pagehide', flushPersist);
+      flushPersist();
     };
-  }, [enabled, tickEngine, savePetState, saveMemory]);
+  }, [enabled, hydrated, tickEngine, savePetState, saveMemory]);
 
   // Listen for AI chat responses (centralised — no per-component listener needed)
   useEffect(() => {
@@ -117,7 +141,7 @@ export function PetWidget() {
     }, 1000);
   }, [setHovered]);
 
-  if (!enabled) { return null; }
+  if (!enabled || !hydrated) { return null; }
 
   // Opacity: roaming uses hover-based opacity; minimized/chat always full
   // Entrance fade-in: start from 0

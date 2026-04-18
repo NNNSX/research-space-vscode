@@ -2,6 +2,7 @@ import React from 'react';
 import { usePetStore } from '../../stores/pet-store';
 import { getPetType, getGroundTheme } from '../../pet/pet-types';
 import { PetCharacter } from './PetCharacter';
+import { getPetLevelProgress } from '../../../../src/core/pet-state';
 
 const ROAMING_WIDTH = 140;
 const ROAMING_HEIGHT = 140;
@@ -24,6 +25,7 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
   const fgUrl = hasBackground && theme.fgFile ? `${assetsBaseUri}/backgrounds/${theme.fgFile}` : '';
 
   const moodEmoji = pet.mood > 70 ? '\u{1F60A}' : pet.mood > 35 ? '\u{1F610}' : '\u{1F61E}';
+  const expProgress = getPetLevelProgress(pet.exp, pet.level);
 
   const handleBubbleClick = () => {
     setMode('chat');
@@ -123,6 +125,29 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
           {typeDef.emoji}{pet.petName}
         </span>
         <span style={{ opacity: 0.6 }}>Lv.{pet.level}</span>
+        <div
+          title={
+            expProgress.isMaxLevel
+              ? `总经验: ${Math.floor(expProgress.totalExp)} / MAX`
+              : `本级经验: ${Math.floor(expProgress.currentLevelExp)}/${expProgress.neededExpInLevel} · 距下一级 ${Math.ceil(expProgress.remainingToNextLevel)}`
+          }
+          style={{
+            width: 22,
+            height: 3,
+            borderRadius: 2,
+            background: 'var(--vscode-progressBar-background, #333)',
+            overflow: 'hidden',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{
+            width: `${expProgress.percent}%`,
+            height: '100%',
+            background: 'var(--vscode-button-background)',
+            borderRadius: 2,
+            transition: 'width 0.4s ease',
+          }} />
+        </div>
 
         {/* Mood */}
         <span title={`心情: ${Math.round(pet.mood)}`}>{moodEmoji}</span>

@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.0-alpha.34",
+  "version": "2.1.0-alpha.41",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -195,8 +195,10 @@
         },
         "researchSpace.ai.anthropicModel": {
           "type": "string",
-          "default": "claude-sonnet-4-5",
+          "default": "claude-sonnet-4-6",
           "enum": [
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
             "claude-sonnet-4-5",
             "claude-opus-4-5",
             "claude-haiku-4-5"
@@ -212,6 +214,16 @@
           "type": "string",
           "default": "llama3.2",
           "description": "Ollama model name"
+        },
+        "researchSpace.ai.maxOutputTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Global max output tokens for text-generation providers (0 = auto: use model/provider maximum when known)"
+        },
+        "researchSpace.ai.maxContextTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Global max context tokens for text-generation providers (0 = auto: use model/provider maximum when known)"
         },
         "researchSpace.canvas.autoSave": {
           "type": "boolean",
@@ -230,6 +242,11 @@
           "items": {
             "type": "object"
           }
+        },
+        "researchSpace.ai.favoriteModels": {
+          "type": "object",
+          "default": {},
+          "description": "Favorite models per provider used to simplify function-node dropdowns. Shape: { [providerId]: string[] }"
         },
         "researchSpace.ai.aiHubMixApiKey": {
           "type": "string",

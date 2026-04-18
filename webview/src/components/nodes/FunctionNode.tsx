@@ -3,8 +3,7 @@ import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react';
 import type { CanvasNode, FnStatus, ParamDef, RunIssueKind } from '../../../../src/core/canvas-model';
 import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
-import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
-import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getProviderDisplayName } from '../../utils/model-labels';
+import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getFavoriteModelsForProvider, getProviderDisplayName, orderModelsByIds } from '../../utils/model-labels';
 import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
 import { closeAllCanvasContextMenus } from '../../utils/context-menu';
 import {
@@ -23,6 +22,12 @@ interface FunctionNodeProps {
   id: string;
   data: CanvasNode;
   selected: boolean;
+}
+
+interface NodeSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
 }
 
 const STATUS_COLORS: Record<FnStatus, string> = {
@@ -96,9 +101,9 @@ const RUN_ISSUE_LABELS: Record<RunIssueKind, string> = {
   skipped: '已跳过',
 };
 
-const MIN_FUNCTION_NODE_HEIGHT = 220;
+const MIN_FUNCTION_NODE_HEIGHT = 168;
 const FUNCTION_NODE_PADDING = NODE_CONTENT_GUTTER;
-const FUNCTION_NODE_AUTO_HEIGHT_PADDING = Math.ceil(NODE_SELECTED_BORDER_WIDTH * 2);
+const FUNCTION_NODE_AUTO_HEIGHT_PADDING = Math.ceil(NODE_SELECTED_BORDER_WIDTH * 2) + 2;
 
 // ── Inject keyframe animations once ───────────────────────────────────────
 const FN_STYLE_ID = 'rs-fn-running-animations';
@@ -322,6 +327,7 @@ function FullFunctionNode({
 }) {
   const updateNodeInternals = useUpdateNodeInternals();
   const updateNodeParamValue = useCanvasStore(s => s.updateNodeParamValue);
+  const requestModelCache = useCanvasStore(s => s.requestModelCache);
   const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
   const updateInputOrder = useCanvasStore(s => s.updateInputOrder);
   const getUpstreamNodes = useCanvasStore(s => s.getUpstreamNodes);
@@ -406,8 +412,10 @@ function FullFunctionNode({
     setChatDraft(stored);
   }, [data.meta?.param_values?.['_chatPrompt']]);
 
-  // Guard: ensure input_schema is always an array
-  const inputSchema = Array.isArray(data.meta?.input_schema) ? data.meta!.input_schema : [];
+  // 优先使用当前工具定义，避免旧画布里历史 function 节点继续吃旧 schema。
+  const inputSchema = Array.isArray(toolDef?.params)
+    ? toolDef.params
+    : (Array.isArray(data.meta?.input_schema) ? data.meta!.input_schema : []);
   const schema = parseInputParams(inputSchema);
   const toolModelParam = toolDef?.params.find(param => param.name === 'model');
   const effectiveMultimodalModel = isMultimodal
@@ -442,21 +450,34 @@ function FullFunctionNode({
     updateNodeParamValue(data.id, '_model', '');
     // Prefetch models for the effective provider
     const effectiveProvider = newProvider || (settings?.globalProvider ?? 'copilot');
-    if (!modelCache[effectiveProvider]?.length) {
-      postMessage({ type: 'requestModels', provider: effectiveProvider });
-    }
-  }, [data.id, updateNodeParamValue, modelCache, settings?.globalProvider]);
+    requestModelCache(effectiveProvider);
+  }, [data.id, updateNodeParamValue, requestModelCache, settings?.globalProvider]);
 
   // On first render, prefetch models for current provider
   useEffect(() => {
-    if (!modelCache[currentProvider]?.length) {
-      postMessage({ type: 'requestModels', provider: currentProvider });
-    }
+    requestModelCache(currentProvider);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Model options ──────────────────────────────────────────────────────────
   const models = modelCache[currentProvider] ?? null;
+  const favoriteModelIds = getFavoriteModelsForProvider(currentProvider, settings ?? null, models ?? undefined);
+  const visibleModels = (() => {
+    if (!models) { return models; }
+    if (favoriteModelIds.length === 0) { return models; }
+    const favoriteSet = new Set(favoriteModelIds);
+    const matchedFavorites = orderModelsByIds(
+      models.filter(model => favoriteSet.has(model.id)),
+      favoriteModelIds,
+    );
+    if (currentModel && !favoriteSet.has(currentModel)) {
+      const selectedModel = models.find(model => model.id === currentModel);
+      if (selectedModel) {
+        matchedFavorites.push(selectedModel);
+      }
+    }
+    return matchedFavorites;
+  })();
   const effectiveGlobalModelLabel = getConcreteProviderModelLabel(settings?.globalProvider ?? 'copilot', settings ?? null, modelCache);
   const providerFollowLabel = `全局 (${getProviderDisplayName(
     settings?.globalProvider ?? 'copilot',
@@ -467,34 +488,28 @@ function FullFunctionNode({
       ? '自动（正在加载 Copilot 具体模型…）'
       : '自动（当前未配置具体模型）',
   });
-  const providerOptions: SearchableSelectOption[] = [
-    { value: '', label: providerFollowLabel, keywords: ['全局', 'global', settings?.globalProvider ?? 'copilot'] },
+  const providerOptions: NodeSelectOption[] = [
+    { value: '', label: providerFollowLabel },
     ...Object.entries(PROVIDER_LABELS).map(([id, label]) => ({
       value: id,
       label,
-      keywords: [id, label],
     })),
     ...((settings?.customProviders ?? []).map(cp => ({
       value: cp.id,
       label: cp.name,
-      title: cp.baseUrl,
-      keywords: [cp.id, cp.name, cp.baseUrl],
     }))),
   ];
-  const modelOptions: SearchableSelectOption[] = [
+  const modelOptions: NodeSelectOption[] = [
     {
       value: '',
-      label: models === null ? '加载中…' : currentProviderAutoModelLabel,
-      keywords: ['自动', '默认', currentProviderAutoModelLabel],
-      disabled: models === null,
+      label: visibleModels === null ? '加载中…' : currentProviderAutoModelLabel,
+      disabled: visibleModels === null,
     },
-    ...((models ?? []).map(model => ({
+    ...((visibleModels ?? []).map(model => ({
       value: model.id,
-      label: formatModelLabel(model.id, models ?? undefined),
-      title: [model.name && model.name !== model.id ? model.name : '', model.description ?? ''].filter(Boolean).join(' · '),
-      keywords: [model.id, model.name ?? '', model.description ?? ''],
+      label: formatModelLabel(model.id, visibleModels ?? undefined),
     }))),
-    ...((models && models.length === 0) ? [{ value: '__none__', label: '未找到模型', disabled: true }] : []),
+    ...((visibleModels && visibleModels.length === 0) ? [{ value: '__none__', label: '未找到常用模型', disabled: true }] : []),
   ];
 
   // ── System prompt handlers ────────────────────────────────────────────────
@@ -691,9 +706,14 @@ function FullFunctionNode({
     const el = contentRef.current;
     if (!el) { return; }
     window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
       const currentWidth = data.size?.width ?? 280;
       const currentHeight = data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT;
-      const contentHeight = Math.max(el.scrollHeight, el.clientHeight);
+      const contentHeight = Math.max(
+        Math.ceil(el.getBoundingClientRect().height),
+        Math.ceil(el.scrollHeight),
+        Math.ceil(el.clientHeight),
+      );
       const requiredHeight = Math.max(
         MIN_FUNCTION_NODE_HEIGHT,
         Math.ceil(contentHeight + FUNCTION_NODE_AUTO_HEIGHT_PADDING),
@@ -703,6 +723,7 @@ function FullFunctionNode({
       } else {
         updateNodeInternals(id);
       }
+      });
     });
   }, [data.size?.height, data.size?.width, id, updateNodeInternals, updateNodeSize]);
 
@@ -725,7 +746,12 @@ function FullFunctionNode({
     promptOpen,
     showIssueBanner,
     tool,
+    toolWarnings.length,
     upstreamNodes.length,
+    currentProvider,
+    currentModel,
+    modelOptions.length,
+    favoriteModelIds.join('|'),
     scheduleNodeHeightSync,
   ]);
 
@@ -742,7 +768,6 @@ function FullFunctionNode({
   return (
     <div
       ref={rootRef}
-      className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
       onContextMenu={e => {
         e.preventDefault();
         e.stopPropagation();
@@ -752,43 +777,54 @@ function FullFunctionNode({
         setCtxMenu({ x: e.clientX - rect.left + 8, y: e.clientY - rect.top + 8 });
       }}
       style={{
-      width: '100%',
-      height: '100%',
-      background: 'var(--vscode-editor-background)',
-      border: isVisuallyRunning
-        ? '2px solid rgba(59,130,246,0.7)'
-        : isCycleError
-          ? '2px solid var(--vscode-terminal-ansiRed)'
-          : pipelineDone
-            ? '2px solid var(--vscode-terminal-ansiGreen)'
-            : pipelineFailed
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
+        style={{
+          width: '100%',
+          height: '100%',
+          background: 'var(--vscode-editor-background)',
+          border: isVisuallyRunning
+            ? '2px solid rgba(59,130,246,0.7)'
+            : isCycleError
               ? '2px solid var(--vscode-terminal-ansiRed)'
-                : pipelineSkipped
-                ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-disabledForeground)`
-                : pipelineWaiting
-                  ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-descriptionForeground)`
-                  : calmBorder,
-      borderRadius: NODE_RADIUS,
-      position: 'relative',
-      boxSizing: 'border-box',
-      minHeight: 0,
-      opacity: pipelineSkipped ? 0.45 : 1,
-      boxShadow: isVisuallyRunning
-        ? '0 0 8px 2px rgba(59,130,246,0.4)'
-        : isCycleError
-          ? '0 0 8px 2px rgba(239,68,68,0.5)'
-          : pipelineDone
-            ? '0 0 6px 1px rgba(34,197,94,0.3)'
-            : pipelineFailed
-            ? '0 0 6px 1px rgba(239,68,68,0.3)'
-              : calmBoxShadow,
-      animation: isVisuallyRunning
-        ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
-        : isCycleError
-          ? 'rsFnShake 0.5s ease-in-out'
-          : undefined,
-      transition: 'border-color 0.3s, box-shadow 0.3s, opacity 0.3s',
-    }}>
+              : pipelineDone
+                ? '2px solid var(--vscode-terminal-ansiGreen)'
+                : pipelineFailed
+                  ? '2px solid var(--vscode-terminal-ansiRed)'
+                    : pipelineSkipped
+                    ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-disabledForeground)`
+                    : pipelineWaiting
+                      ? `${NODE_BORDER_WIDTH}px dashed var(--vscode-descriptionForeground)`
+                      : calmBorder,
+          borderRadius: NODE_RADIUS,
+          position: 'relative',
+          boxSizing: 'border-box',
+          minHeight: 0,
+          overflow: 'hidden',
+          opacity: pipelineSkipped ? 0.45 : 1,
+          boxShadow: isVisuallyRunning
+            ? '0 0 8px 2px rgba(59,130,246,0.4)'
+            : isCycleError
+              ? '0 0 8px 2px rgba(239,68,68,0.5)'
+              : pipelineDone
+                ? '0 0 6px 1px rgba(34,197,94,0.3)'
+                : pipelineFailed
+                ? '0 0 6px 1px rgba(239,68,68,0.3)'
+                  : calmBoxShadow,
+          animation: isVisuallyRunning
+            ? 'rsFnBorderFlow 3s linear infinite, rsFnGlow 2.5s ease-in-out infinite'
+            : isCycleError
+              ? 'rsFnShake 0.5s ease-in-out'
+              : undefined,
+          transition: 'border-color 0.3s, box-shadow 0.3s, opacity 0.3s',
+        }}
+      >
       <div
         ref={contentRef}
         style={{
@@ -879,12 +915,10 @@ function FullFunctionNode({
           {/* Provider selector */}
           <div style={rowStyle}>
             <span style={labelStyle}>服务商</span>
-            <SearchableSelect
+            <NodeSelect
               value={nodeProvider}
               onChange={handleProviderChange}
               options={providerOptions}
-              placeholder="搜索服务商..."
-              compact
               style={{
                 ...selectStyle,
                 color: nodeProvider ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
@@ -895,15 +929,29 @@ function FullFunctionNode({
           {/* Model selector — always shown */}
           <div style={rowStyle}>
             <span style={labelStyle}>模型</span>
-            <SearchableSelect
-              value={currentModel}
-              onChange={v => updateNodeParamValue(data.id, '_model', v)}
-              options={modelOptions}
-              placeholder="搜索模型..."
-              compact
-              style={selectStyle}
-              disabled={models === null}
-            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <NodeSelect
+                value={currentModel}
+                onChange={v => updateNodeParamValue(data.id, '_model', v)}
+                options={modelOptions}
+                style={selectStyle}
+                disabled={models === null}
+              />
+              <div
+                style={{
+                  marginTop: 4,
+                  minHeight: 14,
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  visibility: favoriteModelIds.length > 0 ? 'visible' : 'hidden',
+                }}
+              >
+                仅显示常用模型；可在设置 → 文本服务商 → 常用模型 中调整
+              </div>
+            </div>
           </div>
         </>
       )}
@@ -986,7 +1034,7 @@ function FullFunctionNode({
           )}
 
           {/* Input connection guide — universal for all non-chat tools */}
-          {upstreamNodes.length === 0 && (() => {
+          {upstreamNodes.length === 0 && toolWarnings.length === 0 && (() => {
             // Determine the hint based on tool type
             let hint = '';
             if (toolDef?.id === 'image-fusion') {
@@ -1127,7 +1175,13 @@ function FullFunctionNode({
               <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {visibleOptionalParams.map(p => (
-                  <ParamControl key={p.name} param={p} nodeData={data} globalDefaultModel={globalDefaultModel} isMultimodal={isMultimodal} />
+                  <ParamControl
+                    key={p.name}
+                    param={p}
+                    nodeData={data}
+                    globalDefaultModel={globalDefaultModel}
+                    isMultimodal={isMultimodal}
+                  />
                 ))}
               </div>
             </>
@@ -1175,6 +1229,7 @@ function FullFunctionNode({
             </button>
           </>
         )}
+      </div>
       </div>
       </div>
 
@@ -1318,6 +1373,35 @@ function StatusBadge({ color, label }: { color: string; label: string }) {
     }}>
       {label}
     </span>
+  );
+}
+
+function NodeSelect({
+  value,
+  options,
+  onChange,
+  disabled = false,
+  style,
+}: {
+  value: string;
+  options: NodeSelectOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value)}
+      style={style}
+    >
+      {options.map(option => (
+        <option key={`${option.value || '__empty__'}-${option.label}`} value={option.value} disabled={option.disabled}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -1473,20 +1557,19 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
       ? (globalDefaultModel || param.options[0])
       : (isModelParam ? modelSelectValue : String(currentValue));
 
-    const options: SearchableSelectOption[] = [
-      ...(isModelParam && !isMultimodal ? [{ value: '', label: autoLabel, keywords: ['自动', '默认', autoLabel] }] : []),
+    const options: NodeSelectOption[] = [
+      ...(isModelParam && !isMultimodal ? [{ value: '', label: autoLabel }] : []),
       ...param.options.map(option => ({
         value: option,
         label: option,
-        keywords: [option],
       })),
-      ...(isModelParam && !isMultimodal ? [{ value: '__custom__', label: '✏ 自定义模型 ID…', keywords: ['自定义', 'custom', 'model'] }] : []),
+      ...(isModelParam && !isMultimodal ? [{ value: '__custom__', label: '✏ 自定义模型 ID…' }] : []),
     ];
 
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={labelStyle}>{param.label}</span>
-        <SearchableSelect
+        <NodeSelect
           value={effectiveValue}
           options={options}
           onChange={nextValue => {
@@ -1497,8 +1580,6 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
               updateNodeParamValue(nodeData.id, param.name, nextValue);
             }
           }}
-          placeholder={`搜索${param.label}...`}
-          compact
           style={{ ...inputBase, background: 'var(--vscode-dropdown-background)', color: 'var(--vscode-dropdown-foreground)', border: '1px solid var(--vscode-dropdown-border)', cursor: 'pointer' }}
         />
       </div>

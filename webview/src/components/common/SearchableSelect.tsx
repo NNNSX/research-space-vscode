@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface SearchableSelectOption {
   value: string;
@@ -17,6 +18,8 @@ interface SearchableSelectProps {
   compact?: boolean;
   style?: React.CSSProperties;
   menuMaxHeight?: number;
+  menuPortalTarget?: HTMLElement | null;
+  menuBoundaryElement?: HTMLElement | null;
 }
 
 export function SearchableSelect({
@@ -28,9 +31,12 @@ export function SearchableSelect({
   compact = false,
   style,
   menuMaxHeight = 220,
+  menuPortalTarget = null,
+  menuBoundaryElement = null,
 }: SearchableSelectProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selectedOption = useMemo(
     () => options.find(option => option.value === value) ?? null,
     [options, value]
@@ -39,6 +45,7 @@ export function SearchableSelect({
   const [open, setOpen] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
   const [query, setQuery] = useState('');
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties | null>(null);
 
   useEffect(() => {
     if (open && searchMode) { return; }
@@ -48,7 +55,8 @@ export function SearchableSelect({
   useEffect(() => {
     if (!open) { return; }
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
         setSearchMode(false);
       }
@@ -66,6 +74,101 @@ export function SearchableSelect({
       return haystacks.some(text => text.toLowerCase().includes(needle));
     });
   }, [options, query, searchMode]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuStyle(null);
+      return;
+    }
+
+    let rafId: number | null = null;
+
+    const updateMenuPosition = () => {
+      const root = rootRef.current;
+      if (!root) { return; }
+      const estimatedRowHeight = compact ? 32 : 38;
+      const estimatedHeight = Math.min(menuMaxHeight, Math.max(120, filteredOptions.length * estimatedRowHeight));
+
+      const buildSharedStyle = (position: 'fixed' | 'absolute', top: number, left: number, width: number, maxHeight: number): React.CSSProperties => ({
+        position,
+        top,
+        left,
+        width,
+        zIndex: 1000,
+        pointerEvents: 'auto',
+        maxHeight,
+        overflowY: 'auto',
+        background: 'var(--vscode-dropdown-listBackground, var(--vscode-editor-background))',
+        border: '1px solid var(--vscode-dropdown-border, var(--vscode-panel-border))',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+      });
+
+      const next = (() => {
+        if (menuPortalTarget && menuBoundaryElement) {
+          const boundaryHeight = menuBoundaryElement.clientHeight;
+          const localTop = root.offsetTop;
+          const localLeft = root.offsetLeft;
+          const controlHeight = root.offsetHeight;
+          const spaceBelow = boundaryHeight - (localTop + controlHeight) - 8;
+          const maxAllowedHeight = Math.max(
+            80,
+            Math.min(menuMaxHeight, spaceBelow),
+          );
+          const top = localTop + controlHeight + 4;
+          return buildSharedStyle('absolute', top, localLeft, root.offsetWidth, maxAllowedHeight);
+        }
+
+        const rect = root.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const spaceBelow = viewportHeight - rect.bottom - 8;
+        const spaceAbove = rect.top - 8;
+        const openAbove = spaceBelow < Math.min(estimatedHeight, menuMaxHeight) && spaceAbove > spaceBelow;
+        const maxAllowedHeight = Math.max(
+          120,
+          Math.min(menuMaxHeight, openAbove ? spaceAbove : spaceBelow),
+        );
+        const left = Math.max(8, Math.min(rect.left, viewportWidth - rect.width - 8));
+        const top = openAbove
+          ? Math.max(8, rect.top - maxAllowedHeight - 4)
+          : Math.min(viewportHeight - maxAllowedHeight - 8, rect.bottom + 4);
+        return buildSharedStyle('fixed', top, left, rect.width, maxAllowedHeight);
+      })();
+
+      setMenuStyle(prev => {
+        if (
+          prev &&
+          prev.top === next.top &&
+          prev.left === next.left &&
+          prev.width === next.width &&
+          prev.maxHeight === next.maxHeight
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+
+    const tick = () => {
+      updateMenuPosition();
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    updateMenuPosition();
+    if (!menuPortalTarget || !menuBoundaryElement) {
+      rafId = window.requestAnimationFrame(tick);
+    }
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [compact, filteredOptions.length, menuBoundaryElement, menuMaxHeight, menuPortalTarget, open]);
 
   const controlStyle: React.CSSProperties = {
     display: 'flex',
@@ -150,21 +253,10 @@ export function SearchableSelect({
         </button>
       </div>
 
-      {open && (
+      {open && menuStyle && createPortal(
         <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            zIndex: 80,
-            maxHeight: menuMaxHeight,
-            overflowY: 'auto',
-            background: 'var(--vscode-dropdown-listBackground, var(--vscode-editor-background))',
-            border: '1px solid var(--vscode-dropdown-border, var(--vscode-panel-border))',
-            borderRadius: 6,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-          }}
+          ref={menuRef}
+          style={menuStyle}
         >
           {filteredOptions.length === 0 ? (
             <div
@@ -202,6 +294,9 @@ export function SearchableSelect({
                     padding: compact ? '6px 8px' : '8px 10px',
                     fontSize,
                     opacity: option.disabled ? 0.5 : 1,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
                   }}
                 >
                   {option.label}
@@ -209,9 +304,9 @@ export function SearchableSelect({
               );
             })
           )}
-        </div>
+        </div>,
+        menuPortalTarget ?? document.body,
       )}
     </div>
   );
 }
-

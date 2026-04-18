@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { ModelInfo, CustomProviderConfig } from '../core/canvas-model';
+import type { AIModelCapabilities } from './model-capabilities';
 
 // ── Content type passed to providers ───────────────────────────────────────
 
@@ -23,6 +24,7 @@ export interface AIProvider {
   isAvailable(): Promise<boolean>;
   listModels(): Promise<ModelInfo[]>;
   resolveModel(modelOverride?: string): Promise<string | undefined>;
+  getModelCapabilities?(modelOverride?: string): Promise<AIModelCapabilities | null>;
   stream(
     systemPrompt: string,
     contents: AIContent[],

@@ -79,6 +79,11 @@ interface PendingConnection {
   targetToolDef: JsonToolDef;
 }
 
+interface BlueprintDefinitionEnvelope {
+  filePath: string;
+  definition: BlueprintDefinition;
+}
+
 // ── Pipeline UI state ─────────────────────────────────────────────────────
 export type PipelineNodeStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped';
 
@@ -91,6 +96,8 @@ export interface PipelineState {
   completedNodes: number;
   isRunning: boolean;
   isPaused: boolean;
+  cancelRequested: boolean;
+  completionStatus: 'succeeded' | 'failed' | 'cancelled' | null;
   currentNodeId: string | null;
   validationWarnings: Array<{ nodeId: string; message: string }>;
 }
@@ -217,6 +224,7 @@ interface CanvasState {
   aiToolsPanelOpen: boolean;
   lastError: string;
   modelCache: Record<string, ModelInfo[]>;
+  modelRequestState: Record<string, 'loading' | 'loaded'>;
   stagingNodes: CanvasNode[];
   pendingStagingMaterializations: Record<string, { position: { x: number; y: number } }>;
   settings: SettingsSnapshot | null;
@@ -294,6 +302,7 @@ interface CanvasState {
   createDataNode(nodeType: 'experiment_log' | 'task', position: { x: number; y: number }): void;
   updateNodeParamValue(nodeId: string, key: string, value: unknown): void;
   updateNodeMeta(nodeId: string, patch: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
+  updateViewport(viewport: { x: number; y: number; zoom: number }): void;
   previewNodeSize(nodeId: string, width: number, height: number): void;
   updateNodeSize(
     nodeId: string,
@@ -310,6 +319,7 @@ interface CanvasState {
   setAiToolsPanelOpen(open: boolean): void;
   setError(message: string): void;
   clearError(): void;
+  requestModelCache(provider: string, opts?: { force?: boolean }): void;
   setModelCache(provider: string, models: ModelInfo[]): void;
   setSettings(s: SettingsSnapshot): void;
   setSettingsPanelOpen(open: boolean): void;
@@ -350,6 +360,7 @@ interface CanvasState {
   setBlueprintDraft(draft: BlueprintDraft | null): void;
   clearBlueprintDraft(): void;
   setBlueprintIndex(entries: BlueprintRegistryEntry[]): void;
+  migrateBlueprintDefinitions(definitions: BlueprintDefinitionEnvelope[]): void;
   pushUndo(): void;
   undo(): void;
   redo(): void;
@@ -359,6 +370,7 @@ interface CanvasState {
   setPipelineNodeIssue(nodeId: string, issue: { kind: RunIssueKind; message: string } | null): void;
   incrementPipelineCompleted(): void;
   setPipelinePaused(paused: boolean): void;
+  setPipelineCancelRequested(requested: boolean): void;
   addPipelineWarning(nodeId: string, message: string): void;
   saveNow(): void;
   runAutosaveCheck(): void;
@@ -368,6 +380,7 @@ interface CanvasState {
 
 // ── Save scheduling ─────────────────────────────────────────────────────────
 const AUTO_SAVE_INTERVAL_MS = 3 * 60 * 1000;
+const BLUEPRINT_STATUS_COLUMN_MIN_HEIGHT = 372;
 let lastPersistedSerialized = '';
 let nextSaveRequestId = 0;
 const inFlightSavePayloads = new Map<number, string>();
@@ -418,7 +431,7 @@ function computeBlueprintInstanceSize(entry: BlueprintRegistryEntry): { width: n
   const inputRows = Math.max(1, entry.input_slots);
   const outputRows = Math.max(1, entry.output_slots);
   const leftColumnHeight = 28 + inputRows * 62;
-  const middleColumnHeight = 28 + Math.ceil(6 / 2) * 58;
+  const middleColumnHeight = BLUEPRINT_STATUS_COLUMN_MIN_HEIGHT;
   const rightColumnHeight = 28 + outputRows * 62;
   const contentHeight = Math.max(leftColumnHeight, middleColumnHeight, rightColumnHeight);
   const footerHeight = 56;
@@ -431,7 +444,7 @@ function computeBlueprintSizeFromCounts(inputSlots: number, outputSlots: number)
   const inputRows = Math.max(1, inputSlots);
   const outputRows = Math.max(1, outputSlots);
   const leftColumnHeight = 28 + inputRows * 62;
-  const middleColumnHeight = 28 + Math.ceil(6 / 2) * 58;
+  const middleColumnHeight = BLUEPRINT_STATUS_COLUMN_MIN_HEIGHT;
   const rightColumnHeight = 28 + outputRows * 62;
   const contentHeight = Math.max(leftColumnHeight, middleColumnHeight, rightColumnHeight);
   const footerHeight = 56;
@@ -590,6 +603,472 @@ function normalizeBlueprintNodes(file: CanvasFile): CanvasFile {
   return changed ? { ...file, nodes: nextNodes } : file;
 }
 
+function normalizeFunctionNodeAgainstToolDefs(node: CanvasNode, toolDefs: JsonToolDef[]): CanvasNode {
+  if (node.node_type !== 'function') { return node; }
+  const toolId = node.meta?.ai_tool;
+  if (!toolId) { return node; }
+
+  const toolDef = toolDefs.find(tool => tool.id === toolId);
+  if (!toolDef) { return node; }
+
+  const nextSchema = toolDef.params ?? [];
+  const currentMeta = node.meta ?? {};
+  const currentSchema = Array.isArray(currentMeta.input_schema) ? currentMeta.input_schema : [];
+  const currentParamValues = (
+    currentMeta.param_values && typeof currentMeta.param_values === 'object'
+      ? currentMeta.param_values
+      : {}
+  ) as Record<string, unknown>;
+
+  const nextParamValues: Record<string, unknown> = { ...currentParamValues };
+  let changed = JSON.stringify(currentSchema) !== JSON.stringify(nextSchema);
+
+  for (const param of nextSchema) {
+    if (nextParamValues[param.name] === undefined && param.default !== undefined) {
+      nextParamValues[param.name] = param.default;
+      changed = true;
+    }
+  }
+
+  if (!changed) { return node; }
+
+  return {
+    ...node,
+    meta: {
+      ...currentMeta,
+      input_schema: nextSchema,
+      param_values: nextParamValues,
+    },
+  };
+}
+
+function normalizeFunctionNodes(file: CanvasFile, toolDefs: JsonToolDef[]): CanvasFile {
+  const nodes = file.nodes ?? [];
+  if (nodes.length === 0 || toolDefs.length === 0) { return file; }
+
+  let changed = false;
+  const nextNodes = nodes.map(node => {
+    const nextNode = normalizeFunctionNodeAgainstToolDefs(node, toolDefs);
+    if (nextNode !== node) {
+      changed = true;
+    }
+    return nextNode;
+  });
+
+  return changed ? { ...file, nodes: nextNodes } : file;
+}
+
+function createFlowNodeFromCanvasNode(node: CanvasNode): FlowNode {
+  return {
+    id: node.id,
+    type: nodeTypeToFlowType(node.node_type),
+    position: node.position,
+    data: node,
+    width: node.size.width,
+    height: node.size.height,
+    zIndex: isBlueprintInstanceContainerNode(node) ? -1 : undefined,
+  };
+}
+
+function upsertFlowNode(
+  nodes: FlowNode[],
+  nextNode: FlowNode,
+): { nodes: FlowNode[]; changed: boolean } {
+  const idx = nodes.findIndex(node => node.id === nextNode.id);
+  if (idx < 0) {
+    return { nodes: [...nodes, nextNode], changed: true };
+  }
+
+  const prev = nodes[idx];
+  const same =
+    prev.type === nextNode.type &&
+    prev.position.x === nextNode.position.x &&
+    prev.position.y === nextNode.position.y &&
+    prev.width === nextNode.width &&
+    prev.height === nextNode.height &&
+    prev.zIndex === nextNode.zIndex &&
+    JSON.stringify(prev.data) === JSON.stringify(nextNode.data);
+  if (same) {
+    return { nodes, changed: false };
+  }
+
+  const nextNodes = [...nodes];
+  nextNodes[idx] = { ...prev, ...nextNode };
+  return { nodes: nextNodes, changed: true };
+}
+
+function getDefinitionRectPosition(origin: { x: number; y: number }, rect: BlueprintDefinition['input_slots'][number]['rect']): { x: number; y: number } {
+  return { x: origin.x + rect.x, y: origin.y + rect.y };
+}
+
+function inferBlueprintInstanceOrigin(
+  containerNode: FlowNode,
+  definition: BlueprintDefinition,
+  flowNodes: FlowNode[],
+): { x: number; y: number } {
+  const instanceId = containerNode.data.meta?.blueprint_instance_id;
+  if (!instanceId) {
+    return { x: containerNode.position.x + 28, y: containerNode.position.y + 64 };
+  }
+
+  const candidates = flowNodes.filter(node =>
+    node.id !== containerNode.id && (
+      node.data.meta?.blueprint_instance_id === instanceId ||
+      node.data.meta?.blueprint_bound_instance_id === instanceId
+    )
+  );
+
+  for (const slot of [...definition.input_slots, ...definition.output_slots]) {
+    const match = candidates.find(node =>
+      node.data.meta?.blueprint_placeholder_slot_id === slot.id ||
+      node.data.meta?.blueprint_bound_slot_id === slot.id
+    );
+    if (match) {
+      return {
+        x: match.position.x - slot.rect.x,
+        y: match.position.y - slot.rect.y,
+      };
+    }
+  }
+
+  return { x: containerNode.position.x + 28, y: containerNode.position.y + 64 };
+}
+
+function findMatchingBlueprintFunctionFlowNode(
+  instanceId: string,
+  nodeDef: BlueprintDefinition['function_nodes'][number],
+  origin: { x: number; y: number },
+  nodes: FlowNode[],
+  usedIds: Set<string>,
+): FlowNode | undefined {
+  const expected = getDefinitionRectPosition(origin, nodeDef.rect);
+  const candidates = nodes.filter(node =>
+    !usedIds.has(node.id) &&
+    node.data.meta?.blueprint_instance_id === instanceId &&
+    node.data.node_type === 'function'
+  );
+
+  let best: { node: FlowNode; score: number } | undefined;
+  for (const candidate of candidates) {
+    const meta = candidate.data.meta ?? {};
+    const exactSource = meta.blueprint_source_kind === 'function_node' && meta.blueprint_source_id === nodeDef.id;
+    const sameTool = meta.ai_tool === nodeDef.tool_id;
+    const sameTitle = candidate.data.title === nodeDef.title;
+    if (!exactSource && !sameTool && !sameTitle) { continue; }
+
+    const distance = Math.hypot(candidate.position.x - expected.x, candidate.position.y - expected.y);
+    const score =
+      (exactSource ? -100000 : 0) +
+      (sameTool ? 0 : 5000) +
+      (sameTitle ? 0 : 500) +
+      distance;
+    if (!best || score < best.score) {
+      best = { node: candidate, score };
+    }
+  }
+
+  return best?.node;
+}
+
+function findMatchingBlueprintDataFlowNode(
+  instanceId: string,
+  nodeDef: BlueprintDefinition['data_nodes'][number],
+  origin: { x: number; y: number },
+  nodes: FlowNode[],
+  usedIds: Set<string>,
+): FlowNode | undefined {
+  const expected = getDefinitionRectPosition(origin, nodeDef.rect);
+  const candidates = nodes.filter(node =>
+    !usedIds.has(node.id) &&
+    node.data.meta?.blueprint_instance_id === instanceId &&
+    node.data.node_type === nodeDef.node_type
+  );
+
+  let best: { node: FlowNode; score: number } | undefined;
+  for (const candidate of candidates) {
+    const meta = candidate.data.meta ?? {};
+    const exactSource = meta.blueprint_source_kind === 'data_node' && meta.blueprint_source_id === nodeDef.id;
+    const sameTitle = candidate.data.title === nodeDef.title;
+    if (!exactSource && !sameTitle) { continue; }
+
+    const distance = Math.hypot(candidate.position.x - expected.x, candidate.position.y - expected.y);
+    const score =
+      (exactSource ? -100000 : 0) +
+      (sameTitle ? 0 : 500) +
+      distance;
+    if (!best || score < best.score) {
+      best = { node: candidate, score };
+    }
+  }
+
+  return best?.node;
+}
+
+function migrateBlueprintInstancesAgainstDefinitions(
+  flowNodes: FlowNode[],
+  flowEdges: FlowEdge[],
+  definitions: BlueprintDefinitionEnvelope[],
+  blueprintIndex: BlueprintRegistryEntry[],
+  toolDefs: JsonToolDef[],
+): { nodes: FlowNode[]; edges: FlowEdge[]; changed: boolean } {
+  if (definitions.length === 0) {
+    return { nodes: flowNodes, edges: flowEdges, changed: false };
+  }
+
+  const entryByPath = new Map(blueprintIndex.map(entry => [entry.file_path, entry]));
+  const definitionByPath = new Map(definitions.map(item => [item.filePath, item.definition]));
+  let nodes = flowNodes;
+  let edges = flowEdges;
+  let changed = false;
+  const changedInstanceIds = new Set<string>();
+
+  for (const containerNode of nodes.filter(node => isBlueprintInstanceContainerNode(node.data))) {
+    const instanceId = containerNode.data.meta?.blueprint_instance_id;
+    const filePath = containerNode.data.meta?.blueprint_file_path;
+    if (!instanceId || !filePath) { continue; }
+
+    const definition = definitionByPath.get(filePath);
+    if (!definition) { continue; }
+    const entry = entryByPath.get(filePath);
+    const origin = inferBlueprintInstanceOrigin(containerNode, definition, nodes);
+    const usedNodeIds = new Set<string>();
+    const slotNodeById = new Map<string, FlowNode>();
+    const functionNodeById = new Map<string, FlowNode>();
+    const dataNodeById = new Map<string, FlowNode>();
+    let instanceChanged = false;
+
+    for (const slot of definition.input_slots) {
+      const existingPlaceholder = nodes.find(node =>
+        node.data.meta?.blueprint_instance_id === instanceId &&
+        node.data.meta?.blueprint_placeholder_kind === 'input' &&
+        node.data.meta?.blueprint_placeholder_slot_id === slot.id
+      );
+      const existingBound = nodes.find(node =>
+        node.data.meta?.blueprint_bound_instance_id === instanceId &&
+        node.data.meta?.blueprint_bound_slot_kind === 'input' &&
+        node.data.meta?.blueprint_bound_slot_id === slot.id
+      );
+
+      if (existingPlaceholder) {
+        const expectedNode = createBlueprintPlaceholderNode(slot, instanceId, definition, getDefinitionRectPosition(origin, slot.rect));
+        expectedNode.id = existingPlaceholder.id;
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(expectedNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === expectedNode.id) ?? createFlowNodeFromCanvasNode(expectedNode));
+        usedNodeIds.add(expectedNode.id);
+      } else if (existingBound) {
+        const expectedPosition = getDefinitionRectPosition(origin, slot.rect);
+        const nextBoundNode: FlowNode = {
+          ...existingBound,
+          data: {
+            ...existingBound.data,
+            meta: {
+              ...(existingBound.data.meta ?? {}),
+              blueprint_bound_instance_id: instanceId,
+              blueprint_bound_slot_id: slot.id,
+              blueprint_bound_slot_title: slot.title,
+              blueprint_bound_slot_kind: 'input',
+            },
+          },
+        };
+        if (!existingBound.data.meta?.blueprint_source_id && Math.hypot(existingBound.position.x - expectedPosition.x, existingBound.position.y - expectedPosition.y) <= 2) {
+          nextBoundNode.position = expectedPosition;
+          nextBoundNode.data = { ...nextBoundNode.data, position: expectedPosition };
+        }
+        const result = upsertFlowNode(nodes, nextBoundNode);
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === nextBoundNode.id) ?? nextBoundNode);
+        usedNodeIds.add(nextBoundNode.id);
+      } else {
+        const createdNode = createBlueprintPlaceholderNode(slot, instanceId, definition, getDefinitionRectPosition(origin, slot.rect));
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(createdNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === createdNode.id) ?? createFlowNodeFromCanvasNode(createdNode));
+        usedNodeIds.add(createdNode.id);
+      }
+    }
+
+    for (const slot of definition.output_slots) {
+      const existingPlaceholder = nodes.find(node =>
+        node.data.meta?.blueprint_instance_id === instanceId &&
+        node.data.meta?.blueprint_placeholder_kind === 'output' &&
+        node.data.meta?.blueprint_placeholder_slot_id === slot.id
+      );
+      const existingBound = nodes.find(node =>
+        node.data.meta?.blueprint_bound_instance_id === instanceId &&
+        node.data.meta?.blueprint_bound_slot_kind === 'output' &&
+        node.data.meta?.blueprint_bound_slot_id === slot.id
+      );
+
+      if (existingPlaceholder) {
+        const expectedNode = createBlueprintPlaceholderNode(slot, instanceId, definition, getDefinitionRectPosition(origin, slot.rect));
+        expectedNode.id = existingPlaceholder.id;
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(expectedNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === expectedNode.id) ?? createFlowNodeFromCanvasNode(expectedNode));
+        usedNodeIds.add(expectedNode.id);
+      } else if (existingBound) {
+        const nextBoundNode: FlowNode = {
+          ...existingBound,
+          data: {
+            ...existingBound.data,
+            meta: {
+              ...(existingBound.data.meta ?? {}),
+              blueprint_bound_instance_id: instanceId,
+              blueprint_bound_slot_id: slot.id,
+              blueprint_bound_slot_title: slot.title,
+              blueprint_bound_slot_kind: 'output',
+            },
+          },
+        };
+        const result = upsertFlowNode(nodes, nextBoundNode);
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === nextBoundNode.id) ?? nextBoundNode);
+        usedNodeIds.add(nextBoundNode.id);
+      } else {
+        const createdNode = createBlueprintPlaceholderNode(slot, instanceId, definition, getDefinitionRectPosition(origin, slot.rect));
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(createdNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        slotNodeById.set(slot.id, result.nodes.find(node => node.id === createdNode.id) ?? createFlowNodeFromCanvasNode(createdNode));
+        usedNodeIds.add(createdNode.id);
+      }
+    }
+
+    for (const fnNode of definition.function_nodes) {
+      const matched = findMatchingBlueprintFunctionFlowNode(instanceId, fnNode, origin, nodes, usedNodeIds);
+      if (matched) {
+        const currentMeta = matched.data.meta ?? {};
+        const mergedNode = normalizeFunctionNodeAgainstToolDefs({
+          ...matched.data,
+          meta: {
+            ...currentMeta,
+            ai_tool: fnNode.tool_id,
+            ai_provider: fnNode.provider ?? currentMeta.ai_provider,
+            ai_model: fnNode.model ?? currentMeta.ai_model,
+            param_values: {
+              ...(fnNode.param_values ?? {}),
+              ...((currentMeta.param_values ?? {}) as Record<string, unknown>),
+            },
+            fn_status: currentMeta.fn_status ?? 'idle',
+            blueprint_instance_id: instanceId,
+            blueprint_def_id: definition.id,
+            blueprint_color: definition.color,
+            blueprint_source_kind: 'function_node',
+            blueprint_source_id: fnNode.id,
+          },
+        }, toolDefs);
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(mergedNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        functionNodeById.set(fnNode.id, result.nodes.find(node => node.id === matched.id) ?? createFlowNodeFromCanvasNode(mergedNode));
+        usedNodeIds.add(matched.id);
+      } else {
+        const createdNode = normalizeFunctionNodeAgainstToolDefs(
+          createBlueprintFunctionCanvasNode(fnNode, instanceId, definition, toolDefs, getDefinitionRectPosition(origin, fnNode.rect)),
+          toolDefs,
+        );
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(createdNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        functionNodeById.set(fnNode.id, result.nodes.find(node => node.id === createdNode.id) ?? createFlowNodeFromCanvasNode(createdNode));
+        usedNodeIds.add(createdNode.id);
+      }
+    }
+
+    for (const dataNode of definition.data_nodes) {
+      const matched = findMatchingBlueprintDataFlowNode(instanceId, dataNode, origin, nodes, usedNodeIds);
+      if (matched) {
+        const mergedNode: CanvasNode = {
+          ...matched.data,
+          meta: {
+            ...(matched.data.meta ?? {}),
+            blueprint_instance_id: instanceId,
+            blueprint_def_id: definition.id,
+            blueprint_color: definition.color,
+            blueprint_source_kind: 'data_node',
+            blueprint_source_id: dataNode.id,
+          },
+        };
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(mergedNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        dataNodeById.set(dataNode.id, result.nodes.find(node => node.id === matched.id) ?? createFlowNodeFromCanvasNode(mergedNode));
+        usedNodeIds.add(matched.id);
+      } else {
+        const createdNode = createBlueprintInternalDataNode(dataNode, instanceId, definition, getDefinitionRectPosition(origin, dataNode.rect));
+        const result = upsertFlowNode(nodes, createFlowNodeFromCanvasNode(createdNode));
+        nodes = result.nodes;
+        changed = changed || result.changed;
+        instanceChanged = instanceChanged || result.changed;
+        dataNodeById.set(dataNode.id, result.nodes.find(node => node.id === createdNode.id) ?? createFlowNodeFromCanvasNode(createdNode));
+        usedNodeIds.add(createdNode.id);
+      }
+    }
+
+    for (const edge of definition.edges) {
+      const sourceNode = edge.source.kind === 'input_slot' || edge.source.kind === 'output_slot'
+        ? slotNodeById.get(edge.source.id)
+        : edge.source.kind === 'function_node'
+          ? functionNodeById.get(edge.source.id)
+          : dataNodeById.get(edge.source.id);
+      const targetNode = edge.target.kind === 'input_slot' || edge.target.kind === 'output_slot'
+        ? slotNodeById.get(edge.target.id)
+        : edge.target.kind === 'function_node'
+          ? functionNodeById.get(edge.target.id)
+          : dataNodeById.get(edge.target.id);
+      if (!sourceNode || !targetNode) { continue; }
+
+      const nextEdge: FlowEdge = {
+        id: uuid(),
+        source: sourceNode.id,
+        target: targetNode.id,
+        type: edge.edge_type === 'pipeline_flow' ? 'pipeline' : 'custom',
+        data: { edge_type: edge.edge_type, role: edge.role },
+      };
+      if (edges.some(existing => sameEdgeSemantics(existing, nextEdge))) {
+        continue;
+      }
+      edges = [...edges, nextEdge];
+      changed = true;
+      instanceChanged = true;
+    }
+    if (entry) {
+      const nextContainer = syncBlueprintNodeFromEntry(
+        nodes.find(node => node.id === containerNode.id) ?? containerNode,
+        entry,
+      );
+      const result = upsertFlowNode(nodes, nextContainer);
+      nodes = result.nodes;
+      changed = changed || result.changed;
+      instanceChanged = instanceChanged || result.changed;
+    }
+    if (instanceChanged) {
+      changedInstanceIds.add(instanceId);
+    }
+  }
+
+  if (changedInstanceIds.size > 0) {
+    nodes = recalcBlueprintContainersForInstanceIds(nodes, changedInstanceIds);
+  }
+
+  return { nodes, edges, changed };
+}
+
 function preferredPlaceholderNodeType(slot: BlueprintSlotDef): CanvasNode['node_type'] {
   if (slot.kind === 'output') { return 'ai_output'; }
   const preferred = slot.accepts[0];
@@ -656,6 +1135,8 @@ function createBlueprintInternalDataNode(
       blueprint_instance_id: instanceId,
       blueprint_def_id: definition.id,
       blueprint_color: definition.color,
+      blueprint_source_kind: 'data_node',
+      blueprint_source_id: nodeDef.id,
       content_preview: `蓝图内部节点：${nodeDef.title}`,
       card_content_mode: 'preview',
     },
@@ -689,6 +1170,8 @@ function createBlueprintFunctionCanvasNode(
       blueprint_instance_id: instanceId,
       blueprint_def_id: definition.id,
       blueprint_color: definition.color,
+      blueprint_source_kind: 'function_node',
+      blueprint_source_id: nodeDef.id,
     },
   };
 }
@@ -1525,6 +2008,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   aiToolsPanelOpen: false,
   lastError: '',
   modelCache: {},
+  modelRequestState: {},
   stagingNodes: [],
   pendingStagingMaterializations: {},
   settings: null,
@@ -1668,7 +2152,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   initCanvas(data, workspaceRoot) {
-    const normalized = normalizeBlueprintNodes(normalizeNodeGroups(data));
+    const normalized = normalizeFunctionNodes(
+      normalizeBlueprintNodes(normalizeNodeGroups(data)),
+      get().toolDefs,
+    );
     const nodeGroups = normalized.nodeGroups ?? [];
     const hiddenNodeIds = new Set<string>();
     for (const group of nodeGroups) {
@@ -1720,7 +2207,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
 
     const normalizedCanvasFile: CanvasFile = { ...normalized, boards, nodeGroups, summaryGroups: undefined };
-    lastPersistedSerialized = serializeCanvasFile(normalizedCanvasFile);
+    const originalSerialized = serializeCanvasFile(data);
+    const normalizedSerialized = serializeCanvasFile(normalizedCanvasFile);
+    const needsMigrationSave = normalizedSerialized !== originalSerialized;
+    lastPersistedSerialized = originalSerialized;
 
     set({
       canvasFile: normalizedCanvasFile,
@@ -1746,6 +2236,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       saveError: null,
       initialCanvasRenderReady: normalized.nodes.length < INITIAL_CANVAS_LOAD_NODE_THRESHOLD,
     });
+
+    if (needsMigrationSave) {
+      debouncedSave(normalizedCanvasFile, 'immediate');
+    }
   },
 
   onNodesChange(changes) {
@@ -2881,6 +3375,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
+  updateViewport(viewport) {
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      const current = state.canvasFile.viewport;
+      if (
+        Math.abs(current.x - viewport.x) < 0.5 &&
+        Math.abs(current.y - viewport.y) < 0.5 &&
+        Math.abs(current.zoom - viewport.zoom) < 0.001
+      ) {
+        return {};
+      }
+      const newFile: CanvasFile = { ...state.canvasFile, viewport };
+      debouncedSave(newFile);
+      return { canvasFile: newFile };
+    });
+  },
+
   previewNodeSize(nodeId, width, height) {
     set(state => {
       if (!state.canvasFile) { return {}; }
@@ -3017,8 +3528,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setAiToolsPanelOpen(open) { set({ aiToolsPanelOpen: open }); },
   setError(message)          { set({ lastError: message }); },
   clearError()               { set({ lastError: '' }); },
+  requestModelCache(provider, opts) {
+    const force = !!opts?.force;
+    const state = get();
+    if (!provider) { return; }
+    if (!force) {
+      if (state.modelRequestState[provider] === 'loading') { return; }
+      if ((state.modelCache[provider]?.length ?? 0) > 0) { return; }
+    }
+    set(current => ({
+      modelRequestState: {
+        ...current.modelRequestState,
+        [provider]: 'loading',
+      },
+    }));
+    postMessage({ type: 'requestModels', provider });
+  },
   setModelCache(provider, models) {
-    set(state => ({ modelCache: { ...state.modelCache, [provider]: models } }));
+    set(state => ({
+      modelCache: { ...state.modelCache, [provider]: models },
+      modelRequestState: {
+        ...state.modelRequestState,
+        [provider]: 'loaded',
+      },
+    }));
   },
   setSettings(s) {
     set({ settings: s });
@@ -3035,7 +3568,29 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
   setSettingsPanelOpen(open) { set({ settingsPanelOpen: open }); },
-  setToolDefs(defs)           { set({ toolDefs: defs }); },
+  setToolDefs(defs) {
+    set(state => {
+      if (!state.canvasFile) {
+        return { toolDefs: defs };
+      }
+
+      const normalizedFile = normalizeFunctionNodes(state.canvasFile, defs);
+      if (normalizedFile === state.canvasFile) {
+        return { toolDefs: defs };
+      }
+
+      const { flowNodes, flowEdges } = canvasToFlow(normalizedFile.nodes ?? [], normalizedFile.edges ?? []);
+      const syncedFlowNodes = syncGroupHubNodes(flowNodes, state.nodeGroups);
+      debouncedSave(normalizedFile, 'immediate');
+
+      return {
+        toolDefs: defs,
+        canvasFile: normalizedFile,
+        nodes: syncedFlowNodes,
+        edges: flowEdges,
+      };
+    });
+  },
   setNodeDefs(defs)           { set({ nodeDefs: defs }); },
   setOutputHistory(data)      { set({ outputHistory: data }); },
 
@@ -3448,6 +4003,38 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
+  migrateBlueprintDefinitions(definitions) {
+    set(state => {
+      if (!state.canvasFile || definitions.length === 0) {
+        return {};
+      }
+
+      const migrated = migrateBlueprintInstancesAgainstDefinitions(
+        state.nodes,
+        state.edges,
+        definitions,
+        state.blueprintIndex,
+        state.toolDefs,
+      );
+      if (!migrated.changed) {
+        return {};
+      }
+
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(migrated.nodes, migrated.edges);
+      const newFile: CanvasFile = {
+        ...state.canvasFile,
+        nodes: cnNodes,
+        edges: cnEdges,
+      };
+      debouncedSave(newFile, 'immediate');
+      return {
+        nodes: migrated.nodes,
+        edges: migrated.edges,
+        canvasFile: newFile,
+      };
+    });
+  },
+
   // ── Pipeline state management ──────────────────────────────────────────────
 
   setPipelineState(state) { set({ pipelineState: state }); },
@@ -3503,6 +4090,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (!s.pipelineState) { return {}; }
       return {
         pipelineState: { ...s.pipelineState, isPaused: paused },
+      };
+    });
+  },
+
+  setPipelineCancelRequested(requested) {
+    set(s => {
+      if (!s.pipelineState) { return {}; }
+      return {
+        pipelineState: {
+          ...s.pipelineState,
+          cancelRequested: requested,
+          isPaused: requested ? false : s.pipelineState.isPaused,
+        },
       };
     });
   },

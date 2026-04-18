@@ -43,6 +43,8 @@ export function PipelineToolbar() {
     completedNodes,
     isRunning,
     isPaused,
+    cancelRequested,
+    completionStatus,
     currentNodeId,
     nodeIssues,
     validationWarnings,
@@ -74,11 +76,17 @@ export function PipelineToolbar() {
   // Status text
   let statusLabel = '▶ Pipeline 运行中';
   let statusIcon = '▶';
-  if (isPaused) {
+  if (cancelRequested && isRunning) {
+    statusLabel = '◼ Pipeline 取消中';
+    statusIcon = '◼';
+  } else if (isPaused) {
     statusLabel = '⏸ Pipeline 已暂停';
     statusIcon = '⏸';
   } else if (allDone) {
-    if (hasFailed) {
+    if (completionStatus === 'cancelled') {
+      statusLabel = '◼ Pipeline 已取消';
+      statusIcon = '◼';
+    } else if (hasFailed) {
       statusLabel = '⚠ Pipeline 部分失败';
       statusIcon = '⚠';
     } else {
@@ -88,6 +96,7 @@ export function PipelineToolbar() {
   }
 
   const handlePause = () => {
+    if (cancelRequested) { return; }
     if (isPaused) {
       postMessage({ type: 'pipelineResume', pipelineId });
       useCanvasStore.getState().setPipelinePaused(false);
@@ -99,7 +108,7 @@ export function PipelineToolbar() {
 
   const handleCancel = () => {
     postMessage({ type: 'pipelineCancel', pipelineId });
-    useCanvasStore.getState().setPipelineState(null);
+    useCanvasStore.getState().setPipelineCancelRequested(true);
   };
 
   return ReactDOM.createPortal(
@@ -131,7 +140,11 @@ export function PipelineToolbar() {
         <span style={{
           fontSize: 12,
           fontWeight: 700,
-          color: isPaused
+          color: cancelRequested && isRunning
+            ? 'var(--vscode-terminal-ansiYellow)'
+            : isPaused
+            ? 'var(--vscode-terminal-ansiYellow)'
+            : completionStatus === 'cancelled'
             ? 'var(--vscode-terminal-ansiYellow)'
             : hasFailed && allDone
             ? 'var(--vscode-terminal-ansiRed)'
@@ -178,16 +191,18 @@ export function PipelineToolbar() {
           <>
             <button
               onClick={handlePause}
+              disabled={cancelRequested}
               style={{
                 background: 'var(--vscode-button-secondaryBackground)',
                 color: 'var(--vscode-button-secondaryForeground)',
                 border: '1px solid var(--vscode-button-border, transparent)',
                 borderRadius: 4,
                 padding: '2px 8px',
-                cursor: 'pointer',
+                cursor: cancelRequested ? 'not-allowed' : 'pointer',
                 fontSize: 11,
                 fontWeight: 500,
                 whiteSpace: 'nowrap',
+                opacity: cancelRequested ? 0.6 : 1,
               }}
               title={isPaused ? '继续执行' : '暂停执行'}
             >
@@ -195,20 +210,22 @@ export function PipelineToolbar() {
             </button>
             <button
               onClick={handleCancel}
+              disabled={cancelRequested}
               style={{
                 background: 'var(--vscode-inputValidation-errorBackground, #5a1d1d)',
                 color: 'var(--vscode-inputValidation-errorForeground, #f48771)',
                 border: '1px solid var(--vscode-inputValidation-errorBorder, #be1100)',
                 borderRadius: 4,
                 padding: '2px 8px',
-                cursor: 'pointer',
+                cursor: cancelRequested ? 'not-allowed' : 'pointer',
                 fontSize: 11,
                 fontWeight: 500,
                 whiteSpace: 'nowrap',
+                opacity: cancelRequested ? 0.6 : 1,
               }}
               title="取消 Pipeline"
             >
-              ✕ 取消
+              {cancelRequested ? '◼ 取消中…' : '✕ 取消'}
             </button>
           </>
         )}
@@ -228,7 +245,7 @@ export function PipelineToolbar() {
             当前: <span style={{ color: 'var(--vscode-terminal-ansiBlue)', fontWeight: 600 }}>
               {currentTitle}
             </span>
-            {isPaused ? ' — 已暂停' : ' → 处理中...'}
+            {cancelRequested ? ' — 正在取消…' : isPaused ? ' — 已暂停' : ' → 处理中...'}
           </span>
         )}
         {allDone && (
@@ -240,6 +257,7 @@ export function PipelineToolbar() {
             {statusCounts.done > 0 && <span style={{ color: 'var(--vscode-terminal-ansiGreen)' }}>✓{statusCounts.done} </span>}
             {statusCounts.failed > 0 && <span style={{ color: 'var(--vscode-terminal-ansiRed)' }}>✗{statusCounts.failed} </span>}
             {statusCounts.skipped > 0 && <span style={{ color: 'var(--vscode-descriptionForeground)' }}>⊘{statusCounts.skipped} </span>}
+            {completionStatus === 'cancelled' && <span style={{ color: 'var(--vscode-terminal-ansiYellow)' }}>◼ 用户取消 </span>}
           </span>
         )}
       </div>

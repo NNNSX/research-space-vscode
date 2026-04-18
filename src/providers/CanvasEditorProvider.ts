@@ -10,7 +10,7 @@ import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
 import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
 import { extractPreviewWithMeta } from '../core/content-extractor';
-import { listBlueprintDefinitions, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
+import { listBlueprintDefinitions, readBlueprintDefinition, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
 import { runBlueprintInstance } from '../blueprint/blueprint-runner';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -201,6 +201,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     webviewPanel.webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
     // Push node defs (always available since loaded in constructor)
     webviewPanel.webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
+    await this._postPetBootstrap(webviewPanel.webview, canvasDir);
     listBlueprintDefinitions(canvasDir).then(entries => {
       webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries });
     }).catch(() => {
@@ -336,23 +337,11 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         webview.postMessage({ type: 'toolDefs', tools: this._registry.getAll() });
         webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
         webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
-        // Send pet state
-        {
-          const petSettings = readPetSettings();
-          const petState = await readPetState(canvasDir);
-          webview.postMessage({
-            type: 'petInit',
-            petState,
-            petEnabled: petSettings.enabled,
-            restReminderMin: petSettings.restReminderMin,
-            groundTheme: petSettings.groundTheme,
-          });
-          // Send pet GIF assets base URI
-          const petAssetsUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'pets')
-          ).toString();
-          webview.postMessage({ type: 'petAssetsBase', uri: petAssetsUri });
-        }
+        await this._postPetBootstrap(webview, canvasDir);
+        break;
+
+      case 'requestSettingsSnapshot':
+        webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
         break;
 
       case 'canvasStateSync': {
@@ -893,6 +882,24 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         break;
       }
 
+      case 'requestBlueprintDefinitions': {
+        const filePaths = Array.isArray(msg['filePaths'])
+          ? (msg['filePaths'] as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : [];
+        if (filePaths.length === 0) { break; }
+        try {
+          const uniquePaths = Array.from(new Set(filePaths));
+          const definitions = await Promise.all(uniquePaths.map(async filePath => ({
+            filePath,
+            definition: await readBlueprintDefinition(filePath),
+          })));
+          webview.postMessage({ type: 'blueprintDefinitions', definitions });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `读取蓝图定义失败: ${String(e)}` });
+        }
+        break;
+      }
+
       case 'instantiateBlueprint': {
         const filePath = msg['filePath'];
         if (typeof filePath !== 'string' || !filePath.trim()) {
@@ -1240,6 +1247,22 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     }
   }
 
+  private async _postPetBootstrap(webview: vscode.Webview, canvasDir: string): Promise<void> {
+    const petSettings = readPetSettings();
+    const petState = await readPetState(canvasDir);
+    webview.postMessage({
+      type: 'petInit',
+      petState,
+      petEnabled: petSettings.enabled,
+      restReminderMin: petSettings.restReminderMin,
+      groundTheme: petSettings.groundTheme,
+    });
+    const petAssetsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'pets')
+    ).toString();
+    webview.postMessage({ type: 'petAssetsBase', uri: petAssetsUri });
+  }
+
   private _buildSettingsSnapshot(): SettingsSnapshot {
     const ai = vscode.workspace.getConfiguration('researchSpace.ai');
     const canvas = vscode.workspace.getConfiguration('researchSpace.canvas');
@@ -1248,11 +1271,14 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       globalProvider:           ai.get<string>('provider', 'copilot'),
       copilotModel:             ai.get<string>('copilotModel', ''),
       anthropicApiKey:          ai.get<string>('anthropicApiKey', ''),
-      anthropicModel:           ai.get<string>('anthropicModel', 'claude-sonnet-4-5'),
+      anthropicModel:           ai.get<string>('anthropicModel', 'claude-sonnet-4-6'),
       ollamaBaseUrl:            ai.get<string>('ollamaBaseUrl', 'http://localhost:11434'),
       ollamaModel:              ai.get<string>('ollamaModel', 'llama3.2'),
+      maxOutputTokens:          ai.get<number>('maxOutputTokens', 0),
+      maxContextTokens:         ai.get<number>('maxContextTokens', 0),
       autoSave:                 canvas.get<boolean>('autoSave', true),
       customProviders:          ai.get<CustomProviderConfig[]>('customProviders', []),
+      favoriteModels:           ai.get<Record<string, string[]>>('favoriteModels', {}),
       aiHubMixApiKey:           ai.get<string>('aiHubMixApiKey', ''),
       aiHubMixImageGenModel:    ai.get<string>('aiHubMixImageGenModel', ''),
       aiHubMixImageEditModel:   ai.get<string>('aiHubMixImageEditModel', ''),
@@ -1277,8 +1303,11 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'anthropicModel':          await ai.update('anthropicModel', value, target);          break;
       case 'ollamaBaseUrl':           await ai.update('ollamaBaseUrl', value, target);           break;
       case 'ollamaModel':             await ai.update('ollamaModel', value, target);             break;
+      case 'maxOutputTokens':         await ai.update('maxOutputTokens', value, target);         break;
+      case 'maxContextTokens':        await ai.update('maxContextTokens', value, target);        break;
       case 'autoSave':                await canvasCfg.update('autoSave', value, target);         break;
       case 'customProviders':         await ai.update('customProviders', value, target);         break;
+      case 'favoriteModels':         await ai.update('favoriteModels', value, target);          break;
       case 'aiHubMixApiKey':          await ai.update('aiHubMixApiKey', value, target);          break;
       case 'aiHubMixImageGenModel':   await ai.update('aiHubMixImageGenModel', value, target);   break;
       case 'aiHubMixImageEditModel':  await ai.update('aiHubMixImageEditModel', value, target);  break;

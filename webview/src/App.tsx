@@ -40,6 +40,27 @@ function classifyError(msg: string): ErrorKind {
   return 'generic';
 }
 
+function buildBlueprintRunSummary(args: {
+  status: 'succeeded' | 'failed' | 'cancelled';
+  totalNodes: number;
+  completedNodes: number;
+  failedNodes: number;
+  skippedNodes: number;
+  warningCount: number;
+  issueNodeTitle?: string | null;
+}): string {
+  const parts = [`完成 ${Math.min(args.completedNodes, args.totalNodes)}/${args.totalNodes}`];
+  if (args.failedNodes > 0) { parts.push(`失败 ${args.failedNodes}`); }
+  if (args.skippedNodes > 0) { parts.push(`跳过 ${args.skippedNodes}`); }
+  if (args.warningCount > 0) { parts.push(`预检警告 ${args.warningCount}`); }
+  const prefix = args.status === 'succeeded'
+    ? '运行完成'
+    : args.status === 'failed'
+      ? '运行失败'
+      : '运行已取消';
+  return `${prefix}：${parts.join('，')}${args.issueNodeTitle ? `；问题节点：${args.issueNodeTitle}` : ''}`;
+}
+
 // ── ErrorToast component ─────────────────────────────────────────────────────
 
 function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
@@ -244,6 +265,8 @@ export function App() {
   const lastError = useCanvasStore(s => s.lastError);
   const setModelCache = useCanvasStore(s => s.setModelCache);
   const setSettings = useCanvasStore(s => s.setSettings);
+  const requestModelCache = useCanvasStore(s => s.requestModelCache);
+  const saveNow = useCanvasStore(s => s.saveNow);
   const setToolDefs = useCanvasStore(s => s.setToolDefs);
   const setNodeDefs = useCanvasStore(s => s.setNodeDefs);
   const setPipelineState = useCanvasStore(s => s.setPipelineState);
@@ -251,6 +274,7 @@ export function App() {
   const setPipelineNodeIssue = useCanvasStore(s => s.setPipelineNodeIssue);
   const incrementPipelineCompleted = useCanvasStore(s => s.incrementPipelineCompleted);
   const setPipelinePaused = useCanvasStore(s => s.setPipelinePaused);
+  const setPipelineCancelRequested = useCanvasStore(s => s.setPipelineCancelRequested);
   const addPipelineWarning = useCanvasStore(s => s.addPipelineWarning);
   const runAutosaveCheck = useCanvasStore(s => s.runAutosaveCheck);
   const markSaveSuccess = useCanvasStore(s => s.markSaveSuccess);
@@ -260,7 +284,9 @@ export function App() {
   const setBlueprintDraft = useCanvasStore(s => s.setBlueprintDraft);
   const clearBlueprintDraft = useCanvasStore(s => s.clearBlueprintDraft);
   const setBlueprintIndex = useCanvasStore(s => s.setBlueprintIndex);
+  const migrateBlueprintDefinitions = useCanvasStore(s => s.migrateBlueprintDefinitions);
   const instantiateBlueprintDefinition = useCanvasStore(s => s.instantiateBlueprintDefinition);
+  const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
   const lastInitialCanvasLoadStats = useCanvasStore(s => s.lastInitialCanvasLoadStats);
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
@@ -281,6 +307,22 @@ export function App() {
       isAliveRef.current = false;
     };
   }, []);
+
+  const settings = useCanvasStore(s => s.settings);
+
+  useEffect(() => {
+    if (!settings) { return; }
+    requestModelCache('copilot');
+    requestModelCache('ollama');
+    if (settings.anthropicApiKey?.trim()) {
+      requestModelCache('anthropic');
+    }
+    for (const provider of (settings.customProviders ?? [])) {
+      if (provider.baseUrl?.trim() && provider.apiKey?.trim()) {
+        requestModelCache(provider.id);
+      }
+    }
+  }, [requestModelCache, settings]);
 
   const flushAiChunks = () => {
     aiChunkFlushRafRef.current = null;
@@ -391,6 +433,31 @@ export function App() {
     }, 3 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [runAutosaveCheck]);
+
+  useEffect(() => {
+    const flushPendingCanvasState = () => {
+      const state = useCanvasStore.getState();
+      if (state.saveState === 'pending') {
+        saveNow();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPendingCanvasState();
+      }
+    };
+
+    window.addEventListener('pagehide', flushPendingCanvasState);
+    window.addEventListener('beforeunload', flushPendingCanvasState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', flushPendingCanvasState);
+      window.removeEventListener('pagehide', flushPendingCanvasState);
+    };
+  }, [saveNow]);
 
   useEffect(() => {
     if (!lastInitialCanvasLoadStats) { return; }
@@ -607,6 +674,21 @@ export function App() {
         case 'blueprintIndex':
           if (Array.isArray(msg.entries)) {
             setBlueprintIndex(msg.entries);
+            const blueprintFilePaths = Array.from(new Set(
+              (useCanvasStore.getState().canvasFile?.nodes ?? [])
+                .filter(node => node.node_type === 'blueprint' && typeof node.meta?.blueprint_file_path === 'string' && node.meta.blueprint_file_path.length > 0)
+                .map(node => node.meta!.blueprint_file_path as string)
+            ));
+            if (blueprintFilePaths.length > 0) {
+              postMessage({ type: 'requestBlueprintDefinitions', filePaths: blueprintFilePaths });
+            }
+          }
+          break;
+        case 'blueprintDefinitions':
+          if (Array.isArray(msg.definitions)) {
+            migrateBlueprintDefinitions(
+              msg.definitions as Array<{ filePath: string; definition: import('../../src/blueprint/blueprint-types').BlueprintDefinition }>
+            );
           }
           break;
         case 'blueprintInstantiated':
@@ -614,6 +696,27 @@ export function App() {
             instantiateBlueprintDefinition(msg.entry, msg.definition, msg.position);
           }
           break;
+        case 'blueprintRunRejected': {
+          const bm = msg as { containerNodeId: string; message: string };
+          if (bm.containerNodeId && bm.message) {
+            const finishedAt = new Date().toISOString();
+            updateNodeMeta(bm.containerNodeId, {
+              blueprint_last_run_status: 'failed',
+              blueprint_last_run_summary: bm.message,
+              blueprint_last_run_finished_at: finishedAt,
+              blueprint_last_run_failed_at: finishedAt,
+              blueprint_last_run_total_nodes: 0,
+              blueprint_last_run_completed_nodes: 0,
+              blueprint_last_run_failed_nodes: 0,
+              blueprint_last_run_skipped_nodes: 0,
+              blueprint_last_run_warning_count: 0,
+              blueprint_last_issue_node_id: undefined,
+              blueprint_last_issue_node_title: undefined,
+            });
+            setError(bm.message);
+          }
+          break;
+        }
         // ── Pipeline progress messages ──
         case 'pipelineStarted': {
           const pm = msg as { pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number };
@@ -628,6 +731,8 @@ export function App() {
             completedNodes: 0,
             isRunning: true,
             isPaused: false,
+            cancelRequested: false,
+            completionStatus: null,
             currentNodeId: null,
             validationWarnings: [],
           });
@@ -668,15 +773,60 @@ export function App() {
           break;
         }
         case 'pipelineComplete': {
-          const pm = msg as { pipelineId: string; totalNodes: number; completedNodes: number };
+          const pm = msg as { pipelineId: string; totalNodes: number; completedNodes: number; status: 'succeeded' | 'failed' | 'cancelled' };
           // Update final state and schedule cleanup after 5s
           const finalPs = useCanvasStore.getState().pipelineState;
           if (finalPs) {
+            const blueprintContainer = useCanvasStore.getState().canvasFile?.nodes.find(node => node.id === finalPs.triggerNodeId);
+            const isBlueprintRun = blueprintContainer?.node_type === 'blueprint' && !!blueprintContainer.meta?.blueprint_instance_id;
+            if (isBlueprintRun) {
+              const finishedAt = new Date().toISOString();
+              const statuses = Object.values(finalPs.nodeStatuses);
+              const failedNodes = statuses.filter(status => status === 'failed').length;
+              const skippedNodes = statuses.filter(status => status === 'skipped').length;
+              const warningCount = finalPs.validationWarnings.length;
+              const canvasFile = useCanvasStore.getState().canvasFile;
+              const issueNodeId = pm.status === 'cancelled'
+                ? finalPs.currentNodeId
+                : Object.keys(finalPs.nodeIssues).find(nodeId => finalPs.nodeIssues[nodeId]?.kind !== 'skipped') ?? null;
+              const issueNodeTitle = issueNodeId
+                ? canvasFile?.nodes.find(node => node.id === issueNodeId)?.title ?? issueNodeId
+                : null;
+              updateNodeMeta(finalPs.triggerNodeId, {
+                blueprint_last_run_status: pm.status,
+                blueprint_last_run_summary: buildBlueprintRunSummary({
+                  status: pm.status,
+                  totalNodes: pm.totalNodes,
+                  completedNodes: pm.completedNodes,
+                  failedNodes,
+                  skippedNodes,
+                  warningCount,
+                  issueNodeTitle,
+                }),
+                blueprint_last_run_finished_at: finishedAt,
+                blueprint_last_run_total_nodes: pm.totalNodes,
+                blueprint_last_run_completed_nodes: pm.completedNodes,
+                blueprint_last_run_failed_nodes: failedNodes,
+                blueprint_last_run_skipped_nodes: skippedNodes,
+                blueprint_last_run_warning_count: warningCount,
+                blueprint_last_issue_node_id: issueNodeId ?? undefined,
+                blueprint_last_issue_node_title: issueNodeTitle ?? undefined,
+                ...(pm.status === 'succeeded'
+                  ? { blueprint_last_run_succeeded_at: finishedAt }
+                  : {}),
+                ...(pm.status === 'failed'
+                  ? { blueprint_last_run_failed_at: finishedAt }
+                  : {}),
+              });
+            }
             setPipelineState({
               ...finalPs,
               totalNodes: pm.totalNodes,
               completedNodes: pm.completedNodes,
               isRunning: false,
+              isPaused: false,
+              cancelRequested: false,
+              completionStatus: pm.status,
               currentNodeId: null,
             });
             // Auto-dismiss after 5 seconds

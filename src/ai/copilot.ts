@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { AIProvider, AIContent } from './provider';
 import type { ModelInfo } from '../core/canvas-model';
+import type { AIModelCapabilities } from './model-capabilities';
 
 // Static fallback — vscode.lm API doesn't enumerate per-user model entitlements
 const COPILOT_STATIC_MODELS: ModelInfo[] = [
@@ -65,6 +66,17 @@ export class CopilotProvider implements AIProvider {
     return models[0].id;
   }
 
+  async getModelCapabilities(modelOverride?: string): Promise<AIModelCapabilities | null> {
+    const modelId = await this.resolveModel(modelOverride).catch(() => modelOverride);
+    if (!modelId) {
+      return null;
+    }
+    return {
+      modelId,
+      source: 'VS Code language model API (capabilities unavailable)',
+    };
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
@@ -112,7 +124,16 @@ export class CopilotProvider implements AIProvider {
 
     const response = await model.sendRequest(
       messages,
-      { justification: 'Research Space AI analysis' },
+      {
+        justification: 'Research Space AI analysis',
+        ...(opts?.maxTokens ? {
+          modelOptions: {
+            max_tokens: opts.maxTokens,
+            max_output_tokens: opts.maxTokens,
+            max_completion_tokens: opts.maxTokens,
+          },
+        } : {}),
+      },
       cancelToken.token
     );
 

@@ -1,8 +1,18 @@
 import { AIProvider, AIContent } from './provider';
 import type { ModelInfo } from '../core/canvas-model';
+import { getAihubmixModelLimits, isAihubmixBaseUrl, type AihubmixModelLimits } from './aihubmix-model-caps';
+import type { AIModelCapabilities } from './model-capabilities';
+
+interface OpenAIDeltaLike {
+  content?: unknown;
+  reasoning_content?: unknown;
+  reasoning_details?: unknown;
+  tool_calls?: unknown;
+  [key: string]: unknown;
+}
 
 interface OpenAIChunk {
-  choices?: { delta?: { content?: string }; finish_reason?: string | null }[];
+  choices?: { delta?: OpenAIDeltaLike; message?: OpenAIDeltaLike; finish_reason?: string | null }[];
 }
 
 interface OpenAIModelsResponse {
@@ -12,6 +22,68 @@ interface OpenAIModelsResponse {
 type OpenAIContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
+
+function collectTextFragments(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return value ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(item => collectTextFragments(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const directKeys = ['text', 'value', 'thinking', 'content', 'output_text'];
+  for (const key of directKeys) {
+    if (key in record) {
+      const nested = collectTextFragments(record[key]);
+      if (nested.length > 0) { return nested; }
+    }
+  }
+
+  return [];
+}
+
+function buildRawFallback(args: {
+  providerName: string;
+  model: string;
+  reasoningTexts: string[];
+  rawChunks: string[];
+  toolCallChunks: string[];
+}): string {
+  const sections: string[] = [
+    `# ${args.providerName} 原始输出保留`,
+    '',
+    `- model: ${args.model}`,
+    '- 说明: 未识别到标准文本输出格式，已优先保留原始返回，避免信息丢失。',
+  ];
+
+  if (args.reasoningTexts.length > 0) {
+    sections.push(
+      '',
+      '## reasoning_content / thinking',
+      args.reasoningTexts.join('\n'),
+    );
+  }
+
+  if (args.toolCallChunks.length > 0) {
+    sections.push(
+      '',
+      '## tool_calls',
+      ...args.toolCallChunks.map(chunk => `\`\`\`json\n${chunk}\n\`\`\``),
+    );
+  }
+
+  sections.push(
+    '',
+    '## raw_sse_chunks',
+    ...args.rawChunks.map(chunk => `\`\`\`json\n${chunk}\n\`\`\``),
+  );
+
+  return sections.join('\n');
+}
 
 export class CustomProvider implements AIProvider {
   readonly id: string;
@@ -56,6 +128,31 @@ export class CustomProvider implements AIProvider {
       : (this.config.defaultModel || undefined);
   }
 
+  isAihubmixProvider(): boolean {
+    return isAihubmixBaseUrl(this.config.baseUrl);
+  }
+
+  async getAihubmixModelLimits(modelOverride?: string): Promise<AihubmixModelLimits | null> {
+    const resolvedModel = await this.resolveModel(modelOverride);
+    if (!resolvedModel || !this.isAihubmixProvider()) {
+      return null;
+    }
+    return getAihubmixModelLimits(resolvedModel);
+  }
+
+  async getModelCapabilities(modelOverride?: string): Promise<AIModelCapabilities | null> {
+    const limits = await this.getAihubmixModelLimits(modelOverride);
+    if (!limits) {
+      return null;
+    }
+    return {
+      modelId: limits.modelId,
+      maxOutputTokens: limits.maxOutput,
+      contextWindowTokens: limits.contextLength,
+      source: 'AIHubMix Models API',
+    };
+  }
+
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
@@ -72,6 +169,8 @@ export class CustomProvider implements AIProvider {
     }
 
     const base = this.config.baseUrl.replace(/\/$/, '');
+    const aihubmixLimits = await this.getAihubmixModelLimits(resolvedModel);
+    const maxTokens = opts?.maxTokens ?? aihubmixLimits?.maxOutput;
 
     // Build messages array (OpenAI format)
     const hasImages = contents.some(c => c.type === 'image' && c.base64 && c.mediaType);
@@ -118,7 +217,7 @@ export class CustomProvider implements AIProvider {
         model: resolvedModel,
         stream: true,
         messages,
-        ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
     });
 
@@ -130,6 +229,46 @@ export class CustomProvider implements AIProvider {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let sawVisibleText = false;
+    const reasoningTexts: string[] = [];
+    const rawChunks: string[] = [];
+    const toolCallChunks: string[] = [];
+
+    const processSseLine = (line: string): string[] => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed === 'data: [DONE]') { return []; }
+      if (!trimmed.startsWith('data: ')) { return []; }
+
+      try {
+        const chunk = JSON.parse(trimmed.slice(6)) as OpenAIChunk;
+        rawChunks.push(JSON.stringify(chunk, null, 2));
+
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta ?? choice?.message;
+        if (!delta) { return []; }
+
+        const visibleTexts = collectTextFragments(delta.content);
+        const reasoning = [
+          ...collectTextFragments(delta.reasoning_content),
+          ...collectTextFragments(delta.reasoning_details),
+        ];
+        if (reasoning.length > 0) {
+          reasoningTexts.push(...reasoning);
+        }
+
+        if (delta.tool_calls !== undefined) {
+          toolCallChunks.push(JSON.stringify(delta.tool_calls, null, 2));
+        }
+
+        if (visibleTexts.length > 0) {
+          sawVisibleText = true;
+        }
+        return visibleTexts;
+      } catch {
+        rawChunks.push(trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed);
+        return [];
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -138,16 +277,28 @@ export class CustomProvider implements AIProvider {
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === 'data: [DONE]') { continue; }
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const chunk = JSON.parse(trimmed.slice(6)) as OpenAIChunk;
-            const content = chunk.choices?.[0]?.delta?.content;
-            if (content) { yield content; }
-          } catch { /* ignore malformed */ }
+        const texts = processSseLine(line);
+        for (const text of texts) {
+          yield text;
         }
       }
+    }
+
+    if (buf.trim()) {
+      const texts = processSseLine(buf);
+      for (const text of texts) {
+        yield text;
+      }
+    }
+
+    if (!sawVisibleText && rawChunks.length > 0) {
+      yield buildRawFallback({
+        providerName: this.name,
+        model: resolvedModel,
+        reasoningTexts,
+        rawChunks,
+        toolCallChunks,
+      });
     }
   }
 }

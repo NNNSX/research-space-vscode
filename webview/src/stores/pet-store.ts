@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { PetTypeId, PetState, GroundThemeId } from '../pet/pet-types';
 import {
   createDefaultPetState, getPetType, getTimeOfDay, pickRandom,
-  getMoodCategory, getLevelFromExp, getExpForNextLevel, DIALOGUES,
+  getMoodCategory, getLevelFromExp, DIALOGUES,
 } from '../pet/pet-types';
 import {
   createInitialEngine, tick, forceState,
@@ -10,6 +10,7 @@ import {
 } from '../pet/pet-engine';
 import { postMessage } from '../bridge';
 import type { PetChatMessage, PetState as SharedPetState } from '../../../src/core/canvas-model';
+import { getUnlockedPetsForLevel, normalizePetState } from '../../../src/core/pet-state';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ export interface ChatMessage {
 // ── Pet store interface ────────────────────────────────────────────────────
 
 interface PetStore {
+  hydrated: boolean;
   // Feature toggle
   enabled: boolean;
 
@@ -101,6 +103,7 @@ interface PetStore {
 // ── Store ──────────────────────────────────────────────────────────────────
 
 export const usePetStore = create<PetStore>((set, get) => ({
+  hydrated: false,
   enabled: false,
   mode: 'roaming',
   widgetLeft: 16,
@@ -130,14 +133,11 @@ export const usePetStore = create<PetStore>((set, get) => ({
   },
 
   init(state, enabled, restReminderMin, groundTheme) {
-    const pet = state ?? createDefaultPetState();
-    // Ensure unlockedPets exists (older saves may not have it)
-    if (!pet.unlockedPets || !Array.isArray(pet.unlockedPets)) {
-      pet.unlockedPets = ['dog', 'fox'];
-    }
+    const pet = normalizePetState(state) ?? createDefaultPetState();
     const now = Date.now();
     set({
       pet: { ...pet, currentSessionStart: new Date().toISOString() },
+      hydrated: true,
       enabled,
       restReminderMin,
       groundTheme: groundTheme ?? 'forest',
@@ -213,7 +213,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
   tickEngine() {
     const s = get();
     // In minimized mode, still decay mood/energy but skip behavior engine
-    if (!s.enabled) { return; }
+    if (!s.enabled || !s.hydrated) { return; }
 
     const now = Date.now();
     const idleMinutes = (now - s.lastInteractionTime) / 60_000;
@@ -223,15 +223,23 @@ export const usePetStore = create<PetStore>((set, get) => ({
       // Only decay mood/energy, no animation/behavior updates
       const moodDelta = idleMinutes > 1 ? -0.002 : 0;
       const energyDelta = -0.0025;
-      set(prev => ({
-        pet: {
-          ...prev.pet,
-          mood: Math.max(0, Math.min(100, prev.pet.mood + moodDelta)),
-          energy: Math.max(0, Math.min(100, prev.pet.energy + energyDelta)),
-          exp: prev.pet.exp + 0.025,
-          totalWorkMinutes: prev.pet.totalWorkMinutes + 0.05,
-        },
-      }));
+      set(prev => {
+        const newExp = prev.pet.exp + 0.025;
+        const newLevel = getLevelFromExp(Math.floor(newExp));
+        const leveledUp = newLevel > prev.pet.level;
+        return {
+          pet: {
+            ...prev.pet,
+            mood: Math.max(0, Math.min(100, prev.pet.mood + moodDelta)),
+            energy: Math.max(0, Math.min(100, prev.pet.energy + energyDelta)),
+            exp: newExp,
+            level: newLevel,
+            totalWorkMinutes: prev.pet.totalWorkMinutes + 0.05,
+            unlockedPets: getUnlockedPetsForLevel(newLevel, prev.pet.petType, prev.pet.unlockedPets),
+          },
+          ...(leveledUp ? { bubbleText: `升级啦！Lv.${newLevel}` } : {}),
+        };
+      });
       return;
     }
 
@@ -252,13 +260,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
     let newExp = s.pet.exp + 0.025;
     const newLevel = getLevelFromExp(Math.floor(newExp));
 
-    // Check for level-up unlocks
-    let newUnlocked = [...s.pet.unlockedPets];
-    if (newLevel >= 3 && !newUnlocked.includes('rubber-duck')) { newUnlocked.push('rubber-duck'); }
-    if (newLevel >= 3 && !newUnlocked.includes('turtle')) { newUnlocked.push('turtle'); }
-    if (newLevel >= 5 && !newUnlocked.includes('crab')) { newUnlocked.push('crab'); }
-    if (newLevel >= 5 && !newUnlocked.includes('clippy')) { newUnlocked.push('clippy'); }
-    if (newLevel >= 8 && !newUnlocked.includes('cockatiel')) { newUnlocked.push('cockatiel'); }
+    const newUnlocked = getUnlockedPetsForLevel(newLevel, s.pet.petType, s.pet.unlockedPets);
 
     let newEngine = result.engine;
     let bubbleText = s.bubbleText;
@@ -305,6 +307,15 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
     // Update work minutes (~0.05 per 3s tick)
     const newTotalWork = s.pet.totalWorkMinutes + 0.05;
+    const leveledUp = newLevel > s.pet.level;
+    if (leveledUp) {
+      const unlockedDelta = Math.max(0, newUnlocked.length - s.pet.unlockedPets.length);
+      const levelText = unlockedDelta > 0
+        ? `升级到 Lv.${newLevel}，解锁了 ${unlockedDelta} 个新伙伴！`
+        : `升级啦！现在是 Lv.${newLevel}`;
+      newEngine = forceState(newEngine, 'happy', 'happy', levelText, 6000);
+      bubbleText = levelText;
+    }
 
     set({
       engine: newEngine,
@@ -366,7 +377,12 @@ export const usePetStore = create<PetStore>((set, get) => ({
   setPetType(id) {
     const typeDef = getPetType(id);
     set(s => ({
-      pet: { ...s.pet, petType: id, petName: s.pet.petName || typeDef.defaultName },
+      pet: {
+        ...s.pet,
+        petType: id,
+        petName: s.pet.petName || typeDef.defaultName,
+        unlockedPets: getUnlockedPetsForLevel(s.pet.level, id, s.pet.unlockedPets),
+      },
     }));
     get().savePetState();
   },
@@ -385,7 +401,16 @@ export const usePetStore = create<PetStore>((set, get) => ({
     set(s => {
       const newExp = s.pet.exp + amount;
       const newLevel = getLevelFromExp(Math.floor(newExp));
-      return { pet: { ...s.pet, exp: newExp, level: newLevel } };
+      const leveledUp = newLevel > s.pet.level;
+      return {
+        pet: {
+          ...s.pet,
+          exp: newExp,
+          level: newLevel,
+          unlockedPets: getUnlockedPetsForLevel(newLevel, s.pet.petType, s.pet.unlockedPets),
+        },
+        ...(leveledUp ? { bubbleText: `升级啦！Lv.${newLevel}` } : {}),
+      };
     });
     get().savePetState();
   },
@@ -406,7 +431,8 @@ export const usePetStore = create<PetStore>((set, get) => ({
   },
 
   savePetState() {
-    const { pet, widgetLeft, widgetTop } = get();
+    const { pet, widgetLeft, widgetTop, hydrated } = get();
+    if (!hydrated) { return; }
     const stateToSave: SharedPetState = {
       ...pet,
       widgetLeft,
@@ -416,7 +442,8 @@ export const usePetStore = create<PetStore>((set, get) => ({
   },
 
   saveMemory() {
-    const { pet, sessionStartTime } = get();
+    const { pet, sessionStartTime, hydrated } = get();
+    if (!hydrated) { return; }
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
     const sessionMin = Math.floor((Date.now() - sessionStartTime) / 60_000);
@@ -475,7 +502,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
   notifyCanvasEvent(eventType) {
     const s = get();
-    if (!s.enabled || s.mode === 'minimized') { return; }
+    if (!s.enabled || !s.hydrated || s.mode === 'minimized') { return; }
     const now = Date.now();
     if (now - s.lastCanvasReaction < 30_000) { return; } // 30s throttle
 
@@ -491,12 +518,18 @@ export const usePetStore = create<PetStore>((set, get) => ({
     if (eventType === 'aiDone')     { moodDelta = 5; expDelta = 8; }
     if (eventType === 'aiError')    { moodDelta = -2; }
 
+    const nextExp = s.pet.exp + expDelta;
+    const nextLevel = getLevelFromExp(Math.floor(nextExp));
+    const leveledUp = nextLevel > s.pet.level;
     set({
       lastCanvasReaction: now,
+      ...(leveledUp ? { bubbleText: `升级啦！Lv.${nextLevel}` } : {}),
       pet: {
         ...s.pet,
         mood: Math.max(0, Math.min(100, s.pet.mood + moodDelta)),
-        exp: s.pet.exp + expDelta,
+        exp: nextExp,
+        level: nextLevel,
+        unlockedPets: getUnlockedPetsForLevel(nextLevel, s.pet.petType, s.pet.unlockedPets),
       },
     });
   },

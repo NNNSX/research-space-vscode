@@ -13,6 +13,7 @@ import {
   type Edge,
   type Connection,
   type IsValidConnection,
+  type Viewport,
 } from '@xyflow/react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
@@ -79,12 +80,17 @@ export function Canvas() {
   const redo = useCanvasStore(s => s.redo);
   const selectExclusiveEdge = useCanvasStore(s => s.selectExclusiveEdge);
   const clearSelection = useCanvasStore(s => s.clearSelection);
+  const updateViewport = useCanvasStore(s => s.updateViewport);
   const saveNow = useCanvasStore(s => s.saveNow);
   const initialCanvasLoadActive = useCanvasStore(s => s.initialCanvasLoadActive);
   const initialCanvasLoadSessionId = useCanvasStore(s => s.currentInitialCanvasLoadStats?.sessionId ?? null);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, setViewport, getViewport } = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const initialCanvasFrameLoggedRef = useRef<number | null>(null);
+  const lastAppliedViewportRef = useRef<string | null>(null);
+
+  const persistedViewport = canvasFile?.viewport ?? { x: 0, y: 0, zoom: 1 };
+  const hasPersistedViewport = Math.abs(persistedViewport.x) > 0.5 || Math.abs(persistedViewport.y) > 0.5 || Math.abs(persistedViewport.zoom - 1) > 0.001;
 
   // Drag-over overlay state (shows big hint when dragging files onto canvas)
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -335,6 +341,47 @@ export function Canvas() {
     setEdgeContextMenu({ edgeId: edge.id, x: pos.x + 10, y: pos.y + 10 });
   }, [screenToFlowPosition, selectExclusiveEdge]);
 
+  const handleMoveEnd = useCallback((_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+    updateViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
+  }, [updateViewport]);
+
+  useEffect(() => {
+    if (!canvasFile) { return; }
+    const target = canvasFile.viewport ?? { x: 0, y: 0, zoom: 1 };
+    const signature = `${target.x}:${target.y}:${target.zoom}`;
+    const live = getViewport();
+    const alreadyAtTarget =
+      Math.abs(live.x - target.x) < 0.5 &&
+      Math.abs(live.y - target.y) < 0.5 &&
+      Math.abs(live.zoom - target.zoom) < 0.001;
+
+    if (alreadyAtTarget && lastAppliedViewportRef.current === signature) {
+      return;
+    }
+
+    const raf = window.requestAnimationFrame(() => {
+      const current = getViewport();
+      const stillNeedsApply =
+        Math.abs(current.x - target.x) >= 0.5 ||
+        Math.abs(current.y - target.y) >= 0.5 ||
+        Math.abs(current.zoom - target.zoom) >= 0.001;
+
+      if (stillNeedsApply) {
+        void setViewport(target, { duration: 0 });
+      }
+      lastAppliedViewportRef.current = signature;
+    });
+
+    return () => window.cancelAnimationFrame(raf);
+  }, [
+    canvasFile,
+    canvasFile?.viewport?.x,
+    canvasFile?.viewport?.y,
+    canvasFile?.viewport?.zoom,
+    getViewport,
+    setViewport,
+  ]);
+
   // Canvas-wide shortcuts (excluding input/textarea/contenteditable)
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
@@ -504,9 +551,11 @@ export function Canvas() {
           }}
           selectionOnDrag={selectionMode}
           panOnDrag={!selectionMode}
+          defaultViewport={persistedViewport}
           minZoom={0.05}
           maxZoom={4}
-          fitView
+          fitView={!hasPersistedViewport}
+          onMoveEnd={handleMoveEnd}
           deleteKeyCode={['Delete', 'Backspace']}
           style={{ background: 'var(--vscode-editor-background)' }}
         >

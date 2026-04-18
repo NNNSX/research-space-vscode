@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import type { PetState } from '../core/canvas-model';
+import { normalizePetState } from '../core/pet-state';
 
 const PET_DIR = 'pet';
 const STATE_FILE = 'state.json';
@@ -9,11 +11,11 @@ const STATE_FILE = 'state.json';
  * Read the persisted pet state from pet/state.json in the canvas directory.
  * Returns null if file doesn't exist.
  */
-export async function readPetState(canvasDir: string): Promise<any | null> {
+export async function readPetState(canvasDir: string): Promise<PetState | null> {
   const filePath = path.join(canvasDir, PET_DIR, STATE_FILE);
   try {
     const raw = await fs.promises.readFile(filePath, 'utf-8');
-    return JSON.parse(raw);
+    return normalizePetState(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -22,12 +24,14 @@ export async function readPetState(canvasDir: string): Promise<any | null> {
 /**
  * Write pet state to pet/state.json, creating the directory if needed.
  */
-export async function writePetState(canvasDir: string, state: any): Promise<void> {
+export async function writePetState(canvasDir: string, state: unknown): Promise<void> {
   const dir = path.join(canvasDir, PET_DIR);
   try {
     await fs.promises.mkdir(dir, { recursive: true });
     const filePath = path.join(dir, STATE_FILE);
-    await fs.promises.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+    const normalized = normalizePetState(state);
+    if (!normalized) { return; }
+    await fs.promises.writeFile(filePath, JSON.stringify(normalized, null, 2), 'utf-8');
   } catch (err) {
     console.error('[PetMemory] Failed to write state:', err);
   }

@@ -9,6 +9,14 @@ import {
 import { buildPipelinePlanForNodeSet } from '../pipeline/pipeline-engine';
 import { runPipelinePlan } from '../pipeline/pipeline-runner';
 
+function rejectBlueprintRun(
+  containerNodeId: string,
+  message: string,
+  webview: vscode.Webview,
+): void {
+  webview.postMessage({ type: 'blueprintRunRejected', containerNodeId, message });
+}
+
 function countBlueprintSlotBindings(
   containerNode: CanvasNode,
   slotId: string,
@@ -66,13 +74,13 @@ export async function runBlueprintInstance(
 ): Promise<void> {
   const containerNode = executionCanvas.nodes.find(node => node.id === containerNodeId);
   if (!isBlueprintInstanceContainerNode(containerNode)) {
-    webview.postMessage({ type: 'error', message: '蓝图运行入口只能绑定到正式蓝图实例容器。' });
+    rejectBlueprintRun(containerNodeId, '蓝图运行入口只能绑定到正式蓝图实例容器。', webview);
     return;
   }
 
   const instanceId = containerNode.meta?.blueprint_instance_id;
   if (!instanceId) {
-    webview.postMessage({ type: 'error', message: '蓝图实例缺少 instance_id，无法运行。' });
+    rejectBlueprintRun(containerNode.id, '蓝图实例缺少 instance_id，无法运行。', webview);
     return;
   }
 
@@ -80,17 +88,18 @@ export async function runBlueprintInstance(
     node.meta?.blueprint_instance_id === instanceId && isFunctionNode(node)
   );
   if (internalFunctionNodes.length === 0) {
-    webview.postMessage({ type: 'error', message: '当前蓝图实例内没有可执行的功能节点。' });
+    rejectBlueprintRun(containerNode.id, '当前蓝图实例内没有可执行的功能节点。', webview);
     return;
   }
 
   const requiredSlots = containerNode.meta?.blueprint_input_slot_defs?.filter(slot => slot.required) ?? [];
   const missingRequiredSlots = requiredSlots.filter(slot => countBlueprintSlotBindings(containerNode, slot.id, executionCanvas) === 0);
   if (missingRequiredSlots.length > 0) {
-    webview.postMessage({
-      type: 'error',
-      message: `蓝图实例缺少必填输入：${missingRequiredSlots.map(slot => slot.title).join('、')}`,
-    });
+    rejectBlueprintRun(
+      containerNode.id,
+      `蓝图实例缺少必填输入：${missingRequiredSlots.map(slot => slot.title).join('、')}`,
+      webview,
+    );
     return;
   }
 
@@ -100,10 +109,11 @@ export async function runBlueprintInstance(
     const names = externalPipelineInputs
       .map(edge => executionCanvas.nodes.find(node => node.id === edge.target)?.title ?? edge.target)
       .filter((title, index, list) => list.indexOf(title) === index);
-    webview.postMessage({
-      type: 'error',
-      message: `蓝图实例暂不支持从实例外部功能节点接入 Pipeline 依赖：${names.join('、')}`,
-    });
+    rejectBlueprintRun(
+      containerNode.id,
+      `蓝图实例暂不支持从实例外部功能节点接入 Pipeline 依赖：${names.join('、')}`,
+      webview,
+    );
     return;
   }
 
@@ -114,7 +124,7 @@ export async function runBlueprintInstance(
     executionCanvas.nodeGroups,
   );
   if ('error' in plan) {
-    webview.postMessage({ type: 'error', message: `蓝图执行计划构建失败: ${plan.error}` });
+    rejectBlueprintRun(containerNode.id, `蓝图执行计划构建失败: ${plan.error}`, webview);
     return;
   }
 

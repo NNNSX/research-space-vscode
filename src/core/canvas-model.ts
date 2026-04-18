@@ -27,8 +27,11 @@ export interface SettingsSnapshot {
   anthropicModel: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
+  maxOutputTokens?: number;
+  maxContextTokens?: number;
   autoSave: boolean;
   customProviders: CustomProviderConfig[];
+  favoriteModels?: Record<string, string[]>;
   aiHubMixApiKey?: string;          // AIHubMix API Key for multimodal tools (v0.5.0)
   aiHubMixImageGenModel?: string;   // Default model for image generation (v0.6.2)
   aiHubMixImageEditModel?: string;  // Default model for image editing (v0.6.2)
@@ -126,6 +129,8 @@ export interface NodeMeta {
   blueprint_bound_slot_id?: string;
   blueprint_bound_slot_title?: string;
   blueprint_bound_slot_kind?: 'input' | 'output';
+  blueprint_source_kind?: 'data_node' | 'function_node';
+  blueprint_source_id?: string;
   blueprint_placeholder_kind?: 'input' | 'output';
   blueprint_placeholder_slot_id?: string;
   blueprint_placeholder_title?: string;
@@ -134,6 +139,18 @@ export interface NodeMeta {
   blueprint_placeholder_allow_multiple?: boolean;
   blueprint_placeholder_replacement_mode?: BlueprintReplacementMode;
   blueprint_placeholder_hint?: string;
+  blueprint_last_run_status?: BlueprintLastRunStatus;
+  blueprint_last_run_summary?: string;
+  blueprint_last_run_finished_at?: string;
+  blueprint_last_run_succeeded_at?: string;
+  blueprint_last_run_failed_at?: string;
+  blueprint_last_run_total_nodes?: number;
+  blueprint_last_run_completed_nodes?: number;
+  blueprint_last_run_failed_nodes?: number;
+  blueprint_last_run_skipped_nodes?: number;
+  blueprint_last_run_warning_count?: number;
+  blueprint_last_issue_node_id?: string;
+  blueprint_last_issue_node_title?: string;
 }
 
 // ── Canvas node ─────────────────────────────────────────────────────────────
@@ -224,6 +241,8 @@ export interface PetChatMessage {
 
 export type GroundThemeId = 'none' | 'forest' | 'castle' | 'autumn' | 'beach' | 'winter';
 export type PetTypeId = 'dog' | 'fox' | 'rubber-duck' | 'turtle' | 'crab' | 'clippy' | 'cockatiel';
+export type BlueprintLastRunStatus = 'succeeded' | 'failed' | 'cancelled';
+export type PipelineCompletionStatus = 'succeeded' | 'failed' | 'cancelled';
 
 export interface PetState {
   petType: PetTypeId;
@@ -355,6 +374,7 @@ export function isHubEdgeType(edgeType: EdgeType | undefined | null): boolean {
 // ── Webview ↔ Extension message protocol ───────────────────────────────────
 export type WebviewMessage =
   | { type: 'ready' }
+  | { type: 'requestSettingsSnapshot' }
   | { type: 'canvasStateSync'; data: CanvasFile }
   | { type: 'canvasChanged'; data: CanvasFile; requestId?: number }
   | { type: 'saveCanvas'; data: CanvasFile; requestId?: number }
@@ -394,6 +414,7 @@ export type WebviewMessage =
   | { type: 'createBlueprintDraft'; selectedNodeIds: string[]; canvas?: CanvasFile }
   | { type: 'saveBlueprintDraft'; draft: BlueprintDefinition }
   | { type: 'requestBlueprintIndex' }
+  | { type: 'requestBlueprintDefinitions'; filePaths: string[] }
   | { type: 'instantiateBlueprint'; filePath: string; position?: { x: number; y: number } }
   | { type: 'pipelinePause'; pipelineId: string }
   | { type: 'pipelineResume'; pipelineId: string }
@@ -445,14 +466,16 @@ export type ExtensionMessage =
   | { type: 'blueprintDraftCreated'; draft: BlueprintDraft }
   | { type: 'blueprintDraftSaved'; entry: BlueprintRegistryEntry }
   | { type: 'blueprintIndex'; entries: BlueprintRegistryEntry[] }
+  | { type: 'blueprintDefinitions'; definitions: Array<{ filePath: string; definition: BlueprintDefinition }> }
   | { type: 'blueprintInstantiated'; entry: BlueprintRegistryEntry; definition: BlueprintDefinition; position?: { x: number; y: number } }
+  | { type: 'blueprintRunRejected'; containerNodeId: string; message: string }
   | { type: 'error'; message: string }
   | { type: 'pipelineStarted'; pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number }
   | { type: 'pipelineNodeStart'; pipelineId: string; nodeId: string }
   | { type: 'pipelineNodeComplete'; pipelineId: string; nodeId: string; outputNodeId: string }
   | { type: 'pipelineNodeError'; pipelineId: string; nodeId: string; error: string; issueKind?: Exclude<RunIssueKind, 'skipped'> }
   | { type: 'pipelineNodeSkipped'; pipelineId: string; nodeId: string; reason?: string; issueKind?: Extract<RunIssueKind, 'skipped'> }
-  | { type: 'pipelineComplete'; pipelineId: string; totalNodes: number; completedNodes: number }
+  | { type: 'pipelineComplete'; pipelineId: string; totalNodes: number; completedNodes: number; status: PipelineCompletionStatus }
   | { type: 'pipelineValidationWarning'; pipelineId: string; nodeId: string; message: string };
 // ── Default node sizes ──────────────────────────────────────────────────────
 export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> = {

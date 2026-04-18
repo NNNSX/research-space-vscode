@@ -9,6 +9,7 @@ import { extractContent } from '../core/content-extractor';
 import { getProvider } from './provider';
 import { ToolRegistry } from './tool-registry';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
+import { parsePositiveLimit, resolveEffectiveLimit } from './model-capabilities';
 
 // ── Shared registry singleton ──────────────────────────────────────────────
 let _registry: ToolRegistry | null = null;
@@ -84,6 +85,104 @@ function reportNodeIssue(
   const kind = issueKind ?? inferRunIssueKind(message);
   webview.postMessage({ type: 'aiError', runId, nodeId, message, issueKind: kind });
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: kind, issueMessage: message });
+}
+
+const AIHUBMIX_EXTRACTION_CHARS_PER_TOKEN = 4;
+const MIN_DYNAMIC_EXTRACTION_CHARS = 200_000;
+
+function deriveDynamicExtractionCharLimit(contextLength?: number): number | undefined {
+  if (!contextLength || contextLength <= 0) {
+    return undefined;
+  }
+  return Math.max(MIN_DYNAMIC_EXTRACTION_CHARS, contextLength * AIHUBMIX_EXTRACTION_CHARS_PER_TOKEN);
+}
+
+function estimateTextTokens(text: string): number {
+  let asciiChars = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) <= 0x7f) {
+      asciiChars++;
+    }
+  }
+  const nonAsciiChars = text.length - asciiChars;
+  return Math.max(1, Math.ceil(asciiChars / 4) + nonAsciiChars);
+}
+
+function trimTextToTokenBudget(text: string, maxTokens: number): string {
+  if (maxTokens <= 0 || !text) {
+    return '';
+  }
+  if (estimateTextTokens(text) <= maxTokens) {
+    return text;
+  }
+
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const slice = text.slice(0, mid);
+    if (estimateTextTokens(slice) <= maxTokens) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return text.slice(0, low).trimEnd();
+}
+
+function applyInputTokenBudget(contents: AIContent[], maxTokens?: number): AIContent[] {
+  if (!maxTokens || maxTokens <= 0) {
+    return contents;
+  }
+
+  const pinnedTitles = new Set(['User Message', 'User Question']);
+  const pinnedIndexes = new Set<number>();
+  let pinnedTokens = 0;
+
+  for (let i = 0; i < contents.length; i++) {
+    const content = contents[i];
+    if (content.type === 'text' && pinnedTitles.has(content.title)) {
+      pinnedIndexes.add(i);
+      pinnedTokens += estimateTextTokens(content.text ?? '');
+    }
+  }
+
+  let remainingTokens = Math.max(maxTokens - pinnedTokens, 0);
+  const nextContents: AIContent[] = [];
+
+  for (let i = 0; i < contents.length; i++) {
+    const content = contents[i];
+
+    if (content.type !== 'text' || pinnedIndexes.has(i)) {
+      nextContents.push(content);
+      continue;
+    }
+
+    const text = content.text ?? '';
+    if (!text) {
+      nextContents.push(content);
+      continue;
+    }
+
+    const estimatedTokens = estimateTextTokens(text);
+    if (estimatedTokens <= remainingTokens) {
+      nextContents.push(content);
+      remainingTokens -= estimatedTokens;
+      continue;
+    }
+
+    if (remainingTokens <= 0) {
+      continue;
+    }
+
+    const trimmedText = trimTextToTokenBudget(text, remainingTokens);
+    if (trimmedText) {
+      nextContents.push({ ...content, text: trimmedText });
+      remainingTokens -= estimateTextTokens(trimmedText);
+    }
+  }
+
+  return nextContents;
 }
 
 // ── Main executor ──────────────────────────────────────────────────────────
@@ -267,10 +366,53 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: '未连接任何输入节点。' };
   }
 
-  // 3. Extract content — use injectedContents for pipeline chaining, allSettled for resilience
+  // 3. Resolve provider/model early so all providers can share unified output + context budgeting.
+  const nodeProvider = fnNode.meta.param_values?.['_provider'] as string | undefined;
+  let provider;
+  try {
+    provider = await getProvider(nodeProvider);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    reportNodeIssue(webview, nodeId, runId, msg);
+    return { success: false, runId, errorMessage: msg };
+  }
+
+  const nodeModel = fnNode.meta.param_values?.['_model'] as string | undefined;
+  const effectiveModel = await provider.resolveModel(nodeModel);
+
+  // 3b. Resolve system prompt early so dynamic context budgeting can reserve room for it.
+  const defaultParams = toolDef.params.reduce<Record<string, unknown>>(
+    (acc, p) => { acc[p.name] = p.default; return acc; },
+    {}
+  );
+  const params = { ...defaultParams, ...fnNode.meta.param_values };
+  const customPrompt = fnNode.meta.param_values?.['_systemPrompt'] as string | undefined;
+  const systemPrompt = (customPrompt && customPrompt.trim())
+    ? customPrompt.trim()
+    : registry.buildSystem(toolId, params);
+
+  const aiCfg = vscode.workspace.getConfiguration('researchSpace.ai');
+  const configuredMaxOutputTokens = parsePositiveLimit(aiCfg.get<number>('maxOutputTokens', 0));
+  const configuredMaxContextTokens = parsePositiveLimit(aiCfg.get<number>('maxContextTokens', 0));
+
+  const providerCaps = effectiveModel && provider.getModelCapabilities
+    ? await provider.getModelCapabilities(effectiveModel)
+    : null;
+  const modelMaxOutputTokens = providerCaps?.maxOutputTokens;
+  const modelContextTokens = providerCaps?.contextWindowTokens;
+  const effectiveMaxOutputTokens = resolveEffectiveLimit(modelMaxOutputTokens, configuredMaxOutputTokens);
+  const effectiveContextTokens = resolveEffectiveLimit(modelContextTokens, configuredMaxContextTokens);
+  const extractionOpts: { maxTextChars?: number } = {};
+
+  const dynamicExtractionCharLimit = deriveDynamicExtractionCharLimit(effectiveContextTokens);
+  if (dynamicExtractionCharLimit) {
+    extractionOpts.maxTextChars = dynamicExtractionCharLimit;
+  }
+
+  // 4. Extract content — use injectedContents for pipeline chaining, allSettled for resilience
   const injected = opts?.injectedContents;
   const contentResults = await Promise.allSettled(
-    upstreamNodes.map(n => extractContent(n, canvasUri, injected))
+    upstreamNodes.map(n => extractContent(n, canvasUri, injected, extractionOpts))
   );
   const contents: AIContent[] = [];
 
@@ -375,7 +517,7 @@ async function _runFunctionNodeInner(
       const allDataNodes = canvas.nodes.filter(
         n => ['paper', 'note', 'code', 'ai_output'].includes(n.node_type)
       );
-      const autoResults = await Promise.allSettled(allDataNodes.map(n => extractContent(n, canvasUri)));
+      const autoResults = await Promise.allSettled(allDataNodes.map(n => extractContent(n, canvasUri, undefined, extractionOpts)));
       const autoContents = autoResults
         .filter((r): r is PromiseFulfilledResult<AIContent> => r.status === 'fulfilled')
         .map(r => r.value);
@@ -395,20 +537,15 @@ async function _runFunctionNodeInner(
       contents.length = 0;
       contents.push(...scored.slice(0, topK).map(s => s.c));
     }
-    // Safety: cap total chars to avoid token overflow (~100k chars ≈ 25k tokens)
-    const MAX_RAG_CHARS = 100_000;
-    let totalChars = 0;
-    const capped: typeof contents = [];
-    for (const c of contents) {
-      const len = c.type === 'text' ? c.text.length : 0;
-      if (totalChars + len > MAX_RAG_CHARS) { break; }
-      capped.push(c);
-      totalChars += len;
-    }
-    contents.length = 0;
-    contents.push(...capped);
-
     contents.push({ type: 'text', title: 'User Question', text: query });
+  }
+
+  if (effectiveContextTokens) {
+    const reservedInputTokens = Math.max(512, estimateTextTokens(systemPrompt) + 256);
+    const effectiveInputBudget = Math.max(effectiveContextTokens - reservedInputTokens, 1);
+    const cappedContents = applyInputTokenBudget(contents, effectiveInputBudget);
+    contents.length = 0;
+    contents.push(...cappedContents);
   }
 
   // F2: on-change guard — compute input fingerprint and skip if unchanged
@@ -437,20 +574,7 @@ async function _runFunctionNodeInner(
     await writeCanvas(canvasUri, canvas);
   }
 
-  // 4. Merge params (defaults + user values)
-  const defaultParams = toolDef.params.reduce<Record<string, unknown>>(
-    (acc, p) => { acc[p.name] = p.default; return acc; },
-    {}
-  );
-  const params = { ...defaultParams, ...fnNode.meta.param_values };
-
-  // 4b. Resolve system prompt: custom override takes priority over tool default
-  const customPrompt = fnNode.meta.param_values?.['_systemPrompt'] as string | undefined;
-  const systemPrompt = (customPrompt && customPrompt.trim())
-    ? customPrompt.trim()
-    : registry.buildSystem(toolId, params);
-
-  // 4c. Route multimodal tools
+  // 4. Route multimodal tools
   if (aiType !== 'chat') {
     const aiCfg = vscode.workspace.getConfiguration('researchSpace.ai');
     const aiHubMixApiKey = aiCfg.get<string>('aiHubMixApiKey', '');
@@ -499,30 +623,16 @@ async function _runFunctionNodeInner(
     }
   }
 
-  // 5. Get provider (per-node override or global setting)
-  const nodeProvider = fnNode.meta.param_values?.['_provider'] as string | undefined;
-  let provider;
-  try {
-    provider = await getProvider(nodeProvider);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    reportNodeIssue(webview, nodeId, runId, msg);
-    return { success: false, runId, errorMessage: msg };
-  }
-
-  // 6. Filter images only when the tool itself doesn't support them.
+  // 5. Filter images only when the tool itself doesn't support them.
   // Each provider is responsible for handling images in its own stream() implementation.
   const filteredContents = !toolDef.supportsImages
     ? contents.filter(c => c.type !== 'image')
     : contents;
 
-  // 7. Stream
+  // 6. Stream
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: 'AI 生成中…' });
   const controller = new AbortController();
   activeRuns.set(runId, controller);
-
-  const nodeModel = fnNode.meta.param_values?.['_model'] as string | undefined;
-  const effectiveModel = await provider.resolveModel(nodeModel);
 
   let fullText = '';
   let lastProgressUpdate = 0;
@@ -530,6 +640,7 @@ async function _runFunctionNodeInner(
     const stream = provider.stream(systemPrompt, filteredContents, {
       signal: controller.signal,
       model: effectiveModel,
+      maxTokens: effectiveMaxOutputTokens,
     });
     for await (const chunk of stream) {
       fullText += chunk;

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { AIProvider, AIContent } from './provider';
 import type { ModelInfo } from '../core/canvas-model';
+import type { AIModelCapabilities } from './model-capabilities';
 
 interface OllamaChunk {
   message?: { content?: string };
@@ -11,6 +12,33 @@ interface OllamaChunk {
 
 interface OllamaTagsResponse {
   models?: { name: string; model?: string; details?: { family?: string } }[];
+}
+
+interface OllamaShowResponse {
+  parameters?: string;
+  model_info?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === 'string') {
+    const n = Number(value.trim());
+    if (Number.isFinite(n) && n > 0) {
+      return Math.floor(n);
+    }
+  }
+  return undefined;
+}
+
+function parseOllamaParameterValue(parameters: string | undefined, key: string): number | undefined {
+  if (!parameters) {
+    return undefined;
+  }
+  const match = parameters.match(new RegExp(`(?:^|\\n)\\s*${key}\\s+(\\d+)`, 'i'));
+  return parsePositiveInt(match?.[1]);
 }
 
 export class OllamaProvider implements AIProvider {
@@ -59,6 +87,44 @@ export class OllamaProvider implements AIProvider {
     return (modelOverride && modelOverride !== 'auto')
       ? modelOverride
       : (this.defaultModel || 'llama3.2');
+  }
+
+  async getModelCapabilities(modelOverride?: string): Promise<AIModelCapabilities | null> {
+    const model = await this.resolveModel(modelOverride);
+    if (!model) {
+      return null;
+    }
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) {
+        return null;
+      }
+      const data = await resp.json() as OllamaShowResponse;
+      const modelInfo = data.model_info ?? {};
+      const contextLength = Object.entries(modelInfo).reduce<number | undefined>((found, [key, value]) => {
+        if (found) { return found; }
+        if (/context_length$/i.test(key) || /num_ctx$/i.test(key)) {
+          return parsePositiveInt(value);
+        }
+        return undefined;
+      }, undefined) ?? parseOllamaParameterValue(data.parameters, 'num_ctx');
+      const numPredict = parseOllamaParameterValue(data.parameters, 'num_predict');
+
+      return {
+        modelId: model,
+        maxOutputTokens: numPredict,
+        contextWindowTokens: contextLength,
+        source: 'Ollama /api/show',
+      };
+    } catch {
+      return null;
+    }
   }
 
   async *stream(

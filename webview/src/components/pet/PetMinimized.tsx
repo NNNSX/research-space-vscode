@@ -1,6 +1,7 @@
 import React from 'react';
 import { usePetStore } from '../../stores/pet-store';
 import { getPetType } from '../../pet/pet-types';
+import { getPetLevelProgress } from '../../../../src/core/pet-state';
 
 /**
  * Minimized state — 32×32 circle showing the pet emoji.
@@ -9,11 +10,12 @@ import { getPetType } from '../../pet/pet-types';
 export function PetMinimized() {
   const { pet, setMode } = usePetStore();
   const typeDef = getPetType(pet.petType);
+  const expProgress = getPetLevelProgress(pet.exp, pet.level);
 
   return (
     <div
       onClick={() => setMode('roaming')}
-      title={`${pet.petName} Lv.${pet.level} — 点击展开`}
+      title={`${pet.petName} Lv.${pet.level} · ${expProgress.isMaxLevel ? '经验已满' : `本级经验 ${Math.floor(expProgress.currentLevelExp)}/${expProgress.neededExpInLevel}`} — 点击展开`}
       style={{
         width: 32,
         height: 32,

@@ -1,6 +1,13 @@
 import * as vscode from 'vscode';
 import { v4 as uuid } from 'uuid';
-import { isFunctionNode, type CanvasFile, type CanvasNode, type CanvasEdge } from '../core/canvas-model';
+import {
+  isBlueprintInstanceContainerNode,
+  isFunctionNode,
+  type PipelineCompletionStatus,
+  type CanvasFile,
+  type CanvasNode,
+  type CanvasEdge,
+} from '../core/canvas-model';
 import { buildFunctionExecutionPlan } from '../core/execution-plan';
 import { AIContent } from '../ai/provider';
 import { runFunctionNode, FunctionRunResult, cancelRunByNodeId } from '../ai/function-runner';
@@ -55,6 +62,25 @@ function inferPipelineIssueKind(message: string): 'missing_input' | 'missing_con
     return 'missing_input';
   }
   return 'run_failed';
+}
+
+function inferPipelineCompletionStatus(ctx: PipelineContext): PipelineCompletionStatus {
+  if (ctx.isCancelled) { return 'cancelled'; }
+  for (const status of ctx.nodeStatuses.values()) {
+    if (status === 'failed') { return 'failed'; }
+  }
+  return 'succeeded';
+}
+
+function postBlueprintRunRejectedIfNeeded(
+  triggerNodeId: string,
+  executionCanvas: CanvasFile,
+  webview: vscode.Webview,
+  message: string,
+): void {
+  const triggerNode = executionCanvas.nodes.find(node => node.id === triggerNodeId);
+  if (!isBlueprintInstanceContainerNode(triggerNode)) { return; }
+  webview.postMessage({ type: 'blueprintRunRejected', containerNodeId: triggerNodeId, message });
 }
 
 export function pausePipeline(pipelineId: string): void {
@@ -113,6 +139,7 @@ export async function runPipelinePlan(
   let canvas = executionCanvas;
 
   if (plan.layers.length === 0) {
+    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, '没有可执行的管道节点');
     webview.postMessage({ type: 'error', message: '没有可执行的管道节点' });
     return;
   }
@@ -124,6 +151,7 @@ export async function runPipelinePlan(
       .filter(e => e.severity === 'error')
       .map(e => e.message)
       .join('\n');
+    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, `Pipeline 校验失败:\n${errorMessages}`);
     webview.postMessage({ type: 'error', message: `Pipeline 校验失败:\n${errorMessages}` });
     return;
   }
@@ -214,6 +242,18 @@ export async function runPipelinePlan(
                 outputNodeId: result.outputNode.id,
               });
             } else {
+              if (ctx.isCancelled && result.errorMessage === 'Cancelled') {
+                ctx.nodeStatuses.set(nodeId, 'skipped');
+                completedCount++;
+                webview.postMessage({
+                  type: 'pipelineNodeSkipped',
+                  pipelineId,
+                  nodeId,
+                  reason: '用户取消执行',
+                  issueKind: 'skipped',
+                });
+                return;
+              }
               ctx.nodeStatuses.set(nodeId, 'failed');
               completedCount++;
               // Mark all downstream as skipped
@@ -238,6 +278,7 @@ export async function runPipelinePlan(
     }
   } finally {
     activePipelines.delete(pipelineId);
+    const completionStatus = inferPipelineCompletionStatus(ctx);
 
     // Reset all pipeline node statuses after a short delay
     setTimeout(() => {
@@ -251,6 +292,7 @@ export async function runPipelinePlan(
       pipelineId,
       totalNodes: totalCount,
       completedNodes: countCompletedNodes(ctx),
+      status: completionStatus,
     });
   }
 }

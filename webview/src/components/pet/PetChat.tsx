@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePetStore } from '../../stores/pet-store';
-import { getPetType, getExpForNextLevel } from '../../pet/pet-types';
+import { getPetType } from '../../pet/pet-types';
 import { PetCharacter } from './PetCharacter';
+import { getPetLevelProgress } from '../../../../src/core/pet-state';
 
 const CHAT_WIDTH = 320;
 const CHAT_HEIGHT = 480;
@@ -48,8 +49,7 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
   const mins = sessionMin % 60;
   const sessionStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
   const moodEmoji = pet.mood > 70 ? '\u{1F60A}' : pet.mood > 35 ? '\u{1F610}' : '\u{1F61E}';
-  const expNext = getExpForNextLevel(pet.level);
-  const expPercent = expNext === Infinity ? 100 : Math.min(100, (pet.exp / expNext) * 100);
+  const expProgress = getPetLevelProgress(pet.exp, pet.level);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -359,7 +359,11 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
 
         {/* Exp bar + level */}
         <div
-          title={`经验: ${Math.floor(pet.exp)}/${expNext === Infinity ? 'MAX' : expNext}`}
+          title={
+            expProgress.isMaxLevel
+              ? `总经验: ${Math.floor(expProgress.totalExp)} / MAX`
+              : `本级经验: ${Math.floor(expProgress.currentLevelExp)}/${expProgress.neededExpInLevel} · 距下一级 ${Math.ceil(expProgress.remainingToNextLevel)}`
+          }
           style={{
             width: 30,
             height: 3,
@@ -369,7 +373,7 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
           }}
         >
           <div style={{
-            width: `${expPercent}%`,
+            width: `${expProgress.percent}%`,
             height: '100%',
             background: 'var(--vscode-progressBar-background, #0e70c0)',
             borderRadius: 2,
@@ -379,6 +383,11 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
 
         <div style={{ flex: 1 }} />
 
+        <span style={{ opacity: 0.55, fontSize: 8 }}>
+          {expProgress.isMaxLevel
+            ? '经验已满'
+            : `${Math.floor(expProgress.currentLevelExp)}/${expProgress.neededExpInLevel}`}
+        </span>
         <span style={{ opacity: 0.4, cursor: 'grab' }}>⠿ 拖拽</span>
       </div>
     </div>

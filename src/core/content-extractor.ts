@@ -9,7 +9,6 @@ import { toAbsPath } from './storage';
 
 const execFileAsync = promisify(execFile);
 // `yauzl` is bundled into dist by esbuild; keep require-style import to avoid extra type deps.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const yauzl = require('yauzl');
 
 // ── Content extraction ──────────────────────────────────────────────────────
@@ -17,7 +16,8 @@ const yauzl = require('yauzl');
 export async function extractContent(
   node: CanvasNode,
   canvasUri: vscode.Uri,
-  injectedContents?: Map<string, AIContent>   // nodeId → pre-built content (blueprint serial chain)
+  injectedContents?: Map<string, AIContent>,   // nodeId → pre-built content (blueprint serial chain)
+  opts?: { maxTextChars?: number }
 ): Promise<AIContent> {
   // Return injected content directly — avoids disk I/O for blueprint serial chaining
   if (injectedContents?.has(node.id)) {
@@ -25,14 +25,18 @@ export async function extractContent(
   }
 
   const title = node.title || 'Untitled';
+  const limitText = (text: string): string => {
+    const max = opts?.maxTextChars;
+    return max && max > 0 ? text.slice(0, max) : text;
+  };
 
   // Image node in mermaid mode: return as text
   if (node.node_type === 'image' && node.meta?.display_mode === 'mermaid') {
-    return { type: 'text', title, text: node.meta.mermaid_code ?? '' };
+    return { type: 'text', title, text: limitText(node.meta.mermaid_code ?? '') };
   }
 
   if (!node.file_path) {
-    return { type: 'text', title, text: node.meta?.content_preview ?? title };
+    return { type: 'text', title, text: limitText(node.meta?.content_preview ?? title) };
   }
 
   const absPath = toAbsPath(node.file_path, canvasUri);
@@ -42,7 +46,7 @@ export async function extractContent(
   try {
     await vscode.workspace.fs.stat(fileUri);
   } catch {
-    return { type: 'text', title, text: node.meta?.content_preview ?? `[File not found: ${node.file_path}]` };
+    return { type: 'text', title, text: limitText(node.meta?.content_preview ?? `[File not found: ${node.file_path}]`) };
   }
 
   const bytes = await vscode.workspace.fs.readFile(fileUri);
@@ -52,10 +56,10 @@ export async function extractContent(
   if (ext === 'pdf') {
     try {
       const text = await extractPdfText(Buffer.from(bytes));
-      return { type: 'text', title, text: text.slice(0, 200_000) };
+      return { type: 'text', title, text: limitText(text) };
     } catch (e) {
       // Fallback to preview
-      return { type: 'text', title, text: node.meta?.content_preview ?? '[PDF parse failed]' };
+      return { type: 'text', title, text: limitText(node.meta?.content_preview ?? '[PDF parse failed]') };
     }
   }
 
@@ -63,9 +67,13 @@ export async function extractContent(
   if (['doc','dot','docx','docm','dotx','dotm','ppt','pps','pot','pptx','pptm','ppsx','ppsm','potx','potm','xls','xlt','xlsx','xlsm','xltx','xltm','rtf','odt','ods','odp','fodt','fods','fodp','epub'].includes(ext)) {
     try {
       const text = await extractStructuredTextFile(absPath, ext);
-      return { type: 'text', title, text: text.slice(0, 200_000) || (node.meta?.content_preview ?? `[${ext.toUpperCase()} content unavailable]`) };
+      return {
+        type: 'text',
+        title,
+        text: limitText(text || (node.meta?.content_preview ?? `[${ext.toUpperCase()} content unavailable]`)),
+      };
     } catch {
-      return { type: 'text', title, text: node.meta?.content_preview ?? `[${ext.toUpperCase()} parse failed]` };
+      return { type: 'text', title, text: limitText(node.meta?.content_preview ?? `[${ext.toUpperCase()} parse failed]`) };
     }
   }
 
@@ -106,7 +114,7 @@ export async function extractContent(
 
   // Text files: read as utf-8
   const text = Buffer.from(bytes).toString('utf-8');
-  return { type: 'text', title, text };
+  return { type: 'text', title, text: limitText(text) };
 }
 
 // ── Preview extraction (up to 5000 chars for rich node preview) ──────────────
@@ -263,7 +271,6 @@ function detectUnreadableContent(text: string): { has: boolean; hint?: string } 
 
 export async function extractPdfText(buffer: Buffer): Promise<string> {
   // Dynamic import to avoid startup cost
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string; numpages: number }>;
   const result = await pdfParse(buffer);
   return result.text;
@@ -271,7 +278,6 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
 
 /** Extended PDF extraction with chart/figure detection (v2.0) */
 export async function analyzePdf(buffer: Buffer): Promise<PdfAnalysis> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string; numpages: number }>;
   const result = await pdfParse(buffer);
   const detection = detectUnreadableContent(result.text);
@@ -289,7 +295,6 @@ export async function getPdfPageCount(uri: vscode.Uri): Promise<number | undefin
   if (ext !== 'pdf') { return undefined; }
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ numpages: number }>;
     const result = await pdfParse(Buffer.from(bytes));
     return result.numpages;

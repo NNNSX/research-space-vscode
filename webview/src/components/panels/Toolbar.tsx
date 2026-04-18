@@ -3,6 +3,40 @@ import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { BoardDropdown } from './BoardDropdown';
 
+type ToolbarButtonVariant = 'default' | 'save-pending' | 'save-saving' | 'save-error';
+
+const TOOLBAR_ANIMATIONS = `
+  @keyframes rs-save-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.34);
+      transform: translateY(0);
+    }
+    50% {
+      box-shadow: 0 0 0 7px rgba(234, 179, 8, 0);
+      transform: translateY(-1px);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(234, 179, 8, 0);
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes rs-save-breathe {
+    0% {
+      box-shadow: 0 0 0 0 rgba(0, 122, 204, 0.34);
+      transform: translateY(0);
+    }
+    50% {
+      box-shadow: 0 0 0 8px rgba(0, 122, 204, 0);
+      transform: translateY(-1px);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(0, 122, 204, 0);
+      transform: translateY(0);
+    }
+  }
+`;
+
 export function Toolbar() {
   const setAiToolsPanelOpen = useCanvasStore(s => s.setAiToolsPanelOpen);
   const aiToolsPanelOpen = useCanvasStore(s => s.aiToolsPanelOpen);
@@ -66,8 +100,23 @@ export function Toolbar() {
     return saveLabel;
   }, [canvasFile, lastSavedAt, saveDueAt, saveError, saveLabel, saveState]);
 
+  const saveButtonVariant = useMemo<ToolbarButtonVariant>(() => {
+    if (saveState === 'pending') { return 'save-pending'; }
+    if (saveState === 'saving') { return 'save-saving'; }
+    if (saveState === 'error') { return 'save-error'; }
+    return 'default';
+  }, [saveState]);
+
+  const saveButtonLabel = useMemo(() => {
+    if (saveState === 'saving') { return '⏳ 保存中'; }
+    if (saveState === 'error') { return '⚠ 保存'; }
+    if (saveState === 'pending') { return '● 保存'; }
+    return '↓ 保存';
+  }, [saveState]);
+
   return (
     <>
+      <style>{TOOLBAR_ANIMATIONS}</style>
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -113,10 +162,17 @@ export function Toolbar() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
         <ToolbarButton
           onClick={saveNow}
-          title="立即保存当前画布 (Ctrl/Cmd+S)"
-          disabled={!canvasFile || saveState === 'saving'}
+          title={saveState === 'pending'
+            ? '当前画布有未保存改动，点击立即保存 (Ctrl/Cmd+S)'
+            : saveState === 'saving'
+              ? '当前画布正在保存中'
+              : saveState === 'error'
+                ? '上次保存失败，点击重试保存'
+                : '立即保存当前画布 (Ctrl/Cmd+S)'}
+          disabled={!canvasFile}
+          variant={saveButtonVariant}
         >
-          ↓ 保存
+          {saveButtonLabel}
         </ToolbarButton>
         <ToolbarButton onClick={handleAddFiles} title="从工作区添加文件">
           + 📄 文件
@@ -179,14 +235,38 @@ export function Toolbar() {
 }
 
 function ToolbarButton({
-  children, onClick, title, active, disabled,
+  children, onClick, title, active, disabled, variant = 'default',
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title?: string;
   active?: boolean;
   disabled?: boolean;
+  variant?: ToolbarButtonVariant;
 }) {
+  const variantStyle: React.CSSProperties = variant === 'save-pending'
+    ? {
+      background: 'rgba(234, 179, 8, 0.16)',
+      color: 'var(--vscode-editorWarning-foreground, #d29922)',
+      border: '1px solid var(--vscode-editorWarning-foreground, #d29922)',
+      animation: 'rs-save-pulse 1.7s ease-in-out infinite',
+    }
+    : variant === 'save-saving'
+      ? {
+        background: 'var(--vscode-button-background)',
+        color: 'var(--vscode-button-foreground)',
+        border: '1px solid var(--vscode-button-border, transparent)',
+        animation: 'rs-save-breathe 1.2s ease-in-out infinite',
+      }
+      : variant === 'save-error'
+        ? {
+          background: 'rgba(244, 71, 71, 0.16)',
+          color: 'var(--vscode-errorForeground, #f14c4c)',
+          border: '1px solid var(--vscode-errorForeground, #f14c4c)',
+          boxShadow: '0 0 0 1px rgba(244, 71, 71, 0.12)',
+        }
+        : {};
+
   return (
     <button
       onClick={onClick}
@@ -206,6 +286,8 @@ function ToolbarButton({
         fontSize: 12,
         fontWeight: 500,
         opacity: disabled ? 0.4 : 1,
+        transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease',
+        ...variantStyle,
       }}
     >
       {children}
