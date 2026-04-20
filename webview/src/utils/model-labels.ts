@@ -1,6 +1,7 @@
 import type { ModelInfo, SettingsSnapshot } from '../../../src/core/canvas-model';
 
 const BUILTIN_DEFAULT_MODEL_IDS: Record<string, string> = {
+  copilot: 'gpt-4.1',
   anthropic: 'claude-sonnet-4-6',
   ollama: 'llama3.2',
 };
@@ -81,12 +82,25 @@ const DEFAULT_TEXT_FAVORITE_MATCHERS: FavoriteModelMatcher[] = [
 
 const CLAUDE_TEXT_FAVORITE_MATCHERS = DEFAULT_TEXT_FAVORITE_MATCHERS.slice(4);
 const AIHUBMIX_TEXT_FAVORITE_MATCHERS: FavoriteModelMatcher[] = [
-  DEFAULT_TEXT_FAVORITE_MATCHERS[2], // Gemini Pro
+  {
+    matchers: [
+      /^gemini-3\.1-pro-preview(?:$|[-._])/i,
+      /^gemini-3\.1-pro(?:$|[-._])/i,
+      /^gemini-3-pro(?:$|[-._])/i,
+      /^gemini-2\.5-pro(?:$|[-._])/i,
+    ],
+    reject: [
+      ...TEXT_MODEL_REJECT_PATTERNS,
+      /search/i,
+      /customtools/i,
+    ],
+  },
   DEFAULT_TEXT_FAVORITE_MATCHERS[0], // GPT flagship
   DEFAULT_TEXT_FAVORITE_MATCHERS[4], // Claude Sonnet
 ];
 const OPTIMISTIC_FAVORITE_MODEL_IDS: Record<string, string[]> = {
   copilot: [
+    'gpt-4.1',
     'gpt-5.4',
     'gpt-5.4-mini',
     'gemini-3.1-pro-preview',
@@ -230,12 +244,13 @@ export function getConcreteProviderModelId(
   const configured = getConfiguredProviderModelId(providerId, settings);
   if (configured) { return configured; }
 
-  if (providerId === 'copilot') {
-    return modelCache[providerId]?.[0]?.id ?? '';
-  }
-
   if (providerId in BUILTIN_DEFAULT_MODEL_IDS) {
-    return BUILTIN_DEFAULT_MODEL_IDS[providerId];
+    const preferred = BUILTIN_DEFAULT_MODEL_IDS[providerId];
+    if (providerId === 'copilot') {
+      return modelCache[providerId]?.find(model => model.id === preferred)?.id
+        ?? preferred;
+    }
+    return preferred;
   }
 
   return '';

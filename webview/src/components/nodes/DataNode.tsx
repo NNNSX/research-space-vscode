@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
-import { Handle, Position, NodeResizer } from '@xyflow/react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo } from 'react';
+import { Handle, Position, NodeResizer, useUpdateNodeInternals } from '@xyflow/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -26,6 +26,8 @@ import {
   NODE_SELECTED_BORDER_WIDTH,
   withAlpha,
 } from '../../utils/node-chrome';
+import { buildBlueprintOutputSlotIssueMap } from '../../utils/blueprint-slot-issues';
+import { buildBlueprintOutputSlotBindingState } from '../../utils/blueprint-output-bindings';
 
 // Create blob worker URL from inlined source (CSP: worker-src blob:)
 const workerBlob = new Blob([pdfjsWorkerSrc], { type: 'application/javascript' });
@@ -59,9 +61,27 @@ const FALLBACK_ICONS: Record<string, string> = {
   data:      '\u{1F4CA}',
 };
 
+const BLUEPRINT_ACCEPT_TYPE_LABELS: Partial<Record<CanvasNode['node_type'], string>> = {
+  paper: 'PDF / 论文',
+  note: '笔记文本',
+  code: '代码文本',
+  image: '图像',
+  ai_output: 'AI 文本输出',
+  audio: '音频',
+  video: '视频',
+  data: '表格数据',
+  experiment_log: '实验记录',
+  task: '任务清单',
+};
+
+function describeBlueprintAcceptType(type: CanvasNode['node_type']): string {
+  return BLUEPRINT_ACCEPT_TYPE_LABELS[type] ?? type;
+}
+
 // Node types that support the preview button (opens in VSCode native viewer)
 const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'data']);
 const CARD_HYDRATABLE_NODE_TYPES = new Set<CanvasNode['node_type']>(['note', 'ai_output', 'code', 'data']);
+const PLACEHOLDER_AUTO_HEIGHT_PADDING = 18;
 
 function resolveCardContentMode(node: CanvasNode, width?: number, height?: number): 'preview' | 'full' | undefined {
   if (!CARD_HYDRATABLE_NODE_TYPES.has(node.node_type)) { return undefined; }
@@ -77,9 +97,9 @@ function resolveCardContentMode(node: CanvasNode, width?: number, height?: numbe
 export const DataNode = memo(DataNodeInner);
 
 function DataNodeInner({ data, selected }: DataNodeProps) {
+  const updateNodeInternals = useUpdateNodeInternals();
   const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
   const edges = useCanvasStore(s => s.edges);
-  const blueprintReplacementTargetNodeId = useCanvasStore(s => s.blueprintReplacementTargetNodeId);
   const imageUriMap = useCanvasStore(s => s.imageUriMap);
   const nodeDefs = useCanvasStore(s => s.nodeDefs);
   const previewNodeSize = useCanvasStore(s => s.previewNodeSize);
@@ -87,18 +107,30 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const openPreview = useCanvasStore(s => s.openPreview);
   const fullContent = useCanvasStore(s => s.fullContentCache[data.id]);
   const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
+  const pipelineState = useCanvasStore(s => s.pipelineState);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const placeholderMeasureRef = useRef<HTMLDivElement | null>(null);
+  const placeholderHeightOuterRafRef = useRef<number | null>(null);
+  const placeholderHeightInnerRafRef = useRef<number | null>(null);
+  const placeholderHeightRetryTimeoutsRef = useRef<number[]>([]);
+  const lastAutoPlaceholderHeightRef = useRef<number>(data.size?.height ?? 0);
 
   // Resolve icon/color/previewType from registry (falls back to hardcoded values)
   const nodeDef = nodeDefs.find(d => d.id === data.node_type);
   const isBlueprintPlaceholder = !!data.meta?.blueprint_placeholder_kind;
+  const isBlueprintInputPlaceholder = data.meta?.blueprint_placeholder_kind === 'input';
   const blueprintBoundKind = data.meta?.blueprint_bound_slot_kind;
   const isBlueprintBoundNode = !!blueprintBoundKind;
-  const isReplacementTarget = blueprintReplacementTargetNodeId === data.id;
+  const placeholderKindLabel = data.meta?.blueprint_placeholder_kind === 'input' ? '输入占位' : '输出占位';
+  const placeholderSemanticTitle = data.meta?.blueprint_placeholder_title ?? '';
   const accentColor = data.meta?.blueprint_color
     ?? nodeDef?.color
     ?? FALLBACK_COLORS[data.node_type]
     ?? 'var(--vscode-foreground)';
-  const nodeIcon    = nodeDef?.icon  ?? FALLBACK_ICONS[data.node_type]  ?? '📁';
+  const nodeIcon    = isBlueprintPlaceholder
+    ? '⟫'
+    : (nodeDef?.icon  ?? FALLBACK_ICONS[data.node_type]  ?? '📁');
+  const displayTitle = isBlueprintPlaceholder ? placeholderKindLabel : (data.title || '无标题');
   const previewType = nodeDef?.previewType ?? (
     data.node_type === 'note' || data.node_type === 'ai_output' ? 'markdown' : 'text'
   );
@@ -111,15 +143,6 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     !!data.file_path &&
     !isMissing &&
     fullContent === undefined;
-
-  useEffect(() => {
-    ensureNodeChromeStyles();
-  }, []);
-
-  // Card body follows the node's own display mode; cached full content is only used in full mode.
-  const displayContent = desiredCardContentMode === 'full'
-    ? (fullContent ?? data.meta?.content_preview)
-    : data.meta?.content_preview;
   const placeholderBindingInfo = useMemo(() => {
     if (data.meta?.blueprint_placeholder_kind !== 'input') { return null; }
     const bindingEdges = edges.filter(edge =>
@@ -136,6 +159,409 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       titles: boundNodeTitles,
     };
   }, [canvasNodes, data.id, data.meta?.blueprint_placeholder_accepts, data.meta?.blueprint_placeholder_allow_multiple, data.meta?.blueprint_placeholder_kind, data.meta?.blueprint_placeholder_required, edges]);
+
+  useEffect(() => {
+    ensureNodeChromeStyles();
+  }, []);
+
+  const placeholderPreviewText = useMemo(() => {
+    if (!placeholderBindingInfo) { return null; }
+    if (placeholderBindingInfo.count > 0) {
+      if (placeholderBindingInfo.titles.length > 0) {
+        return `当前通过连线接入：${placeholderBindingInfo.titles.slice(0, 3).join('、')}${placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}`;
+      }
+      return `当前已通过连线绑定 ${placeholderBindingInfo.count} 个上游节点。`;
+    }
+    return data.meta?.blueprint_placeholder_hint || '请将外部节点直接连到此输入占位，作为蓝图实例输入传递。';
+  }, [data.meta?.blueprint_placeholder_hint, placeholderBindingInfo]);
+  const inputPlaceholderPrimaryNodeId = useMemo(() => {
+    if (!placeholderBindingInfo || placeholderBindingInfo.count === 0) { return null; }
+    const bindingEdges = edges.filter(edge =>
+      edge.target === data.id && edge.data?.edge_type === 'data_flow'
+    );
+    return bindingEdges[bindingEdges.length - 1]?.source ?? null;
+  }, [data.id, edges, placeholderBindingInfo]);
+  const inputPlaceholderStatusText = useMemo(() => {
+    if (!placeholderBindingInfo) { return null; }
+    if (placeholderBindingInfo.count > 0) {
+      return placeholderBindingInfo.titles.length > 0
+        ? `当前输入：${placeholderBindingInfo.titles.slice(0, 3).join('、')}${placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}`
+        : `当前已接入 ${placeholderBindingInfo.count} 个输入节点。`;
+    }
+    return data.meta?.blueprint_placeholder_hint || '该输入槽位当前还没有接入外部节点。';
+  }, [data.meta?.blueprint_placeholder_hint, placeholderBindingInfo]);
+  const outputSlotRuntimeInfo = useMemo(() => {
+    const outputSlotId = data.meta?.blueprint_placeholder_kind === 'output'
+      ? data.meta?.blueprint_placeholder_slot_id
+      : data.meta?.blueprint_bound_slot_kind === 'output'
+        ? data.meta?.blueprint_bound_slot_id
+        : undefined;
+    const instanceId = data.meta?.blueprint_placeholder_kind === 'output'
+      ? data.meta?.blueprint_instance_id
+      : data.meta?.blueprint_bound_slot_kind === 'output'
+        ? data.meta?.blueprint_bound_instance_id
+        : undefined;
+    if (!outputSlotId || !instanceId) { return null; }
+
+    const containerNode = canvasNodes.find(node =>
+      node.node_type === 'blueprint' && node.meta?.blueprint_instance_id === instanceId
+    );
+    const outputSlots = containerNode?.meta?.blueprint_output_slot_defs ?? [];
+    const slotDef = outputSlots.find(slot => slot.id === outputSlotId);
+    const { outputBindings, boundNodesBySlot } = buildBlueprintOutputSlotBindingState({
+      instanceId,
+      outputSlots: slotDef ? [slotDef] : [],
+      canvasNodes,
+    });
+    const boundNodes = boundNodesBySlot.get(outputSlotId) ?? [];
+    const issueCards = Object.entries(pipelineState?.nodeIssues ?? {}).map(([nodeId, issue]) => ({
+      nodeId,
+      title: canvasNodes.find(node => node.id === nodeId)?.title ?? nodeId,
+      kind: issue.kind,
+      message: issue.message,
+    }));
+    if (issueCards.length === 0 && containerNode?.meta?.blueprint_last_run_status === 'failed' && containerNode.meta?.blueprint_last_issue_node_title) {
+      issueCards.push({
+        nodeId: containerNode.meta?.blueprint_last_issue_node_id,
+        title: containerNode.meta.blueprint_last_issue_node_title,
+        kind: 'run_failed',
+        message: containerNode.meta?.blueprint_last_run_summary ?? '最近一次运行失败',
+      });
+    }
+    const issue = buildBlueprintOutputSlotIssueMap({
+      canvasNodes,
+      edges,
+      instanceId,
+      outputSlots: slotDef ? [slotDef] : [],
+      outputBindings,
+      issueCards,
+      instanceRunning: !!pipelineState?.isRunning,
+      nodeStatuses: pipelineState?.nodeStatuses,
+    }).get(outputSlotId);
+
+    return {
+      slotId: outputSlotId,
+      instanceId,
+      slotDef,
+      issue,
+      boundNodes,
+      currentNode: boundNodes[boundNodes.length - 1],
+      lastRunStatus: containerNode?.meta?.blueprint_last_run_status,
+      instanceRunning: !!pipelineState?.isRunning,
+    };
+  }, [
+    canvasNodes,
+    data.meta?.blueprint_bound_slot_id,
+    data.meta?.blueprint_bound_slot_kind,
+    data.meta?.blueprint_bound_instance_id,
+    data.meta?.blueprint_placeholder_kind,
+    data.meta?.blueprint_placeholder_slot_id,
+    data.meta?.blueprint_instance_id,
+    edges,
+    pipelineState?.isRunning,
+    pipelineState?.nodeIssues,
+    pipelineState?.nodeStatuses,
+  ]);
+  const inputPlaceholderMissingRequired = !!(
+    placeholderBindingInfo &&
+    placeholderBindingInfo.required &&
+    placeholderBindingInfo.count === 0
+  );
+  const outputSlotFailedWithoutOutput = !!(
+    outputSlotRuntimeInfo &&
+    !outputSlotRuntimeInfo.currentNode &&
+    (outputSlotRuntimeInfo.issue?.kind === 'upstream_failed' || outputSlotRuntimeInfo.lastRunStatus === 'failed')
+  );
+  const outputSlotCancelledWithoutOutput = !!(
+    outputSlotRuntimeInfo &&
+    !outputSlotRuntimeInfo.currentNode &&
+    outputSlotRuntimeInfo.lastRunStatus === 'cancelled'
+  );
+  const outputSlotWaiting = !!(
+    outputSlotRuntimeInfo &&
+    !outputSlotRuntimeInfo.currentNode &&
+    (outputSlotRuntimeInfo.issue?.kind === 'waiting_output' || outputSlotRuntimeInfo.instanceRunning)
+  );
+  const isBlueprintOutputPlaceholder = data.meta?.blueprint_placeholder_kind === 'output';
+  const shouldCompactInputPlaceholder = false;
+  const placeholderPortVariant = isBlueprintPlaceholder ? 'blueprint-placeholder' : 'default';
+  const placeholderStatusBadge = useMemo(() => {
+    if (placeholderBindingInfo) {
+      return {
+        title: '蓝图输入绑定状态',
+        text: placeholderBindingInfo.count > 0 ? `已绑定 ${placeholderBindingInfo.count}` : '待绑定',
+        background: placeholderBindingInfo.count > 0
+          ? withAlpha(accentColor, 0.14, 'transparent')
+          : 'var(--vscode-badge-background)',
+        color: placeholderBindingInfo.count > 0 ? accentColor : 'var(--vscode-badge-foreground)',
+        border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+      };
+    }
+    if (outputSlotRuntimeInfo) {
+      return {
+        title: '蓝图输出槽位运行状态',
+        text: outputSlotRuntimeInfo.currentNode
+          ? '已回填'
+          : outputSlotFailedWithoutOutput
+            ? '未产出'
+            : outputSlotCancelledWithoutOutput
+              ? '已取消'
+              : outputSlotWaiting
+                ? '等待产出'
+                : '待回填',
+        background: outputSlotFailedWithoutOutput
+          ? 'var(--vscode-inputValidation-errorBackground, rgba(190,17,0,0.18))'
+          : outputSlotWaiting
+            ? withAlpha(accentColor, 0.14, 'transparent')
+            : outputSlotRuntimeInfo.currentNode
+              ? withAlpha(accentColor, 0.14, 'transparent')
+              : 'var(--vscode-badge-background)',
+        color: outputSlotFailedWithoutOutput
+          ? 'var(--vscode-inputValidation-errorForeground, #f48771)'
+          : outputSlotWaiting
+            ? accentColor
+            : outputSlotRuntimeInfo.currentNode
+              ? accentColor
+              : 'var(--vscode-badge-foreground)',
+        border: `1px solid ${outputSlotFailedWithoutOutput
+          ? 'var(--vscode-inputValidation-errorBorder, #be1100)'
+          : withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+      };
+    }
+    return null;
+  }, [
+    accentColor,
+    outputSlotCancelledWithoutOutput,
+    outputSlotFailedWithoutOutput,
+    outputSlotRuntimeInfo,
+    outputSlotWaiting,
+    placeholderBindingInfo,
+  ]);
+  const placeholderPrimaryText = isBlueprintInputPlaceholder
+    ? inputPlaceholderStatusText
+    : outputSlotRuntimeInfo
+      ? (outputSlotRuntimeInfo.currentNode
+        ? `当前输出：${outputSlotRuntimeInfo.currentNode.title}`
+        : outputSlotFailedWithoutOutput
+          ? (outputSlotRuntimeInfo.issue?.message ?? '该输出槽位最近一次运行未成功产出。')
+          : outputSlotCancelledWithoutOutput
+            ? '该输出槽位在最近一次运行取消前未完成产出。'
+            : outputSlotWaiting
+              ? (outputSlotRuntimeInfo.issue?.message ?? '该输出槽位正在等待实例内部上游节点继续产出。')
+              : '该输出槽位当前还没有回填结果。')
+      : null;
+  const placeholderSecondaryText = isBlueprintInputPlaceholder
+    ? (placeholderBindingInfo
+      ? `接受类型：${placeholderBindingInfo.accepts.length > 0
+        ? placeholderBindingInfo.accepts.map(type => describeBlueprintAcceptType(type)).join('、')
+        : '任意数据节点'} · ${placeholderBindingInfo.required ? '必填输入槽位' : '可选输入槽位'} · ${placeholderBindingInfo.allowMultiple ? '允许多个输入' : '单绑定'}`
+      : null)
+    : outputSlotRuntimeInfo?.issue?.relatedNodeTitle
+      ? `关联节点：${outputSlotRuntimeInfo.issue.relatedNodeTitle}`
+      : outputSlotRuntimeInfo?.slotDef
+        ? `槽位类型：${outputSlotRuntimeInfo.slotDef.allow_multiple ? '允许多个输出' : '单输出'}`
+        : null;
+  const placeholderAction = isBlueprintInputPlaceholder
+    ? (inputPlaceholderPrimaryNodeId
+      ? {
+          label: '定位输入节点',
+          nodeId: inputPlaceholderPrimaryNodeId,
+        }
+      : null)
+    : outputSlotRuntimeInfo?.issue?.relatedNodeId
+      ? {
+          label: outputSlotFailedWithoutOutput ? '定位问题节点' : '定位上游节点',
+          nodeId: outputSlotRuntimeInfo.issue.relatedNodeId,
+        }
+      : null;
+  const placeholderFooterTitle = isBlueprintInputPlaceholder
+    ? (placeholderSemanticTitle ? `输入槽位：${placeholderSemanticTitle}` : '输入槽位')
+    : (placeholderSemanticTitle
+      ? `输出槽位：${placeholderSemanticTitle}`
+      : outputSlotRuntimeInfo?.slotDef?.title
+        ? `输出槽位：${outputSlotRuntimeInfo.slotDef.title}`
+        : '输出槽位');
+  const placeholderFooterSummary = isBlueprintInputPlaceholder
+    ? (placeholderBindingInfo?.titles.length
+      ? `当前绑定：${placeholderBindingInfo.titles.slice(0, 3).join('、')}${placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}`
+      : '请从左侧输入通道接入符合类型的外部节点。')
+    : (outputSlotRuntimeInfo?.currentNode
+      ? `当前回填：${outputSlotRuntimeInfo.currentNode.title}`
+      : outputSlotRuntimeInfo?.issue?.relatedNodeTitle
+        ? `关联节点：${outputSlotRuntimeInfo.issue.relatedNodeTitle}`
+        : '结果会从蓝图内部回填到这个输出槽位。');
+  const placeholderFooterChips = isBlueprintInputPlaceholder
+    ? [
+        placeholderBindingInfo?.accepts?.length
+          ? `接受 ${placeholderBindingInfo.accepts.map(type => describeBlueprintAcceptType(type)).join(' / ')}`
+          : '接受任意数据',
+        placeholderBindingInfo?.required ? '必填槽位' : '可选槽位',
+        placeholderBindingInfo?.allowMultiple ? '允许多个输入' : '单绑定',
+      ]
+    : [
+        outputSlotRuntimeInfo?.slotDef?.allow_multiple ? '允许多个输出' : '单输出',
+        outputSlotRuntimeInfo?.currentNode ? '已回填结果' : '等待回填',
+        outputSlotRuntimeInfo?.boundNodes.length
+          ? `累计 ${outputSlotRuntimeInfo.boundNodes.length} 个结果`
+          : '暂未生成结果',
+      ];
+
+  useEffect(() => {
+    lastAutoPlaceholderHeightRef.current = data.size?.height ?? lastAutoPlaceholderHeightRef.current;
+  }, [data.size?.height]);
+
+  const schedulePlaceholderHeightSync = useCallback(() => {
+    if (!isBlueprintPlaceholder) { return; }
+    const el = rootRef.current;
+    const measureEl = placeholderMeasureRef.current;
+    if (!el || !measureEl) { return; }
+    if (placeholderHeightOuterRafRef.current !== null) {
+      window.cancelAnimationFrame(placeholderHeightOuterRafRef.current);
+      placeholderHeightOuterRafRef.current = null;
+    }
+    if (placeholderHeightInnerRafRef.current !== null) {
+      window.cancelAnimationFrame(placeholderHeightInnerRafRef.current);
+      placeholderHeightInnerRafRef.current = null;
+    }
+    placeholderHeightOuterRafRef.current = window.requestAnimationFrame(() => {
+      placeholderHeightOuterRafRef.current = null;
+      placeholderHeightInnerRafRef.current = window.requestAnimationFrame(() => {
+        placeholderHeightInnerRafRef.current = null;
+        if (!el.isConnected || rootRef.current !== el) { return; }
+        const measuredHeight = Math.max(
+          Math.ceil(measureEl.scrollHeight),
+          Math.ceil(measureEl.clientHeight),
+          Math.ceil(measureEl.offsetHeight),
+        );
+        if (measuredHeight <= 0) { return; }
+        const currentWidth = data.size?.width ?? DEFAULT_SIZES[data.node_type].width;
+        const currentHeight = data.size?.height ?? DEFAULT_SIZES[data.node_type].height;
+        const requiredHeight = Math.max(
+          DEFAULT_SIZES[data.node_type].height,
+          measuredHeight + PLACEHOLDER_AUTO_HEIGHT_PADDING,
+        );
+        if (Math.abs(requiredHeight - currentHeight) > 2) {
+          if (Math.abs(requiredHeight - lastAutoPlaceholderHeightRef.current) <= 2) {
+            return;
+          }
+          lastAutoPlaceholderHeightRef.current = requiredHeight;
+          updateNodeSize(data.id, currentWidth, requiredHeight);
+        } else {
+          updateNodeInternals(data.id);
+        }
+      });
+    });
+  }, [data.id, data.node_type, data.size?.height, data.size?.width, isBlueprintPlaceholder, updateNodeInternals, updateNodeSize]);
+
+  useLayoutEffect(() => {
+    schedulePlaceholderHeightSync();
+  }, [
+    isBlueprintPlaceholder,
+    shouldCompactInputPlaceholder,
+    placeholderBindingInfo?.count,
+    placeholderBindingInfo?.titles.length,
+    placeholderBindingInfo?.accepts.join('|'),
+    placeholderSemanticTitle,
+    outputSlotRuntimeInfo?.currentNode?.id,
+    outputSlotRuntimeInfo?.issue?.kind,
+    outputSlotRuntimeInfo?.issue?.message,
+    outputSlotRuntimeInfo?.issue?.relatedNodeId,
+    schedulePlaceholderHeightSync,
+  ]);
+
+  useEffect(() => {
+    if (!isBlueprintPlaceholder) { return; }
+    schedulePlaceholderHeightSync();
+    placeholderHeightRetryTimeoutsRef.current.forEach(timeoutId => window.clearTimeout(timeoutId));
+    placeholderHeightRetryTimeoutsRef.current = [
+      window.setTimeout(schedulePlaceholderHeightSync, 32),
+      window.setTimeout(schedulePlaceholderHeightSync, 120),
+      window.setTimeout(schedulePlaceholderHeightSync, 260),
+      window.setTimeout(schedulePlaceholderHeightSync, 520),
+      window.setTimeout(schedulePlaceholderHeightSync, 900),
+    ];
+    return () => {
+      placeholderHeightRetryTimeoutsRef.current.forEach(timeoutId => window.clearTimeout(timeoutId));
+      placeholderHeightRetryTimeoutsRef.current = [];
+    };
+  }, [isBlueprintPlaceholder, schedulePlaceholderHeightSync]);
+
+  useEffect(() => {
+    if (!isBlueprintPlaceholder) { return; }
+    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+    if (!fonts?.ready) { return; }
+    let cancelled = false;
+    fonts.ready.then(() => {
+      if (!cancelled) {
+        schedulePlaceholderHeightSync();
+      }
+    }).catch(() => {
+      // ignore font readiness failures
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isBlueprintPlaceholder, schedulePlaceholderHeightSync]);
+
+  useEffect(() => {
+    if (!isBlueprintPlaceholder) { return; }
+    const el = rootRef.current;
+    const measureEl = placeholderMeasureRef.current;
+    if ((!el && !measureEl) || typeof ResizeObserver === 'undefined') { return; }
+    const observer = new ResizeObserver(() => {
+      schedulePlaceholderHeightSync();
+    });
+    if (el) {
+      observer.observe(el);
+    }
+    if (measureEl && measureEl !== el) {
+      observer.observe(measureEl);
+    }
+    return () => {
+      observer.disconnect();
+      if (placeholderHeightOuterRafRef.current !== null) {
+        window.cancelAnimationFrame(placeholderHeightOuterRafRef.current);
+        placeholderHeightOuterRafRef.current = null;
+      }
+      if (placeholderHeightInnerRafRef.current !== null) {
+        window.cancelAnimationFrame(placeholderHeightInnerRafRef.current);
+        placeholderHeightInnerRafRef.current = null;
+      }
+      placeholderHeightRetryTimeoutsRef.current.forEach(timeoutId => window.clearTimeout(timeoutId));
+      placeholderHeightRetryTimeoutsRef.current = [];
+    };
+  }, [isBlueprintPlaceholder, schedulePlaceholderHeightSync]);
+
+  const blueprintNodeBorderColor = inputPlaceholderMissingRequired
+    ? 'var(--vscode-inputValidation-warningBorder)'
+    : outputSlotFailedWithoutOutput
+      ? 'var(--vscode-inputValidation-errorBorder, #be1100)'
+      : outputSlotWaiting
+        ? withAlpha(accentColor, 0.95, 'var(--vscode-panel-border)')
+        : (isBlueprintPlaceholder ? withAlpha(accentColor, 0.85, 'var(--vscode-panel-border)') : 'var(--vscode-panel-border)');
+  const blueprintNodeBackground = outputSlotFailedWithoutOutput
+    ? 'linear-gradient(180deg, color-mix(in srgb, var(--vscode-editor-background) 88%, #be1100 12%) 0%, var(--vscode-editor-background) 48%)'
+    : inputPlaceholderMissingRequired
+      ? 'linear-gradient(180deg, color-mix(in srgb, var(--vscode-editor-background) 88%, #b89500 12%) 0%, var(--vscode-editor-background) 48%)'
+      : outputSlotWaiting
+        ? `linear-gradient(180deg, ${withAlpha(accentColor, 0.12, 'var(--vscode-editor-background)')} 0%, var(--vscode-editor-background) 44%)`
+        : isBlueprintPlaceholder
+          ? `linear-gradient(180deg, ${withAlpha(accentColor, 0.08, 'var(--vscode-editor-background)')} 0%, var(--vscode-editor-background) 42%)`
+          : 'var(--vscode-editor-background)';
+  const blueprintNodeBoxShadow = outputSlotFailedWithoutOutput
+    ? `0 0 0 1px color-mix(in srgb, var(--vscode-inputValidation-errorBorder, #be1100) 38%, transparent), 0 10px 24px rgba(190,17,0,0.18)`
+    : inputPlaceholderMissingRequired
+      ? `0 0 0 1px color-mix(in srgb, var(--vscode-inputValidation-warningBorder, #b89500) 42%, transparent), 0 10px 24px rgba(184,149,0,0.16)`
+      : outputSlotWaiting
+        ? `0 0 0 1px ${withAlpha(accentColor, 0.26, 'transparent')}, 0 10px 24px ${withAlpha(accentColor, 0.18, 'rgba(0,0,0,0.16)')}`
+        : undefined;
+
+  // Card body follows the node's own display mode; cached full content is only used in full mode.
+  const displayContent = isBlueprintInputPlaceholder ? null : (placeholderPreviewText ?? (
+    desiredCardContentMode === 'full'
+      ? (fullContent ?? data.meta?.content_preview)
+      : data.meta?.content_preview
+  ));
 
   // ── Context menu state ──
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -187,29 +613,28 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
 
   return (
     <div
+      ref={rootRef}
       className={`rs-node-surface rs-node-surface--interactive${selected ? ' rs-node-surface--selected' : ''}`}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       style={{
         width: '100%',
         height: '100%',
-        background: 'var(--vscode-editor-background)',
-        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : (isReplacementTarget ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH)}px ${isBlueprintPlaceholder ? 'dashed' : 'solid'} ${selected || isReplacementTarget ? accentColor : (isBlueprintPlaceholder ? withAlpha(accentColor, 0.85, 'var(--vscode-panel-border)') : 'var(--vscode-panel-border)')}`,
+        background: blueprintNodeBackground,
+        border: `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px ${isBlueprintPlaceholder ? 'dashed' : 'solid'} ${selected ? accentColor : blueprintNodeBorderColor}`,
         borderRadius: NODE_RADIUS,
         display: 'flex',
         /* NO overflow:hidden here — it clips the ReactFlow Handle dots */
         cursor: 'default',
         boxShadow: selected
           ? `0 0 0 1px ${withAlpha(accentColor, 0.2, 'transparent')}, 0 10px 24px ${withAlpha(accentColor, 0.16, 'rgba(0,0,0,0.18)')}`
-          : isReplacementTarget
-            ? `0 0 0 2px ${withAlpha(accentColor, 0.24, 'transparent')}, 0 0 0 8px ${withAlpha(accentColor, 0.10, 'transparent')}, 0 12px 28px ${withAlpha(accentColor, 0.18, 'rgba(0,0,0,0.20)')}`
-          : '0 3px 10px rgba(0,0,0,0.18)',
+          : (blueprintNodeBoxShadow ?? '0 3px 10px rgba(0,0,0,0.18)'),
         position: 'relative',
       }}
     >
       {/* Resize handles — visible when selected */}
       <NodeResizer
-        isVisible={selected}
+        isVisible={selected && !isBlueprintPlaceholder}
         minWidth={160}
         minHeight={120}
         color={accentColor}
@@ -227,125 +652,131 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         onResizeEnd={handleResizeEnd}
       />
       {/* Left accent bar */}
-      <div style={{ width: 4, background: accentColor, flexShrink: 0, borderRadius: `${NODE_RADIUS}px 0 0 ${NODE_RADIUS}px` }} />
+      <div style={{ width: isBlueprintPlaceholder ? 5 : 4, background: accentColor, flexShrink: 0, borderRadius: `${NODE_RADIUS}px 0 0 ${NODE_RADIUS}px` }} />
 
       {/* Content */}
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {/* Header — fixed, never scrolls with content */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          overflow: 'hidden',
-          flexShrink: 0,
-          background: 'var(--vscode-editor-background)',
-          padding: `9px ${NODE_CONTENT_GUTTER}px 7px`,
-        }}>
-          <span style={{ fontSize: NODE_HEADER_ICON_SIZE, lineHeight: 1 }}>{nodeIcon}</span>
-          <span style={{
-            ...NODE_HEADER_TITLE_STYLE,
-            flex: 1,
+        <div
+          ref={isBlueprintPlaceholder ? placeholderMeasureRef : undefined}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            ...(isBlueprintPlaceholder ? {} : { flex: 1, minHeight: 0 }),
+          }}
+        >
+          {/* Header — fixed, never scrolls with content */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            overflow: 'hidden',
+            flexShrink: 0,
+            background: isBlueprintPlaceholder
+              ? withAlpha(accentColor, 0.05, 'var(--vscode-editor-background)')
+              : 'var(--vscode-editor-background)',
+            padding: `9px ${NODE_CONTENT_GUTTER}px 7px`,
           }}>
-            {data.title || '无标题'}
-          </span>
-          {canPreview && (
-            <button
-              onClick={handlePreviewClick}
-              title="预览"
-              style={{
-                background: 'var(--vscode-button-secondaryBackground)',
-                color: 'var(--vscode-button-secondaryForeground)',
-                border: '1px solid var(--vscode-button-border, transparent)',
-                borderRadius: 3,
-                padding: '1px 6px',
+            <span style={{ fontSize: NODE_HEADER_ICON_SIZE, lineHeight: 1 }}>{nodeIcon}</span>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{
+                ...NODE_HEADER_TITLE_STYLE,
+                flex: 1,
+              }}>
+                {displayTitle}
+              </span>
+              {isBlueprintPlaceholder && placeholderSemanticTitle && (
+                <span style={{
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  槽位语义：{placeholderSemanticTitle}
+                </span>
+              )}
+            </div>
+            {canPreview && (
+              <button
+                onClick={handlePreviewClick}
+                title="预览"
+                style={{
+                  background: 'var(--vscode-button-secondaryBackground)',
+                  color: 'var(--vscode-button-secondaryForeground)',
+                  border: '1px solid var(--vscode-button-border, transparent)',
+                  borderRadius: 3,
+                  padding: '1px 6px',
+                  fontSize: 10,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  lineHeight: 1.4,
+                }}
+              >
+                预览
+              </button>
+            )}
+            {isMissing && (
+              <span title="文件不存在" style={{
+                background: 'var(--vscode-inputValidation-warningBackground)',
+                color: 'var(--vscode-inputValidation-warningForeground)',
+                borderRadius: 4, fontSize: 10, padding: '1px 5px', flexShrink: 0,
+              }}>
+                缺失
+              </span>
+            )}
+            {isBlueprintPlaceholder && (
+              <span title="蓝图占位节点" style={{
+                background: withAlpha(accentColor, 0.12, 'transparent'),
+                color: accentColor,
+                border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+                borderRadius: 4,
                 fontSize: 10,
-                cursor: 'pointer',
+                padding: '1px 5px',
                 flexShrink: 0,
-                lineHeight: 1.4,
-              }}
-            >
-              预览
-            </button>
-          )}
-          {isMissing && (
-            <span title="文件不存在" style={{
-              background: 'var(--vscode-inputValidation-warningBackground)',
-              color: 'var(--vscode-inputValidation-warningForeground)',
-              borderRadius: 4, fontSize: 10, padding: '1px 5px', flexShrink: 0,
-            }}>
-              缺失
-            </span>
-          )}
-          {isBlueprintPlaceholder && (
-            <span title="蓝图占位节点" style={{
-              background: withAlpha(accentColor, 0.12, 'transparent'),
-              color: accentColor,
-              border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
-              borderRadius: 4,
-              fontSize: 10,
-              padding: '1px 5px',
-              flexShrink: 0,
-            }}>
-              {data.meta?.blueprint_placeholder_kind === 'input' ? '输入占位' : '输出占位'}
-            </span>
-          )}
-          {placeholderBindingInfo && (
-            <span title="蓝图输入绑定状态" style={{
-              background: placeholderBindingInfo.count > 0
-                ? withAlpha(accentColor, 0.14, 'transparent')
-                : 'var(--vscode-inputValidation-warningBackground)',
-              color: placeholderBindingInfo.count > 0
-                ? accentColor
-                : 'var(--vscode-inputValidation-warningForeground)',
-              border: `1px solid ${placeholderBindingInfo.count > 0 ? withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)') : 'var(--vscode-inputValidation-warningBorder)'}`,
-              borderRadius: 4,
-              fontSize: 10,
-              padding: '1px 5px',
-              flexShrink: 0,
-            }}>
-              {placeholderBindingInfo.count > 0 ? `已绑定 ${placeholderBindingInfo.count}` : '待绑定'}
-            </span>
-          )}
-          {isBlueprintBoundNode && (
-            <span title="该节点已回填到蓝图实例槽位" style={{
-              background: withAlpha(accentColor, 0.12, 'transparent'),
-              color: accentColor,
-              border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
-              borderRadius: 4,
-              fontSize: 10,
-              padding: '1px 5px',
-              flexShrink: 0,
-            }}>
-              {blueprintBoundKind === 'output' ? '输出回填' : '输入接管'}
-            </span>
-          )}
-          {isReplacementTarget && (
-            <span title="拖到此处松手即可替换输入占位" style={{
-              background: withAlpha(accentColor, 0.16, 'transparent'),
-              color: accentColor,
-              border: `1px solid ${withAlpha(accentColor, 0.42, 'var(--vscode-panel-border)')}`,
-              borderRadius: 4,
-              fontSize: 10,
-              padding: '1px 5px',
-              flexShrink: 0,
-              fontWeight: 700,
-            }}>
-              松手替换
-            </span>
-          )}
-        </div>
+              }}>
+                专属槽位
+              </span>
+            )}
+            {placeholderStatusBadge && (
+              <span title={placeholderStatusBadge.title} style={{
+                background: placeholderStatusBadge.background,
+                color: placeholderStatusBadge.color,
+                border: placeholderStatusBadge.border,
+                borderRadius: 4,
+                fontSize: 10,
+                padding: '1px 5px',
+                flexShrink: 0,
+              }}>
+                {placeholderStatusBadge.text}
+              </span>
+            )}
+            {isBlueprintBoundNode && (
+              <span title="该节点已回填到蓝图实例槽位" style={{
+                background: withAlpha(accentColor, 0.12, 'transparent'),
+                color: accentColor,
+                border: `1px solid ${withAlpha(accentColor, 0.4, 'var(--vscode-panel-border)')}`,
+                borderRadius: 4,
+                fontSize: 10,
+                padding: '1px 5px',
+                flexShrink: 0,
+              }}>
+                {blueprintBoundKind === 'output' ? '输出回填' : '输入绑定'}
+              </span>
+            )}
+          </div>
 
-        {/* Body — the only scrollable area inside the node */}
-        <div style={{
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          overflow: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          padding: `0 ${NODE_CONTENT_GUTTER}px 6px`,
-        }}>
+          {/* Body — the only scrollable area inside the node */}
+          <div style={{
+            flex: isBlueprintPlaceholder ? '0 0 auto' : 1,
+            minHeight: isBlueprintPlaceholder ? 'auto' : 0,
+            minWidth: 0,
+            overflow: shouldCompactInputPlaceholder ? 'hidden' : 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: shouldCompactInputPlaceholder ? 6 : 4,
+            padding: `0 ${NODE_CONTENT_GUTTER}px 6px`,
+          }}>
 
           {/* Experiment log UI */}
           {data.node_type === 'experiment_log' && (
@@ -362,40 +793,104 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           )}
 
           {/* Image preview */}
-          {data.node_type === 'image' && (
+          {isBlueprintPlaceholder && (placeholderPrimaryText || placeholderSecondaryText || placeholderAction) && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              marginTop: 4,
+              flex: '0 0 auto',
+              padding: '2px 0 0',
+            }}>
+              {placeholderPrimaryText && (
+                <div style={{
+                  fontSize: 10,
+                  color: isBlueprintInputPlaceholder
+                    ? (inputPlaceholderMissingRequired
+                      ? 'var(--vscode-inputValidation-warningForeground)'
+                      : placeholderBindingInfo?.count
+                        ? accentColor
+                        : 'var(--vscode-descriptionForeground)')
+                    : outputSlotFailedWithoutOutput
+                      ? 'var(--vscode-inputValidation-errorForeground, #f48771)'
+                      : outputSlotWaiting
+                        ? accentColor
+                        : 'var(--vscode-descriptionForeground)',
+                  fontWeight: 600,
+                  lineHeight: 1.45,
+                  wordBreak: 'break-word',
+                }}>
+                  {placeholderPrimaryText}
+                </div>
+              )}
+              {placeholderSecondaryText && (
+                <div style={{
+                  fontSize: 10,
+                  color: 'var(--vscode-descriptionForeground)',
+                  lineHeight: 1.45,
+                  wordBreak: 'break-word',
+                }}>
+                  {placeholderSecondaryText}
+                </div>
+              )}
+              {placeholderAction && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => selectExclusiveNode(placeholderAction.nodeId)}
+                    style={{
+                      borderRadius: 999,
+                      border: `1px solid ${withAlpha(accentColor, 0.28, 'var(--vscode-panel-border)')}`,
+                      background: withAlpha(accentColor, 0.08, 'transparent'),
+                      color: accentColor,
+                      padding: '2px 8px',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {placeholderAction.label}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Image preview */}
+            {data.node_type === 'image' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <ImagePreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Paper/PDF first page preview */}
-          {data.node_type === 'paper' && (
+            {data.node_type === 'paper' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <PdfPreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Audio preview — waveform + click to play */}
-          {data.node_type === 'audio' && (
+            {data.node_type === 'audio' && (
             <AudioPreview node={data} imageUriMap={imageUriMap} />
           )}
 
           {/* Video preview — thumbnail + modal */}
-          {data.node_type === 'video' && (
+            {data.node_type === 'video' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <VideoPreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Data/CSV table preview */}
-          {data.node_type === 'data' && displayContent && (
+            {data.node_type === 'data' && displayContent && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <TablePreview source={displayContent as string} />
             </div>
           )}
 
           {/* Text preview — skip node types that have dedicated body renderers or media previews */}
-          {data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
+            {data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
             <div style={{
               fontSize: 11,
               color: 'var(--vscode-descriptionForeground)',
@@ -417,11 +912,12 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
                 </span>
               )}
             </div>
-          )}
+            )}
 
-        </div>
+          </div>
 
         {/* Footer — fixed metadata area, never shrinks with the content body */}
+        {!shouldCompactInputPlaceholder && (
         <div style={{
           flexShrink: 0,
           minWidth: 0,
@@ -456,36 +952,87 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
             </div>
           )}
 
-          {placeholderBindingInfo && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {isBlueprintPlaceholder && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              padding: '2px 0 0',
+            }}>
               <div style={{
                 fontSize: 10,
-                color: placeholderBindingInfo.count > 0 ? accentColor : 'var(--vscode-inputValidation-warningForeground)',
-                fontWeight: 600,
+                color: accentColor,
+                fontWeight: 700,
+                lineHeight: 1.4,
+                wordBreak: 'break-word',
               }}>
-                {placeholderBindingInfo.required ? '必填输入槽位' : '可选输入槽位'}
-                {' · '}
-                {placeholderBindingInfo.allowMultiple ? '允许多绑定' : '单绑定'}
+                {placeholderFooterTitle}
               </div>
-              {placeholderBindingInfo.accepts.length > 0 && (
+              <div style={{
+                fontSize: 10,
+                color: isBlueprintInputPlaceholder
+                  ? (placeholderBindingInfo?.count
+                    ? accentColor
+                    : 'var(--vscode-inputValidation-warningForeground)')
+                  : outputSlotFailedWithoutOutput
+                    ? 'var(--vscode-inputValidation-errorForeground, #f48771)'
+                    : outputSlotWaiting
+                      ? accentColor
+                      : 'var(--vscode-descriptionForeground)',
+                fontWeight: 600,
+                lineHeight: 1.45,
+                wordBreak: 'break-word',
+              }}>
+                {placeholderPrimaryText}
+              </div>
+              {!isBlueprintInputPlaceholder && placeholderFooterSummary && (
                 <div style={{
                   fontSize: 10,
                   color: 'var(--vscode-descriptionForeground)',
-                  lineHeight: 1.4,
+                  lineHeight: 1.45,
                   wordBreak: 'break-word',
                 }}>
-                  接受类型：{placeholderBindingInfo.accepts.join(' / ')}
+                  {placeholderFooterSummary}
                 </div>
               )}
-              {placeholderBindingInfo.titles.length > 0 && (
-                <div style={{
-                  fontSize: 10,
-                  color: 'var(--vscode-descriptionForeground)',
-                  lineHeight: 1.4,
-                  wordBreak: 'break-word',
-                }}>
-                  当前绑定：{placeholderBindingInfo.titles.slice(0, 3).join('、')}
-                  {placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}
+              {!isBlueprintInputPlaceholder && (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {placeholderFooterChips.map(chip => (
+                    <span
+                      key={chip}
+                      style={{
+                        fontSize: 9,
+                        padding: '1px 5px',
+                        background: withAlpha(accentColor, 0.08, 'transparent'),
+                        color: accentColor,
+                        border: `1px solid ${withAlpha(accentColor, 0.2, 'var(--vscode-panel-border)')}`,
+                        borderRadius: 10,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {chip}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {!isBlueprintInputPlaceholder && placeholderAction && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => selectExclusiveNode(placeholderAction.nodeId)}
+                    style={{
+                      borderRadius: 999,
+                      border: `1px solid ${withAlpha(accentColor, 0.28, 'var(--vscode-panel-border)')}`,
+                      background: withAlpha(accentColor, 0.08, 'transparent'),
+                      color: accentColor,
+                      padding: '2px 8px',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {placeholderAction.label}
+                  </button>
                 </div>
               )}
             </div>
@@ -518,7 +1065,9 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
             </div>
           )}
 
-          <AiReadabilityBadge data={data} />
+          {!isBlueprintPlaceholder && <AiReadabilityBadge data={data} />}
+        </div>
+        )}
         </div>
       </div>
 
@@ -534,7 +1083,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         isConnectable
         isConnectableStart
         isConnectableEnd={false}
-        style={buildNodePortStyle(accentColor, 'out')}
+        style={buildNodePortStyle(accentColor, 'out', placeholderPortVariant)}
       />
       <Handle
         className={NODE_PORT_CLASSNAME}
@@ -547,7 +1096,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
         isConnectable
         isConnectableStart={false}
         isConnectableEnd
-        style={buildNodePortStyle(accentColor, 'in')}
+        style={buildNodePortStyle(accentColor, 'in', placeholderPortVariant)}
       />
 
       {/* Context menu */}

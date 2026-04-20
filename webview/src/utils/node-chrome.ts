@@ -100,7 +100,7 @@ export function ensureNodeChromeStyles() {
     .rs-node-port:hover::before,
     .rs-node-port:focus-visible::before {
       animation: rsPortPulse 1.25s ease-in-out infinite;
-      box-shadow: 0 0 0 1px rgba(255,255,255,0.24), 0 0 0 6px color-mix(in srgb, var(--rs-port-color, #fff) 20%, transparent);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.24), 0 0 0 var(--rs-port-ring-size, 6px) color-mix(in srgb, var(--rs-port-color, #fff) var(--rs-port-ring-alpha, 20%), transparent);
     }
     .rs-node-port:hover::after,
     .rs-node-port:focus-visible::after {

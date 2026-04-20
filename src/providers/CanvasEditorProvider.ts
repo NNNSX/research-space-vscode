@@ -10,7 +10,7 @@ import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
 import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
 import { extractPreviewWithMeta } from '../core/content-extractor';
-import { listBlueprintDefinitions, readBlueprintDefinition, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
+import { deleteBlueprintDefinition, listBlueprintDefinitions, readBlueprintDefinition, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
 import { runBlueprintInstance } from '../blueprint/blueprint-runner';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -36,6 +36,48 @@ async function uniqueFile(dir: string, base: string, ext: string): Promise<{ uri
     safe,
     display: safe === safeBase ? base : `${base}-${suffix - 1}`,
   };
+}
+
+type OutputHistoryNodeType = 'ai_output' | 'image' | 'audio' | 'video';
+
+function inferOutputHistoryNodeType(filePath: string, fallback?: string): OutputHistoryNodeType {
+  if (fallback === 'image' || fallback === 'audio' || fallback === 'video' || fallback === 'ai_output') {
+    return fallback;
+  }
+  const ext = path.extname(filePath).slice(1).toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico'].includes(ext)) {
+    return 'image';
+  }
+  if (['mp3', 'wav', 'opus', 'aac', 'flac', 'm4a', 'ogg', 'oga', 'webm'].includes(ext)) {
+    return 'audio';
+  }
+  if (['mp4', 'mov', 'm4v'].includes(ext)) {
+    return 'video';
+  }
+  return 'ai_output';
+}
+
+function extractOutputHistoryFamilyKey(filePath: string): string | null {
+  const basename = path.basename(filePath);
+  const match = basename.match(/^(.*)_\d{4}_\d{6}(?:_\d+)?\.[^.]+$/);
+  return match?.[1] ?? null;
+}
+
+function extractOutputHistorySortKey(filePath: string): string {
+  const basename = path.basename(filePath);
+  const match = basename.match(/_(\d{4}_\d{6})(?:_\d+)?\.[^.]+$/);
+  return match?.[1] ?? '';
+}
+
+function buildBlueprintCopyTitle(title: string, existingTitles: Set<string>): string {
+  const baseTitle = (title.trim() || '新蓝图').replace(/\s*-\s*副本(?:\s+\d+)?$/, '');
+  const firstCandidate = `${baseTitle} - 副本`;
+  if (!existingTitles.has(firstCandidate)) { return firstCandidate; }
+  let index = 2;
+  while (existingTitles.has(`${baseTitle} - 副本 ${index}`)) {
+    index += 1;
+  }
+  return `${baseTitle} - 副本 ${index}`;
 }
 
 // ── Canvas Document ─────────────────────────────────────────────────────────
@@ -80,6 +122,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
   static readonly viewType = 'researchSpace.canvas';
   static readonly activeWebviews = new Map<string, vscode.Webview>();
   static readonly activeDocuments = new Map<string, CanvasDocument>();
+  static readonly canvasSessionIds = new Map<string, number>();
   /** Exposed so extension.ts file watcher can call shouldWatchContent() */
   static dataNodeRegistry: DataNodeRegistry | null = null;
 
@@ -87,6 +130,16 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
   static suppressRevert(canvasPath: string): void {
     const doc = CanvasEditorProvider.activeDocuments.get(canvasPath);
     if (doc) { doc.suppressNextRevert = true; }
+  }
+
+  static bumpCanvasSession(canvasPath: string): number {
+    const next = (CanvasEditorProvider.canvasSessionIds.get(canvasPath) ?? 0) + 1;
+    CanvasEditorProvider.canvasSessionIds.set(canvasPath, next);
+    return next;
+  }
+
+  static getCanvasSession(canvasPath: string): number {
+    return CanvasEditorProvider.canvasSessionIds.get(canvasPath) ?? 0;
   }
 
   private readonly _context: vscode.ExtensionContext;
@@ -166,6 +219,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
 
     CanvasEditorProvider.activeWebviews.set(document.uri.fsPath, webviewPanel.webview);
     CanvasEditorProvider.activeDocuments.set(document.uri.fsPath, document);
+    const initialCanvasSessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
 
     // Collect all panel-scoped subscriptions for clean-up on panel close
     const panelDisposables: vscode.Disposable[] = [];
@@ -173,6 +227,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     webviewPanel.onDidDispose(() => {
       CanvasEditorProvider.activeWebviews.delete(document.uri.fsPath);
       CanvasEditorProvider.activeDocuments.delete(document.uri.fsPath);
+      CanvasEditorProvider.canvasSessionIds.delete(document.uri.fsPath);
       for (const d of panelDisposables) { d.dispose(); }
       panelDisposables.length = 0;
     });
@@ -197,15 +252,20 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     );
 
     // Send initial data immediately; 'ready' message will also trigger a re-send
-    webviewPanel.webview.postMessage({ type: 'init', data: document.data, workspaceRoot: canvasDir });
+    webviewPanel.webview.postMessage({
+      type: 'init',
+      data: document.data,
+      workspaceRoot: canvasDir,
+      sessionId: initialCanvasSessionId,
+    });
     webviewPanel.webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
     // Push node defs (always available since loaded in constructor)
     webviewPanel.webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
     await this._postPetBootstrap(webviewPanel.webview, canvasDir);
     listBlueprintDefinitions(canvasDir).then(entries => {
-      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries });
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries, sessionId: initialCanvasSessionId });
     }).catch(() => {
-      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries: [] });
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries: [], sessionId: initialCanvasSessionId });
     });
 
     // Load canvas-scoped custom tools, set up hot-reload watcher, then push tool defs
@@ -235,8 +295,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       new vscode.RelativePattern(canvasDir, 'blueprints/*.blueprint.json')
     );
     const refreshBlueprints = async () => {
+      const sessionId = CanvasEditorProvider.canvasSessionIds.get(document.uri.fsPath) ?? 0;
       const entries = await listBlueprintDefinitions(canvasDir);
-      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries });
+      webviewPanel.webview.postMessage({ type: 'blueprintIndex', entries, sessionId });
     };
     blueprintsWatcher.onDidCreate(refreshBlueprints);
     blueprintsWatcher.onDidChange(refreshBlueprints);
@@ -273,7 +334,13 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     }
     document.data = await readCanvas(document.uri);
     const wv = CanvasEditorProvider.activeWebviews.get(document.uri.fsPath);
-    wv?.postMessage({ type: 'init', data: document.data, workspaceRoot: path.dirname(document.uri.fsPath) });
+    const sessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
+    wv?.postMessage({
+      type: 'init',
+      data: document.data,
+      workspaceRoot: path.dirname(document.uri.fsPath),
+      sessionId,
+    });
   }
 
   async backupCustomDocument(
@@ -331,14 +398,16 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
   ): Promise<void> {
     const canvasDir = path.dirname(document.uri.fsPath);
     switch (msg.type) {
-      case 'ready':
-        webview.postMessage({ type: 'init', data: document.data, workspaceRoot: canvasDir });
+      case 'ready': {
+        const sessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
+        webview.postMessage({ type: 'init', data: document.data, workspaceRoot: canvasDir, sessionId });
         webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
         webview.postMessage({ type: 'toolDefs', tools: this._registry.getAll() });
         webview.postMessage({ type: 'nodeDefs', defs: this._nodeRegistry.getAll() });
-        webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
+        webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir), sessionId });
         await this._postPetBootstrap(webview, canvasDir);
         break;
+      }
 
       case 'requestSettingsSnapshot':
         webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
@@ -818,6 +887,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
 
       case 'runBlueprint': {
         const nodeId = msg['nodeId'] as string;
+        const resumeFromFailure = msg['resumeFromFailure'] === true;
         if (!nodeId) { break; }
         const canvas = await this._prepareExecutionCanvas(msg, document);
         const targetNode = canvas.nodes.find(node => node.id === nodeId);
@@ -829,7 +899,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           webview.postMessage({ type: 'error', message: '蓝图运行入口只能绑定到正式蓝图实例容器。' });
           break;
         }
-        runBlueprintInstance(targetNode.id, canvas, document.uri, webview).catch(e => {
+        runBlueprintInstance(targetNode.id, canvas, document.uri, webview, { resumeFromFailure }).catch(e => {
           webview.postMessage({ type: 'error', message: `蓝图执行失败: ${String(e)}` });
         });
         break;
@@ -854,6 +924,49 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         break;
       }
 
+      case 'createBlueprintDraftFromInstance': {
+        const nodeId = typeof msg['nodeId'] === 'string' ? msg['nodeId'].trim() : '';
+        if (!nodeId) {
+          webview.postMessage({ type: 'toastError', message: '蓝图实例无效，无法基于当前实例生成蓝图草稿。' });
+          break;
+        }
+        try {
+          const canvas = (msg['canvas'] as import('../core/canvas-model').CanvasFile | undefined) ?? document.data;
+          const { buildBlueprintDraftFromInstance } = await import('../blueprint/blueprint-builder');
+          const draft = buildBlueprintDraftFromInstance(nodeId, canvas);
+          const entries = await listBlueprintDefinitions(canvasDir);
+          draft.title = buildBlueprintCopyTitle(draft.title, new Set(entries.map(entry => entry.title.trim())));
+          webview.postMessage({ type: 'blueprintDraftCreated', draft });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `基于当前实例创建蓝图草稿失败: ${String(e)}` });
+        }
+        break;
+      }
+
+      case 'editBlueprintDraft': {
+        const filePath = typeof msg['filePath'] === 'string' ? msg['filePath'].trim() : '';
+        if (!filePath) {
+          webview.postMessage({ type: 'toastError', message: '蓝图文件路径无效，无法进入编辑。' });
+          break;
+        }
+        try {
+          const definition = await readBlueprintDefinition(filePath);
+          webview.postMessage({
+            type: 'blueprintDraftCreated',
+            draft: {
+              ...definition,
+              source_node_ids: [],
+              issues: [],
+              source_file_path: filePath,
+              source_mode: 'edit',
+            },
+          });
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `读取蓝图失败: ${String(e)}` });
+        }
+        break;
+      }
+
       case 'saveBlueprintDraft': {
         const draft = msg['draft'];
         if (!draft || typeof draft !== 'object') {
@@ -861,12 +974,20 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           break;
         }
         try {
+          const overwriteFilePath = typeof (draft as { source_file_path?: unknown }).source_file_path === 'string'
+            ? (draft as { source_file_path: string }).source_file_path
+            : undefined;
           const entry = await saveBlueprintDefinition(
             canvasDir,
             draft as import('../blueprint/blueprint-types').BlueprintDefinition,
+            overwriteFilePath,
           );
           webview.postMessage({ type: 'blueprintDraftSaved', entry });
-          webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
+          webview.postMessage({
+            type: 'blueprintIndex',
+            entries: await listBlueprintDefinitions(canvasDir),
+            sessionId: CanvasEditorProvider.getCanvasSession(document.uri.fsPath),
+          });
         } catch (e) {
           webview.postMessage({ type: 'toastError', message: `保存蓝图失败: ${String(e)}` });
         }
@@ -875,7 +996,14 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
 
       case 'requestBlueprintIndex': {
         try {
-          webview.postMessage({ type: 'blueprintIndex', entries: await listBlueprintDefinitions(canvasDir) });
+          const requestSessionId = typeof msg['sessionId'] === 'number'
+            ? msg['sessionId']
+            : CanvasEditorProvider.getCanvasSession(document.uri.fsPath);
+          webview.postMessage({
+            type: 'blueprintIndex',
+            entries: await listBlueprintDefinitions(canvasDir),
+            sessionId: requestSessionId,
+          });
         } catch (e) {
           webview.postMessage({ type: 'toastError', message: `读取蓝图库失败: ${String(e)}` });
         }
@@ -886,14 +1014,29 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         const filePaths = Array.isArray(msg['filePaths'])
           ? (msg['filePaths'] as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
           : [];
+        const requestSessionId = typeof msg['sessionId'] === 'number' ? msg['sessionId'] : undefined;
         if (filePaths.length === 0) { break; }
         try {
           const uniquePaths = Array.from(new Set(filePaths));
-          const definitions = await Promise.all(uniquePaths.map(async filePath => ({
-            filePath,
-            definition: await readBlueprintDefinition(filePath),
-          })));
-          webview.postMessage({ type: 'blueprintDefinitions', definitions });
+          const definitions: Array<{ filePath: string; definition: import('../blueprint/blueprint-types').BlueprintDefinition }> = [];
+          const failedPaths: string[] = [];
+          for (const filePath of uniquePaths) {
+            try {
+              definitions.push({
+                filePath,
+                definition: await readBlueprintDefinition(filePath),
+              });
+            } catch {
+              failedPaths.push(filePath);
+            }
+          }
+          webview.postMessage({
+            type: 'blueprintDefinitions',
+            definitions,
+            failedPaths,
+            sessionId: requestSessionId,
+          });
+          break;
         } catch (e) {
           webview.postMessage({ type: 'toastError', message: `读取蓝图定义失败: ${String(e)}` });
         }
@@ -924,6 +1067,73 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         break;
       }
 
+      case 'deleteBlueprint': {
+        const filePath = msg['filePath'];
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+          webview.postMessage({ type: 'toastError', message: '蓝图文件路径无效，无法删除。' });
+          break;
+        }
+        try {
+          const blueprintDir = path.resolve(canvasDir, 'blueprints');
+          const normalizedFilePath = path.resolve(filePath);
+          const relativePath = path.relative(blueprintDir, normalizedFilePath);
+          const isInsideBlueprintDir =
+            relativePath.length > 0 &&
+            !relativePath.startsWith('..') &&
+            !path.isAbsolute(relativePath);
+          if (!isInsideBlueprintDir || !normalizedFilePath.endsWith('.blueprint.json')) {
+            throw new Error('只能删除当前画布 blueprints/ 目录下的蓝图文件。');
+          }
+
+          const entries = await listBlueprintDefinitions(canvasDir);
+          const entry = entries.find(item => path.resolve(item.file_path) === normalizedFilePath);
+          let fileExists = false;
+          try {
+            const stat = await vscode.workspace.fs.stat(vscode.Uri.file(normalizedFilePath));
+            fileExists = stat.type === vscode.FileType.File;
+          } catch {
+            fileExists = false;
+          }
+          if (!entry && !fileExists) {
+            webview.postMessage({
+              type: 'blueprintIndex',
+              entries,
+              sessionId: CanvasEditorProvider.getCanvasSession(document.uri.fsPath),
+            });
+            vscode.window.showInformationMessage(`蓝图文件已不存在：${path.basename(normalizedFilePath)}`);
+            break;
+          }
+
+          const linkedInstanceCount = document.data.nodes.filter(node =>
+            node.node_type === 'blueprint' &&
+            typeof node.meta?.blueprint_file_path === 'string' &&
+            path.resolve(node.meta.blueprint_file_path) === normalizedFilePath
+          ).length;
+
+          const detail = linkedInstanceCount > 0
+            ? `当前画布中还有 ${linkedInstanceCount} 个蓝图实例引用该文件。删除后，这些旧实例会保留在画布里，但后续无法再从该蓝图文件恢复定义。`
+            : `这会删除 blueprints/${entry?.file_name ?? path.basename(normalizedFilePath)}。`;
+          const displayTitle = entry?.title ?? path.basename(normalizedFilePath, '.blueprint.json');
+          const confirm = await vscode.window.showWarningMessage(
+            `删除蓝图“${displayTitle}”？`,
+            { modal: false, detail },
+            '删除',
+          );
+          if (confirm !== '删除') { break; }
+
+          await deleteBlueprintDefinition(normalizedFilePath);
+          webview.postMessage({
+            type: 'blueprintIndex',
+            entries: await listBlueprintDefinitions(canvasDir),
+            sessionId: CanvasEditorProvider.getCanvasSession(document.uri.fsPath),
+          });
+          vscode.window.showInformationMessage(`已删除蓝图：${displayTitle}`);
+        } catch (e) {
+          webview.postMessage({ type: 'toastError', message: `删除蓝图失败: ${String(e)}` });
+        }
+        break;
+      }
+
       case 'pipelinePause': {
         const pipelineId = msg['pipelineId'] as string;
         if (pipelineId) { pausePipeline(pipelineId); }
@@ -945,34 +1155,93 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'requestOutputHistory': {
         const nodeId = msg['nodeId'] as string;
         const filePath = msg['filePath'] as string;
+        const blueprintInstanceId = msg['blueprintInstanceId'] as string | undefined;
+        const blueprintSlotId = msg['blueprintSlotId'] as string | undefined;
+        const blueprintSlotTitle = msg['blueprintSlotTitle'] as string | undefined;
         if (!nodeId || !filePath) { break; }
         try {
           const aiDir = await ensureAiOutputDir(document.uri);
+          const currentNode = document.data.nodes.find(node => node.id === nodeId);
+          const currentNodeType = inferOutputHistoryNodeType(filePath, currentNode?.node_type);
+          const currentFamilyKey = extractOutputHistoryFamilyKey(filePath);
+          const slotBoundNodes = blueprintInstanceId && blueprintSlotId
+            ? document.data.nodes.filter(node =>
+              node.meta?.blueprint_bound_instance_id === blueprintInstanceId &&
+              node.meta?.blueprint_bound_slot_kind === 'output' &&
+              node.meta?.blueprint_bound_slot_id === blueprintSlotId &&
+              !!node.file_path
+            )
+            : [];
+          const knownFamilyKeys = new Set<string>();
+          if (currentFamilyKey) {
+            knownFamilyKeys.add(currentFamilyKey);
+          }
+          for (const node of slotBoundNodes) {
+            const familyKey = extractOutputHistoryFamilyKey(node.file_path!);
+            if (familyKey) {
+              knownFamilyKeys.add(familyKey);
+            }
+          }
           const entries = await vscode.workspace.fs.readDirectory(aiDir);
-          const mdFiles = entries
-            .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.md'))
+          const candidateFiles = entries
+            .filter(([, type]) => type === vscode.FileType.File)
             .map(([name]) => name)
-            .sort()
-            .reverse(); // newest first
+            .filter(name => inferOutputHistoryNodeType(name) === currentNodeType);
+
+          const familyMatchedFiles = knownFamilyKeys.size > 0
+            ? candidateFiles.filter(name => {
+              const familyKey = extractOutputHistoryFamilyKey(name);
+              return !!familyKey && knownFamilyKeys.has(familyKey);
+            })
+            : [];
+          const selectedFiles = (familyMatchedFiles.length > 0 ? familyMatchedFiles : candidateFiles)
+            .sort((a, b) => {
+              const sortKeyDiff = extractOutputHistorySortKey(b).localeCompare(extractOutputHistorySortKey(a));
+              if (sortKeyDiff !== 0) { return sortKeyDiff; }
+              return b.localeCompare(a);
+            });
 
           type HistEntry = import('../core/canvas-model').OutputHistoryEntry;
           const historyEntries: HistEntry[] = [];
-          for (const name of mdFiles) {
+          let previousMarked = false;
+          for (const name of selectedFiles) {
             const fileUri = vscode.Uri.joinPath(aiDir, name);
             const relFilePath = toRelPath(fileUri.fsPath, document.uri);
             let preview = '';
             try {
-              const bytes = await vscode.workspace.fs.readFile(fileUri);
-              preview = Buffer.from(bytes).toString('utf-8').slice(0, 200).replace(/\n/g, ' ');
+              const result = await extractPreviewWithMeta(fileUri, currentNodeType);
+              preview = result.preview.slice(0, 200).replace(/\n/g, ' ');
             } catch { /* skip unreadable */ }
+            const sourceNode = document.data.nodes.find(node => node.file_path === relFilePath);
             historyEntries.push({
               filePath: relFilePath,
               filename: name,
+              nodeType: currentNodeType,
               preview,
               isCurrent: relFilePath === filePath,
+              isPrevious: relFilePath !== filePath && !previousMarked,
+              versionRole: relFilePath === filePath
+                ? 'current'
+                : (!previousMarked ? 'previous' : 'history'),
+              sourceNodeId: sourceNode?.id,
+              sourceNodeTitle: sourceNode?.title,
             });
+            if (relFilePath !== filePath && !previousMarked) {
+              previousMarked = true;
+            }
           }
-          webview.postMessage({ type: 'outputHistory', nodeId, entries: historyEntries });
+          webview.postMessage({
+            type: 'outputHistory',
+            nodeId,
+            entries: historyEntries,
+            scope: blueprintInstanceId && blueprintSlotId ? 'blueprint_slot' : 'node',
+            title: blueprintInstanceId && blueprintSlotId
+              ? (blueprintSlotTitle ? `输出槽位历史 · ${blueprintSlotTitle}` : '输出槽位历史')
+              : '生成历史',
+            subtitle: blueprintInstanceId && blueprintSlotId
+              ? '按当前槽位的输出家族聚合；当前版本仍以槽位当前输出为准。'
+              : '按当前输出节点的结果家族聚合。',
+          });
         } catch (e) {
           webview.postMessage({ type: 'error', message: `读取历史失败: ${String(e)}` });
         }
@@ -988,10 +1257,11 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           const { toAbsPath } = await import('../core/storage');
           const absPath = toAbsPath(restoreFilePath, document.uri);
           const fileUri = vscode.Uri.file(absPath);
+          const restoreNodeType = inferOutputHistoryNodeType(restoreFilePath, msg['nodeType'] as string | undefined);
           let preview = '';
           let metaPatch = {};
           try {
-            const result = await extractPreviewWithMeta(fileUri, 'ai_output');
+            const result = await extractPreviewWithMeta(fileUri, restoreNodeType);
             preview = result.preview;
             metaPatch = {
               ai_readable_chars: result.ai_readable_chars,
@@ -1009,12 +1279,16 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
             : 200;
           const newNode: CanvasNode = {
             id: uuid(),
-            node_type: 'ai_output',
-            title: path.basename(restoreFilePath, '.md') + '（历史版本）',
+            node_type: restoreNodeType,
+            title: `${path.basename(restoreFilePath, path.extname(restoreFilePath))}（历史版本）`,
             position: { x: 100, y: maxY + 40 },
-            size: DEFAULT_SIZES['ai_output'],
+            size: DEFAULT_SIZES[restoreNodeType],
             file_path: restoreFilePath,
-            meta: { content_preview: preview, ...metaPatch },
+            meta: {
+              ...(restoreNodeType === 'image' ? { display_mode: 'file' as const } : {}),
+              ...(preview ? { content_preview: preview } : {}),
+              ...metaPatch,
+            },
           };
 
           canvas.nodes.push(newNode);
@@ -1199,7 +1473,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         document.data.nodes.push(newFnNode);
         document.suppressNextRevert = true;
         await writeCanvas(document.uri, document.data);
-        webview.postMessage({ type: 'init', data: document.data, workspaceRoot: canvasDir });
+        const sessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
+        webview.postMessage({ type: 'init', data: document.data, workspaceRoot: canvasDir, sessionId });
         break;
       }
 
@@ -1269,7 +1544,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     const pet = vscode.workspace.getConfiguration('researchSpace.pet');
     return {
       globalProvider:           ai.get<string>('provider', 'copilot'),
-      copilotModel:             ai.get<string>('copilotModel', ''),
+      copilotModel:             ai.get<string>('copilotModel', 'gpt-4.1') || 'gpt-4.1',
       anthropicApiKey:          ai.get<string>('anthropicApiKey', ''),
       anthropicModel:           ai.get<string>('anthropicModel', 'claude-sonnet-4-6'),
       ollamaBaseUrl:            ai.get<string>('ollamaBaseUrl', 'http://localhost:11434'),

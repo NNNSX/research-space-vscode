@@ -94,6 +94,8 @@ export interface BlueprintDraftIssue {
 export interface BlueprintDraft extends BlueprintDefinition {
   source_node_ids: string[];
   issues: BlueprintDraftIssue[];
+  source_file_path?: string;
+  source_mode?: 'create' | 'edit';
 }
 
 export interface BlueprintDraftSummary {

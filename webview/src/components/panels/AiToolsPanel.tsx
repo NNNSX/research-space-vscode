@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
-import { postMessage } from '../../bridge';
 import type { RuntimeToolDef } from '../../../../src/ai/tool-registry';
 import type { BlueprintRegistryEntry } from '../../../../src/blueprint/blueprint-registry';
 
@@ -119,6 +118,11 @@ function BlueprintRow({ entry }: { entry: BlueprintRegistryEntry }) {
     e.dataTransfer.effectAllowed = 'copy';
   };
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    postMessage({ type: 'deleteBlueprint', filePath: entry.file_path });
+  };
+
   return (
     <div
       draggable
@@ -146,6 +150,16 @@ function BlueprintRow({ entry }: { entry: BlueprintRegistryEntry }) {
         </div>
       </div>
       <button
+        title="编辑蓝图"
+        onClick={e => {
+          e.stopPropagation();
+          postMessage({ type: 'editBlueprintDraft', filePath: entry.file_path });
+        }}
+        style={actionBtnStyle}
+      >
+        ✎
+      </button>
+      <button
         title="直接加载到画布"
         onClick={e => {
           e.stopPropagation();
@@ -154,6 +168,13 @@ function BlueprintRow({ entry }: { entry: BlueprintRegistryEntry }) {
         style={actionBtnStyle}
       >
         +
+      </button>
+      <button
+        title="删除蓝图"
+        onClick={handleDelete}
+        style={{ ...actionBtnStyle, color: 'var(--vscode-errorForeground, #f48771)' }}
+      >
+        ✕
       </button>
     </div>
   );

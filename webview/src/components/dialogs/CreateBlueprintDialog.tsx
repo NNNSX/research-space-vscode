@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import type { BlueprintDataNodeDef, BlueprintDraft, BlueprintSlotDef } from '../../../../src/blueprint/blueprint-types';
 import type { BlueprintRegistryEntry } from '../../../../src/blueprint/blueprint-registry';
 import { getBlueprintDraftSummary } from '../../../../src/blueprint/blueprint-types';
+import { optimizeBlueprintDefinitionLayout } from '../../../../src/blueprint/blueprint-layout';
 
 interface CreateBlueprintDialogProps {
   draft: BlueprintDraft;
@@ -16,6 +17,17 @@ function patchSlot(
   patch: Partial<BlueprintSlotDef>,
 ): BlueprintSlotDef[] {
   return slots.map(slot => slot.id === slotId ? { ...slot, ...patch } : slot);
+}
+
+function buildBlueprintCopyTitle(title: string, existingTitles: Set<string>): string {
+  const baseTitle = (title.trim() || '新蓝图').replace(/\s*-\s*副本(?:\s+\d+)?$/, '');
+  const firstCandidate = `${baseTitle} - 副本`;
+  if (!existingTitles.has(firstCandidate)) { return firstCandidate; }
+  let index = 2;
+  while (existingTitles.has(`${baseTitle} - 副本 ${index}`)) {
+    index += 1;
+  }
+  return `${baseTitle} - 副本 ${index}`;
 }
 
 const sectionTitleStyle: React.CSSProperties = {
@@ -53,11 +65,21 @@ export function CreateBlueprintDialog({
   onClose,
 }: CreateBlueprintDialogProps) {
   const [workingDraft, setWorkingDraft] = useState<BlueprintDraft>(draft);
+  const [optimizeLayoutOnSave, setOptimizeLayoutOnSave] = useState(true);
+  const backdropMouseDownRef = useRef(false);
   const summary = useMemo(() => getBlueprintDraftSummary(workingDraft), [workingDraft]);
-  const duplicateName = existingBlueprints.some(entry => entry.title.trim() === workingDraft.title.trim());
+  const existingTitles = useMemo(
+    () => new Set(existingBlueprints.map(entry => entry.title.trim())),
+    [existingBlueprints],
+  );
+  const duplicateName = existingBlueprints.some(entry =>
+    entry.title.trim() === workingDraft.title.trim() &&
+    entry.file_path !== workingDraft.source_file_path
+  );
   const titleError = !workingDraft.title.trim()
     ? '蓝图名称不能为空。'
     : (duplicateName ? '已存在同名蓝图，请先改名。' : '');
+  const isEditingExistingBlueprint = workingDraft.source_mode === 'edit' && !!workingDraft.source_file_path;
 
   const setSlotField = (
     slotId: string,
@@ -100,7 +122,13 @@ export function CreateBlueprintDialog({
       <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <span style={badgeStyle}>{slot.kind === 'input' ? '输入占位' : slot.kind === 'output' ? '输出占位' : '中间语义'}</span>
         <span style={badgeStyle}>{slot.placeholder_style === 'input_placeholder' ? '输入样式' : '输出样式'}</span>
-        <span style={badgeStyle}>{slot.replacement_mode === 'replace_with_bound_node' ? '绑定后替换' : '通过连线附着'}</span>
+        <span style={badgeStyle}>
+          {slot.kind === 'input'
+            ? '通过连线传递'
+            : slot.replacement_mode === 'replace_with_bound_node'
+              ? '运行后回填'
+              : '通过连线附着'}
+        </span>
       </div>
       {slot.binding_hint && (
         <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
@@ -168,6 +196,20 @@ export function CreateBlueprintDialog({
     </section>
   );
 
+  const handlePrimarySave = () => {
+    onSave(optimizeLayoutOnSave ? optimizeBlueprintDefinitionLayout(workingDraft) : workingDraft);
+  };
+
+  const handleSaveAsNew = () => {
+    const copiedDraft: BlueprintDraft = {
+      ...workingDraft,
+      title: buildBlueprintCopyTitle(workingDraft.title, existingTitles),
+      source_file_path: undefined,
+      source_mode: 'create',
+    };
+    onSave(optimizeLayoutOnSave ? optimizeBlueprintDefinitionLayout(copiedDraft) : copiedDraft);
+  };
+
   return (
     <div
       style={{
@@ -179,13 +221,20 @@ export function CreateBlueprintDialog({
         justifyContent: 'center',
         background: 'rgba(0, 0, 0, 0.48)',
       }}
+      onMouseDown={event => {
+        backdropMouseDownRef.current = event.target === event.currentTarget;
+      }}
       onClick={event => {
-        if (event.target === event.currentTarget) {
+        if (backdropMouseDownRef.current && event.target === event.currentTarget) {
           onClose();
         }
+        backdropMouseDownRef.current = false;
       }}
     >
       <div
+        onMouseDown={() => {
+          backdropMouseDownRef.current = false;
+        }}
         style={{
           width: 'min(960px, calc(100vw - 40px))',
           maxHeight: 'min(820px, calc(100vh - 40px))',
@@ -203,10 +252,12 @@ export function CreateBlueprintDialog({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--vscode-foreground)' }}>
-              创建蓝图
+              {isEditingExistingBlueprint ? '编辑蓝图' : '创建蓝图'}
             </div>
             <div style={{ marginTop: 4, fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
-              当前蓝图会保存原始 pipeline 结构信息，区分输入/输出占位和保留的内部数据节点；保存后会写入工作区 `blueprints/` 目录。
+              {isEditingExistingBlueprint
+                ? '当前正在编辑已保存蓝图。保存后会覆盖原蓝图；如果改名，会同步改成新的蓝图文件名。'
+                : '当前蓝图会保存原始 pipeline 结构信息，区分输入/输出占位和保留的内部数据节点；保存后会写入工作区 `blueprints/` 目录。'}
             </div>
           </div>
           <button
@@ -260,6 +311,36 @@ export function CreateBlueprintDialog({
             onChange={event => setWorkingDraft(current => ({ ...current, description: event.target.value }))}
             style={{ ...inputStyle, minHeight: 84, resize: 'vertical' }}
           />
+        </section>
+
+        <section
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid var(--vscode-panel-border)',
+            background: 'color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-button-secondaryBackground) 8%)',
+          }}
+        >
+          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={optimizeLayoutOnSave}
+              onChange={event => setOptimizeLayoutOnSave(event.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--vscode-foreground)' }}>
+                保存时优化内部布局
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.55 }}>
+                默认开启。保存蓝图时会自动整理输入占位、功能节点、中间结果和输出占位的排布，
+                让实例化后的 pipeline 更规整；不会改动你当前画布上的原始节点位置。
+              </span>
+            </span>
+          </label>
         </section>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -325,7 +406,7 @@ export function CreateBlueprintDialog({
                   lineHeight: 1.6,
                 }}
               >
-                实例化时会恢复原始功能节点与内部数据节点结构；输入槽位和输出槽位将优先作为占位框存在，后续绑定真实节点后再替换或附着。
+                实例化时会恢复原始功能节点与内部数据节点结构；输入槽位和输出槽位会先以占位框存在，输入通过连线传递，输出在运行后回填。
               </div>
             </section>
           </div>
@@ -350,8 +431,25 @@ export function CreateBlueprintDialog({
             >
               取消
             </button>
+            {isEditingExistingBlueprint && (
+              <button
+                onClick={handleSaveAsNew}
+                style={{
+                  background: 'var(--vscode-button-secondaryBackground)',
+                  color: 'var(--vscode-button-secondaryForeground)',
+                  border: '1px solid var(--vscode-panel-border)',
+                  borderRadius: 6,
+                  padding: '7px 14px',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                另存为新蓝图
+              </button>
+            )}
             <button
-              onClick={() => onSave(workingDraft)}
+              onClick={handlePrimarySave}
               disabled={!!titleError}
               style={{
                 background: titleError ? 'var(--vscode-button-secondaryBackground)' : 'var(--vscode-button-background)',
@@ -364,7 +462,7 @@ export function CreateBlueprintDialog({
                 fontWeight: 700,
               }}
             >
-              保存蓝图
+              {isEditingExistingBlueprint ? '保存修改' : '保存蓝图'}
             </button>
           </div>
         </div>

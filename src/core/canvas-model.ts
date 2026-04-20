@@ -139,6 +139,9 @@ export interface NodeMeta {
   blueprint_placeholder_allow_multiple?: boolean;
   blueprint_placeholder_replacement_mode?: BlueprintReplacementMode;
   blueprint_placeholder_hint?: string;
+  blueprint_runtime_hidden?: boolean;
+  blueprint_definition_missing?: boolean;
+  blueprint_definition_missing_message?: string;
   blueprint_last_run_status?: BlueprintLastRunStatus;
   blueprint_last_run_summary?: string;
   blueprint_last_run_finished_at?: string;
@@ -151,6 +154,7 @@ export interface NodeMeta {
   blueprint_last_run_warning_count?: number;
   blueprint_last_issue_node_id?: string;
   blueprint_last_issue_node_title?: string;
+  blueprint_run_history?: BlueprintRunHistoryEntry[];
 }
 
 // ── Canvas node ─────────────────────────────────────────────────────────────
@@ -230,8 +234,48 @@ export interface JsonToolDef {
 export interface OutputHistoryEntry {
   filePath: string;    // relative path (same format as node.file_path)
   filename: string;    // basename for display
+  nodeType: 'ai_output' | 'image' | 'audio' | 'video';
   preview: string;     // first ~200 chars of the file
   isCurrent: boolean;  // true if this matches the current node's file_path
+  isPrevious?: boolean; // true if this is the latest non-current version
+  versionRole?: 'current' | 'previous' | 'history';
+  sourceNodeId?: string;
+  sourceNodeTitle?: string;
+}
+
+export interface OutputHistoryPayload {
+  nodeId: string;
+  entries: OutputHistoryEntry[];
+  scope?: 'node' | 'blueprint_slot';
+  title?: string;
+  subtitle?: string;
+}
+
+export interface BlueprintRunHistoryEntry {
+  id: string;
+  finishedAt: string;
+  status: BlueprintLastRunStatus;
+  summary: string;
+  totalNodes: number;
+  completedNodes: number;
+  failedNodes: number;
+  skippedNodes: number;
+  warningCount: number;
+  issueNodeId?: string;
+  issueNodeTitle?: string;
+  mode?: 'full' | 'resume';
+  reusedCachedNodeCount?: number;
+}
+
+export interface PipelineStartPayload {
+  pipelineId: string;
+  triggerNodeId: string;
+  nodeIds: string[];
+  totalNodes: number;
+  initialNodeStatuses?: Record<string, 'waiting' | 'running' | 'done' | 'failed' | 'skipped'>;
+  initialCompletedNodes?: number;
+  runMode?: 'full' | 'resume';
+  reusedCachedNodeCount?: number;
 }
 
 export interface PetChatMessage {
@@ -405,16 +449,25 @@ export type WebviewMessage =
   | { type: 'exportTool'; toolId: string }
   | { type: 'deleteTool'; toolId: string }
   | { type: 'createFunctionNode'; toolId: string; title?: string; paramValues?: Record<string, unknown> }
-  | { type: 'requestOutputHistory'; nodeId: string; filePath: string }
+  | {
+      type: 'requestOutputHistory';
+      nodeId: string;
+      filePath: string;
+      blueprintInstanceId?: string;
+      blueprintSlotId?: string;
+      blueprintSlotTitle?: string;
+    }
   | { type: 'restoreOutputVersion'; filePath: string }
   | { type: 'requestFileContent'; filePath: string; requestId: string }
   | { type: 'previewFile'; filePath: string }
   | { type: 'runPipeline'; triggerNodeId: string; canvas?: CanvasFile }
-  | { type: 'runBlueprint'; nodeId: string; canvas?: CanvasFile }
+  | { type: 'runBlueprint'; nodeId: string; canvas?: CanvasFile; resumeFromFailure?: boolean }
   | { type: 'createBlueprintDraft'; selectedNodeIds: string[]; canvas?: CanvasFile }
-  | { type: 'saveBlueprintDraft'; draft: BlueprintDefinition }
-  | { type: 'requestBlueprintIndex' }
-  | { type: 'requestBlueprintDefinitions'; filePaths: string[] }
+  | { type: 'createBlueprintDraftFromInstance'; nodeId: string; canvas?: CanvasFile }
+  | { type: 'editBlueprintDraft'; filePath: string }
+  | { type: 'saveBlueprintDraft'; draft: BlueprintDefinition & { source_file_path?: string } }
+  | { type: 'requestBlueprintIndex'; sessionId?: number }
+  | { type: 'requestBlueprintDefinitions'; filePaths: string[]; sessionId?: number }
   | { type: 'instantiateBlueprint'; filePath: string; position?: { x: number; y: number } }
   | { type: 'pipelinePause'; pipelineId: string }
   | { type: 'pipelineResume'; pipelineId: string }
@@ -432,7 +485,7 @@ export type WebviewMessage =
     };
 
 export type ExtensionMessage =
-  | { type: 'init'; data: CanvasFile; workspaceRoot: string }
+  | { type: 'init'; data: CanvasFile; workspaceRoot: string; sessionId?: number }
   | { type: 'canvasSaveStatus'; status: 'saved' | 'error'; savedAt?: number; message?: string; mode?: 'auto' | 'manual'; requestId?: number }
   | {
       type: 'petInit';
@@ -459,16 +512,22 @@ export type ExtensionMessage =
   | { type: 'imageUri'; filePath: string; uri: string }
   | { type: 'modelList'; provider: string; models: ModelInfo[] }
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
-  | { type: 'outputHistory'; nodeId: string; entries: OutputHistoryEntry[] }
+  | ({ type: 'pipelineStarted' } & PipelineStartPayload)
+  | ({ type: 'outputHistory' } & OutputHistoryPayload)
   | { type: 'fileContent'; requestId: string; content: string; language?: string }
   | { type: 'stagingNodeMaterialized'; sourceNodeId: string; node: CanvasNode; position: { x: number; y: number } }
   | { type: 'stagingNodeMaterializeFailed'; sourceNodeId: string; message: string }
   | { type: 'blueprintDraftCreated'; draft: BlueprintDraft }
   | { type: 'blueprintDraftSaved'; entry: BlueprintRegistryEntry }
-  | { type: 'blueprintIndex'; entries: BlueprintRegistryEntry[] }
-  | { type: 'blueprintDefinitions'; definitions: Array<{ filePath: string; definition: BlueprintDefinition }> }
+  | { type: 'blueprintIndex'; entries: BlueprintRegistryEntry[]; sessionId?: number }
+  | {
+      type: 'blueprintDefinitions';
+      definitions: Array<{ filePath: string; definition: BlueprintDefinition }>;
+      failedPaths?: string[];
+      sessionId?: number;
+    }
   | { type: 'blueprintInstantiated'; entry: BlueprintRegistryEntry; definition: BlueprintDefinition; position?: { x: number; y: number } }
-  | { type: 'blueprintRunRejected'; containerNodeId: string; message: string }
+  | { type: 'blueprintRunRejected'; containerNodeId: string; message: string; runMode?: 'full' | 'resume'; reusedCachedNodeCount?: number }
   | { type: 'error'; message: string }
   | { type: 'pipelineStarted'; pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number }
   | { type: 'pipelineNodeStart'; pipelineId: string; nodeId: string }

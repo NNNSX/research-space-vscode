@@ -103,7 +103,7 @@ function ModelSelect({ providerId, value, onChange }: {
       : '自动（当前未配置具体模型）',
   });
   const options: SearchableSelectOption[] = [
-    { value: '', label: autoLabel, keywords: [providerId, '自动', '默认'] },
+    ...(providerId === 'copilot' ? [] : [{ value: '', label: autoLabel, keywords: [providerId, '自动', '默认'] }]),
     ...(models ?? []).map(m => ({
       value: m.id,
       label: m.id,

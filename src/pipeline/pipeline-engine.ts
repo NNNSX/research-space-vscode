@@ -16,6 +16,33 @@ export interface PipelinePlan {
   dependencyNodeIdsByNode: Record<string, string[]>;
 }
 
+function inferImplicitProducerDependencies(
+  targetNodeId: string,
+  nodePlan: FunctionExecutionPlan,
+  pipelineNodeSet: Set<string>,
+  nodeMap: Map<string, CanvasNode>,
+  allEdges: CanvasEdge[],
+): string[] {
+  const producerIds = new Set<string>();
+
+  for (const dataSourceId of nodePlan.directDataSourceIds) {
+    const dataSourceNode = nodeMap.get(dataSourceId);
+    if (!dataSourceNode || isFunctionNode(dataSourceNode)) { continue; }
+
+    for (const edge of allEdges) {
+      if (edge.target !== dataSourceId) { continue; }
+      if (edge.edge_type !== 'ai_generated' && edge.edge_type !== 'data_flow') { continue; }
+      if (edge.source === targetNodeId) { continue; }
+      if (!pipelineNodeSet.has(edge.source)) { continue; }
+      const producerNode = nodeMap.get(edge.source);
+      if (!producerNode || !isFunctionNode(producerNode)) { continue; }
+      producerIds.add(edge.source);
+    }
+  }
+
+  return Array.from(producerIds);
+}
+
 export function buildPipelinePlanForNodeSet(
   pipelineNodeIdsInput: string[],
   allNodes: CanvasNode[],
@@ -52,7 +79,10 @@ export function buildPipelinePlanForNodeSet(
       return { error: `节点「${nodeMap.get(nodeId)?.title ?? nodeId}」执行计划构建失败：${nodePlan.error}` };
     }
     nodeExecutionPlans[nodeId] = nodePlan;
-    dependencyNodeIdsByNode[nodeId] = nodePlan.directPipelineSourceIds.filter(sourceId => pipelineNodeSet.has(sourceId));
+    dependencyNodeIdsByNode[nodeId] = Array.from(new Set([
+      ...nodePlan.directPipelineSourceIds.filter(sourceId => pipelineNodeSet.has(sourceId)),
+      ...inferImplicitProducerDependencies(nodeId, nodePlan, pipelineNodeSet, nodeMap, allEdges),
+    ]));
   }
 
   const pipelineEdges = allEdges.filter(
@@ -61,6 +91,21 @@ export function buildPipelinePlanForNodeSet(
       pipelineNodeSet.has(edge.target) &&
       edge.edge_type === 'pipeline_flow'
   );
+  const pipelineEdgeKeys = new Set(pipelineEdges.map(edge => `${edge.source}=>${edge.target}`));
+  const inferredPipelineEdges: CanvasEdge[] = [];
+  for (const [targetId, sourceIds] of Object.entries(dependencyNodeIdsByNode)) {
+    for (const sourceId of sourceIds) {
+      const key = `${sourceId}=>${targetId}`;
+      if (pipelineEdgeKeys.has(key)) { continue; }
+      pipelineEdgeKeys.add(key);
+      inferredPipelineEdges.push({
+        id: `implicit:${sourceId}:${targetId}`,
+        source: sourceId,
+        target: targetId,
+        edge_type: 'pipeline_flow',
+      });
+    }
+  }
 
   const inDegree = new Map<string, number>();
   const adj = new Map<string, string[]>();
@@ -106,7 +151,7 @@ export function buildPipelinePlanForNodeSet(
   return {
     layers,
     pipelineNodeIds: orderedIds,
-    pipelineEdges,
+    pipelineEdges: [...pipelineEdges, ...inferredPipelineEdges],
     nodeExecutionPlans,
     dependencyNodeIdsByNode,
   };

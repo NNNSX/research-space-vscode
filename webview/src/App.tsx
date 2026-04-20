@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { ReactFlowProvider, useNodesInitialized } from '@xyflow/react';
 import { Canvas } from './components/canvas/Canvas';
+import { OutputHistoryModal } from './components/canvas/OutputHistoryModal';
 import { CreateBlueprintDialog } from './components/dialogs/CreateBlueprintDialog';
 import { PetWidget } from './components/pet/PetWidget';
 import { useCanvasStore } from './stores/canvas-store';
@@ -16,10 +17,16 @@ function formatLoadMetricMs(ms: number | null | undefined): string {
 
 // ── Error classification ─────────────────────────────────────────────────────
 
-type ErrorKind = 'api_key' | 'network' | 'file_missing' | 'generic';
+type ErrorKind = 'api_key' | 'network' | 'file_missing' | 'connection' | 'generic';
 
 function classifyError(msg: string): ErrorKind {
   const lower = msg.toLowerCase();
+  if (
+    lower.startsWith('连接失败') ||
+    lower.includes('槽位“') ||
+    lower.includes('蓝图输入占位') ||
+    lower.includes('请拖到蓝图输入槽位')
+  ) { return 'connection'; }
   if (
     lower.includes('api key') || lower.includes('apikey') ||
     lower.includes('未配置') && lower.includes('key') ||
@@ -30,7 +37,7 @@ function classifyError(msg: string): ErrorKind {
     lower.includes('fetch failed') || lower.includes('network') ||
     lower.includes('econnrefused') || lower.includes('enotfound') ||
     lower.includes('timeout') || lower.includes('502') ||
-    lower.includes('503') || lower.includes('连接') || lower.includes('网络')
+    lower.includes('503') || lower.includes('网络')
   ) { return 'network'; }
   if (
     lower.includes('file') && lower.includes('miss') ||
@@ -61,6 +68,13 @@ function buildBlueprintRunSummary(args: {
   return `${prefix}：${parts.join('，')}${args.issueNodeTitle ? `；问题节点：${args.issueNodeTitle}` : ''}`;
 }
 
+function appendBlueprintRunHistory(
+  previous: import('../../src/core/canvas-model').BlueprintRunHistoryEntry[] | undefined,
+  entry: import('../../src/core/canvas-model').BlueprintRunHistoryEntry,
+): import('../../src/core/canvas-model').BlueprintRunHistoryEntry[] {
+  return [entry, ...(previous ?? [])].slice(0, 8);
+}
+
 // ── ErrorToast component ─────────────────────────────────────────────────────
 
 function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
@@ -69,7 +83,7 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
 
   // Auto-dismiss after 12s for non-actionable errors
   useEffect(() => {
-    if (kind === 'generic') {
+    if (kind === 'generic' || kind === 'connection') {
       const t = setTimeout(onClose, 12000);
       return () => clearTimeout(t);
     }
@@ -99,6 +113,7 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
     api_key:      '⚠ API Key 错误',
     network:      '⚠ 网络错误',
     file_missing: '⚠ 文件缺失',
+    connection:   '⚠ 连接失败',
     generic:      '⚠ AI 错误',
   };
 
@@ -144,6 +159,11 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
       {kind === 'file_missing' && (
         <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>
           右键节点 → 从画布删除，然后重新导入该文件。
+        </div>
+      )}
+      {kind === 'connection' && (
+        <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>
+          请按槽位提示连接正确类型；若提示单绑定，请先移除旧连接。
         </div>
       )}
     </div>
@@ -276,16 +296,19 @@ export function App() {
   const setPipelinePaused = useCanvasStore(s => s.setPipelinePaused);
   const setPipelineCancelRequested = useCanvasStore(s => s.setPipelineCancelRequested);
   const addPipelineWarning = useCanvasStore(s => s.addPipelineWarning);
+  const setOutputHistory = useCanvasStore(s => s.setOutputHistory);
   const runAutosaveCheck = useCanvasStore(s => s.runAutosaveCheck);
   const markSaveSuccess = useCanvasStore(s => s.markSaveSuccess);
   const markSaveError = useCanvasStore(s => s.markSaveError);
   const blueprintDraft = useCanvasStore(s => s.blueprintDraft);
   const blueprintIndex = useCanvasStore(s => s.blueprintIndex);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
   const setBlueprintDraft = useCanvasStore(s => s.setBlueprintDraft);
   const clearBlueprintDraft = useCanvasStore(s => s.clearBlueprintDraft);
   const setBlueprintIndex = useCanvasStore(s => s.setBlueprintIndex);
   const migrateBlueprintDefinitions = useCanvasStore(s => s.migrateBlueprintDefinitions);
   const instantiateBlueprintDefinition = useCanvasStore(s => s.instantiateBlueprintDefinition);
+  const syncBlueprintDefinitionAvailability = useCanvasStore(s => s.syncBlueprintDefinitionAvailability);
   const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
   const lastInitialCanvasLoadStats = useCanvasStore(s => s.lastInitialCanvasLoadStats);
   const petInit = usePetStore(s => s.init);
@@ -298,6 +321,8 @@ export function App() {
   const nodePreviewFlushRafRef = useRef<number | null>(null);
   const fileContentBufferRef = useRef(new Map<string, string>());
   const fileContentFlushRafRef = useRef<number | null>(null);
+  const lastAutoRequestedBlueprintDefinitionsKeyRef = useRef('');
+  const activeCanvasSessionIdRef = useRef(0);
   const isAliveRef = useRef(true);
   const lastLoggedInitialLoadSessionRef = useRef<number | null>(null);
 
@@ -428,6 +453,30 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const blueprintFilePaths = Array.from(new Set(
+      (canvasFile?.nodes ?? [])
+        .filter(node => node.node_type === 'blueprint' && typeof node.meta?.blueprint_file_path === 'string' && node.meta.blueprint_file_path.length > 0)
+        .map(node => node.meta!.blueprint_file_path as string)
+    )).sort();
+    const nextKey = blueprintFilePaths.join('||');
+
+    if (!nextKey) {
+      lastAutoRequestedBlueprintDefinitionsKeyRef.current = '';
+      return;
+    }
+    if (lastAutoRequestedBlueprintDefinitionsKeyRef.current === nextKey) {
+      return;
+    }
+
+    lastAutoRequestedBlueprintDefinitionsKeyRef.current = nextKey;
+    postMessage({
+      type: 'requestBlueprintDefinitions',
+      filePaths: blueprintFilePaths,
+      sessionId: activeCanvasSessionIdRef.current,
+    });
+  }, [canvasFile]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       runAutosaveCheck();
     }, 3 * 60 * 1000);
@@ -511,6 +560,10 @@ export function App() {
       switch (msg.type) {
         case 'init':
           if (msg.data && msg.workspaceRoot !== undefined) {
+            activeCanvasSessionIdRef.current = typeof msg.sessionId === 'number'
+              ? msg.sessionId
+              : activeCanvasSessionIdRef.current + 1;
+            lastAutoRequestedBlueprintDefinitionsKeyRef.current = '';
             initCanvas(msg.data, msg.workspaceRoot);
           }
           break;
@@ -663,6 +716,13 @@ export function App() {
           }
           break;
         }
+        case 'outputHistory': {
+          const oh = msg as import('../../src/core/canvas-model').OutputHistoryPayload;
+          if (oh.nodeId && Array.isArray(oh.entries)) {
+            setOutputHistory(oh);
+          }
+          break;
+        }
         case 'blueprintDraftCreated':
           if (msg.draft) {
             setBlueprintDraft(msg.draft);
@@ -672,6 +732,9 @@ export function App() {
           clearBlueprintDraft();
           break;
         case 'blueprintIndex':
+          if (typeof msg.sessionId === 'number' && msg.sessionId !== activeCanvasSessionIdRef.current) {
+            break;
+          }
           if (Array.isArray(msg.entries)) {
             setBlueprintIndex(msg.entries);
             const blueprintFilePaths = Array.from(new Set(
@@ -680,15 +743,30 @@ export function App() {
                 .map(node => node.meta!.blueprint_file_path as string)
             ));
             if (blueprintFilePaths.length > 0) {
-              postMessage({ type: 'requestBlueprintDefinitions', filePaths: blueprintFilePaths });
+              postMessage({
+                type: 'requestBlueprintDefinitions',
+                filePaths: blueprintFilePaths,
+                sessionId: activeCanvasSessionIdRef.current,
+              });
             }
           }
           break;
         case 'blueprintDefinitions':
+          if (typeof msg.sessionId === 'number' && msg.sessionId !== activeCanvasSessionIdRef.current) {
+            break;
+          }
           if (Array.isArray(msg.definitions)) {
-            migrateBlueprintDefinitions(
-              msg.definitions as Array<{ filePath: string; definition: import('../../src/blueprint/blueprint-types').BlueprintDefinition }>
+            const definitions = msg.definitions as Array<{ filePath: string; definition: import('../../src/blueprint/blueprint-types').BlueprintDefinition }>;
+            migrateBlueprintDefinitions(definitions);
+            syncBlueprintDefinitionAvailability(
+              definitions.map(item => item.filePath),
+              Array.isArray((msg as { failedPaths?: unknown }).failedPaths)
+                ? ((msg as { failedPaths: unknown[] }).failedPaths.filter((item): item is string => typeof item === 'string' && item.length > 0))
+                : [],
             );
+            if (Array.isArray((msg as { failedPaths?: unknown }).failedPaths) && (msg as { failedPaths: unknown[] }).failedPaths.length > 0) {
+              console.warn('[ResearchSpace] blueprint definitions unavailable on load', (msg as { failedPaths: unknown[] }).failedPaths);
+            }
           }
           break;
         case 'blueprintInstantiated':
@@ -697,9 +775,24 @@ export function App() {
           }
           break;
         case 'blueprintRunRejected': {
-          const bm = msg as { containerNodeId: string; message: string };
+          const bm = msg as { containerNodeId: string; message: string; runMode?: 'full' | 'resume'; reusedCachedNodeCount?: number };
           if (bm.containerNodeId && bm.message) {
             const finishedAt = new Date().toISOString();
+            const containerNode = useCanvasStore.getState().canvasFile?.nodes.find(node => node.id === bm.containerNodeId);
+            const runMode = bm.runMode ?? useCanvasStore.getState().pipelineState?.runMode ?? 'full';
+            const historyEntry: import('../../src/core/canvas-model').BlueprintRunHistoryEntry = {
+              id: `${bm.containerNodeId}-${finishedAt}`,
+              finishedAt,
+              status: 'failed',
+              summary: bm.message,
+              totalNodes: 0,
+              completedNodes: 0,
+              failedNodes: 0,
+              skippedNodes: 0,
+              warningCount: 0,
+              mode: runMode,
+              reusedCachedNodeCount: bm.reusedCachedNodeCount ?? 0,
+            };
             updateNodeMeta(bm.containerNodeId, {
               blueprint_last_run_status: 'failed',
               blueprint_last_run_summary: bm.message,
@@ -712,6 +805,7 @@ export function App() {
               blueprint_last_run_warning_count: 0,
               blueprint_last_issue_node_id: undefined,
               blueprint_last_issue_node_title: undefined,
+              blueprint_run_history: appendBlueprintRunHistory(containerNode?.meta?.blueprint_run_history, historyEntry),
             });
             setError(bm.message);
           }
@@ -719,22 +813,24 @@ export function App() {
         }
         // ── Pipeline progress messages ──
         case 'pipelineStarted': {
-          const pm = msg as { pipelineId: string; triggerNodeId: string; nodeIds: string[]; totalNodes: number };
-          const statuses: Record<string, 'waiting'> = {};
-          for (const id of pm.nodeIds) { statuses[id] = 'waiting'; }
+          const pm = msg as import('../../src/core/canvas-model').PipelineStartPayload;
+          const statuses: Record<string, 'waiting' | 'running' | 'done' | 'failed' | 'skipped'> = {};
+          for (const id of pm.nodeIds) { statuses[id] = pm.initialNodeStatuses?.[id] ?? 'waiting'; }
           setPipelineState({
             pipelineId: pm.pipelineId,
             triggerNodeId: pm.triggerNodeId,
             nodeStatuses: statuses,
             nodeIssues: {},
             totalNodes: pm.totalNodes,
-            completedNodes: 0,
+            completedNodes: pm.initialCompletedNodes ?? 0,
             isRunning: true,
             isPaused: false,
             cancelRequested: false,
             completionStatus: null,
             currentNodeId: null,
             validationWarnings: [],
+            runMode: pm.runMode ?? 'full',
+            reusedCachedNodeCount: pm.reusedCachedNodeCount ?? 0,
           });
           break;
         }
@@ -792,17 +888,34 @@ export function App() {
               const issueNodeTitle = issueNodeId
                 ? canvasFile?.nodes.find(node => node.id === issueNodeId)?.title ?? issueNodeId
                 : null;
+              const summary = buildBlueprintRunSummary({
+                status: pm.status,
+                totalNodes: pm.totalNodes,
+                completedNodes: pm.completedNodes,
+                failedNodes,
+                skippedNodes,
+                warningCount,
+                issueNodeTitle,
+              });
+              const historyEntry: import('../../src/core/canvas-model').BlueprintRunHistoryEntry = {
+                id: `${finalPs.triggerNodeId}-${finishedAt}`,
+                finishedAt,
+                status: pm.status,
+                summary,
+                totalNodes: pm.totalNodes,
+                completedNodes: pm.completedNodes,
+                failedNodes,
+                skippedNodes,
+                warningCount,
+                issueNodeId: issueNodeId ?? undefined,
+                issueNodeTitle: issueNodeTitle ?? undefined,
+                mode: finalPs.runMode ?? 'full',
+                reusedCachedNodeCount: finalPs.reusedCachedNodeCount ?? 0,
+              };
+              const existingBlueprintNode = canvasFile?.nodes.find(node => node.id === finalPs.triggerNodeId);
               updateNodeMeta(finalPs.triggerNodeId, {
                 blueprint_last_run_status: pm.status,
-                blueprint_last_run_summary: buildBlueprintRunSummary({
-                  status: pm.status,
-                  totalNodes: pm.totalNodes,
-                  completedNodes: pm.completedNodes,
-                  failedNodes,
-                  skippedNodes,
-                  warningCount,
-                  issueNodeTitle,
-                }),
+                blueprint_last_run_summary: summary,
                 blueprint_last_run_finished_at: finishedAt,
                 blueprint_last_run_total_nodes: pm.totalNodes,
                 blueprint_last_run_completed_nodes: pm.completedNodes,
@@ -811,6 +924,7 @@ export function App() {
                 blueprint_last_run_warning_count: warningCount,
                 blueprint_last_issue_node_id: issueNodeId ?? undefined,
                 blueprint_last_issue_node_title: issueNodeTitle ?? undefined,
+                blueprint_run_history: appendBlueprintRunHistory(existingBlueprintNode?.meta?.blueprint_run_history, historyEntry),
                 ...(pm.status === 'succeeded'
                   ? { blueprint_last_run_succeeded_at: finishedAt }
                   : {}),
@@ -868,6 +982,7 @@ export function App() {
             onClose={clearBlueprintDraft}
           />
         )}
+        <OutputHistoryModal />
         <InitialCanvasLoadingNotice />
         {lastError && <ErrorToast message={lastError} onClose={clearError} />}
       </div>

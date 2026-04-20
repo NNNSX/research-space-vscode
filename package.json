@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.0-alpha.41",
+  "version": "2.1.1-alpha.1",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -185,8 +185,8 @@
         },
         "researchSpace.ai.copilotModel": {
           "type": "string",
-          "default": "",
-          "description": "Default Copilot model to use (empty = let Copilot choose automatically)"
+          "default": "gpt-4.1",
+          "description": "Default Copilot model to use"
         },
         "researchSpace.ai.anthropicApiKey": {
           "type": "string",

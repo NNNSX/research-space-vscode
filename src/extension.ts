@@ -144,17 +144,28 @@ export function activate(context: vscode.ExtensionContext): void {
           'Remove'
         );
         if (confirm !== 'Remove') { return; }
-        const canvas = await readCanvas(item.canvasUri);
+        const { canvas, document } = await getCanvasState(item.canvasUri);
         canvas.nodes = canvas.nodes.filter(n => n.id !== item.node!.id);
         canvas.edges = canvas.edges.filter(
           e => e.source !== item.node!.id && e.target !== item.node!.id
         );
+        if (document) {
+          document.data = canvas;
+        }
         CanvasEditorProvider.suppressRevert(item.canvasUri.fsPath);
         await writeCanvas(item.canvasUri, canvas);
         treeProvider.refresh();
         // Notify open webview if any
         const webview = CanvasEditorProvider.activeWebviews.get(item.canvasUri.fsPath);
-        webview?.postMessage({ type: 'init', data: canvas, workspaceRoot: path.dirname(item.canvasUri.fsPath) });
+        if (webview) {
+          const sessionId = CanvasEditorProvider.bumpCanvasSession(item.canvasUri.fsPath);
+          webview.postMessage({
+            type: 'init',
+            data: canvas,
+            workspaceRoot: path.dirname(item.canvasUri.fsPath),
+            sessionId,
+          });
+        }
       }
     )
   );
@@ -243,7 +254,10 @@ function metaPatchChanged(
 }
 
 function setupFileWatcher(context: vscode.ExtensionContext): void {
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  let changeDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  let deleteDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  const pendingChangeUris = new Map<string, vscode.Uri>();
+  const pendingDeleteUris = new Map<string, vscode.Uri>();
 
   const watcher = vscode.workspace.createFileSystemWatcher(
     '**/*.{pdf,md,markdown,mdown,mkd,txt,text,rst,adoc,doc,dot,docx,docm,dotx,dotm,rtf,ppt,pps,pot,pptx,pptm,ppsx,ppsm,potx,potm,odt,odp,fodt,fodp,epub,py,js,mjs,cjs,ts,mts,cts,tsx,jsx,rs,go,java,c,cc,cpp,cxx,cs,h,hh,hpp,hxx,m,mm,rb,swift,kt,r,php,phtml,lua,pl,pm,scala,groovy,gradle,dart,jl,zig,nim,sh,bash,zsh,fish,ps1,psm1,psd1,bat,cmd,yaml,yml,json,jsonl,ndjson,toml,tex,bib,bst,ipynb,xml,html,css,scss,less,vue,svelte,astro,sql,graphql,proto,ini,cfg,env,log,conf,csv,tsv,xls,xlt,xlsx,xlsm,xltx,xltm,ods,fods,png,jpg,jpeg,gif,webp,svg,bmp,avif,ico,mp3,wav,opus,aac,flac,m4a,ogg,oga,mp4,mov,webm,m4v}'
@@ -251,94 +265,155 @@ function setupFileWatcher(context: vscode.ExtensionContext): void {
 
   // ── File changed: update content_preview ──────────────────────────────────
   watcher.onDidChange(uri => {
-    if (debounceTimer) { clearTimeout(debounceTimer); }
-    debounceTimer = setTimeout(async () => {
+    pendingDeleteUris.delete(uri.fsPath);
+    pendingChangeUris.set(uri.fsPath, uri);
+    if (changeDebounceTimer) { clearTimeout(changeDebounceTimer); }
+    changeDebounceTimer = setTimeout(async () => {
+      const uris = Array.from(pendingChangeUris.values());
+      pendingChangeUris.clear();
+      changeDebounceTimer = undefined;
+      if (uris.length === 0) { return; }
       const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
-      for (const canvasUri of rswsFiles) {
-        const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
-        try {
-          const { canvas, document } = await getCanvasState(canvasUri);
-          const canvasDir = path.dirname(canvasUri.fsPath);
-          // Compute path relative to canvas directory (not workspace root)
-          const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
-          let changed = false;
-          for (const node of canvas.nodes) {
-            if (node.file_path !== relPath) { continue; }
-            const wasMissing = !!node.meta?.file_missing;
-            if (wasMissing) {
-              node.meta = { ...node.meta, file_missing: false };
-              webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
-              changed = true;
+      for (const uri of uris) {
+        for (const canvasUri of rswsFiles) {
+          const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+          try {
+            const { canvas, document } = await getCanvasState(canvasUri);
+            const canvasDir = path.dirname(canvasUri.fsPath);
+            // Compute path relative to canvas directory (not workspace root)
+            const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+            let changed = false;
+            for (const node of canvas.nodes) {
+              if (node.file_path !== relPath) { continue; }
+              const wasMissing = !!node.meta?.file_missing;
+              if (wasMissing) {
+                node.meta = { ...node.meta, file_missing: false };
+                webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+                changed = true;
+              }
+              // Refresh content preview for text-based nodes (ai_output, note, code, data, etc.)
+              // Use node type to decide: ai_output has watchContent=true but no extensions,
+              // so check the node's own type definition rather than relying solely on extension lookup.
+              const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
+              const nodeDef = CanvasEditorProvider.dataNodeRegistry?.get(node.node_type);
+              const shouldWatch = nodeDef?.watchContent ?? CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext) ?? false;
+              if (shouldWatch) {
+                try {
+                  const result = await extractPreviewWithMeta(uri, node.node_type);
+                  const preview = result.preview;
+                  const metaPatch = {
+                    ai_readable_chars: result.ai_readable_chars,
+                    ai_readable_pages: result.ai_readable_pages,
+                    has_unreadable_content: result.has_unreadable_content,
+                    unreadable_hint: result.unreadable_hint,
+                    csv_rows: result.csv_rows,
+                    csv_cols: result.csv_cols,
+                  };
+                  if (metaPatchChanged(node.meta as Record<string, unknown> | undefined, preview, metaPatch, false)) {
+                    node.meta = { ...node.meta, content_preview: preview, file_missing: false, ...metaPatch };
+                    webview?.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview, metaPatch });
+                    changed = true;
+                  }
+                } catch { /* ignore read errors */ }
+              }
             }
-            // Refresh content preview for text-based nodes (ai_output, note, code, data, etc.)
-            // Use node type to decide: ai_output has watchContent=true but no extensions,
-            // so check the node's own type definition rather than relying solely on extension lookup.
-            const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
-            const nodeDef = CanvasEditorProvider.dataNodeRegistry?.get(node.node_type);
-            const shouldWatch = nodeDef?.watchContent ?? CanvasEditorProvider.dataNodeRegistry?.shouldWatchContent(ext) ?? false;
-            if (shouldWatch) {
-              try {
-                const result = await extractPreviewWithMeta(uri, node.node_type);
-                const preview = result.preview;
-                const metaPatch = {
-                  ai_readable_chars: result.ai_readable_chars,
-                  ai_readable_pages: result.ai_readable_pages,
-                  has_unreadable_content: result.has_unreadable_content,
-                  unreadable_hint: result.unreadable_hint,
-                  csv_rows: result.csv_rows,
-                  csv_cols: result.csv_cols,
-                };
-                if (metaPatchChanged(node.meta as Record<string, unknown> | undefined, preview, metaPatch, false)) {
-                  node.meta = { ...node.meta, content_preview: preview, file_missing: false, ...metaPatch };
-                  webview?.postMessage({ type: 'nodeContentUpdate', nodeId: node.id, preview, metaPatch });
-                  changed = true;
-                }
-              } catch { /* ignore read errors */ }
+            if (changed) {
+              if (document) {
+                document.data = canvas;
+              }
+              CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+              await writeCanvas(canvasUri, canvas);
             }
-          }
-          if (changed) {
-            if (document) {
-              document.data = canvas;
-            }
-            CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
-            await writeCanvas(canvasUri, canvas);
-          }
-        } catch { /* ignore */ }
+          } catch { /* ignore */ }
+        }
       }
     }, 800);
   });
 
   // ── File deleted: mark missing ────────────────────────────────────────────
   watcher.onDidDelete(uri => {
-    // Short delay lets the rename event (delete+create pair) arrive first.
-    // Timer is not tracked — postMessage to a disposed webview is silently ignored.
-    setTimeout(async () => {
+    pendingChangeUris.delete(uri.fsPath);
+    pendingDeleteUris.set(uri.fsPath, uri);
+    if (deleteDebounceTimer) { clearTimeout(deleteDebounceTimer); }
+    deleteDebounceTimer = setTimeout(async () => {
+      const uris = Array.from(pendingDeleteUris.values());
+      pendingDeleteUris.clear();
+      deleteDebounceTimer = undefined;
+      if (uris.length === 0) { return; }
       const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
-      for (const canvasUri of rswsFiles) {
-        const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+      for (const uri of uris) {
         try {
-          const { canvas, document } = await getCanvasState(canvasUri);
-          const canvasDir = path.dirname(canvasUri.fsPath);
-          const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
-          if (relPath.startsWith('outputs/')) { continue; }
-          let changed = false;
-          for (const node of canvas.nodes) {
-            if (node.file_path === relPath && !node.meta?.file_missing) {
-              node.meta = { ...node.meta, file_missing: true };
-              webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
-              changed = true;
+          await vscode.workspace.fs.stat(uri);
+          continue;
+        } catch {
+          // confirmed missing
+        }
+        for (const canvasUri of rswsFiles) {
+          const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+          try {
+            const { canvas, document } = await getCanvasState(canvasUri);
+            const canvasDir = path.dirname(canvasUri.fsPath);
+            const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+            if (relPath.startsWith('outputs/')) { continue; }
+            let changed = false;
+            for (const node of canvas.nodes) {
+              if (node.file_path === relPath && !node.meta?.file_missing) {
+                node.meta = { ...node.meta, file_missing: true };
+                webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: true });
+                changed = true;
+              }
             }
-          }
-          if (changed) {
-            if (document) {
-              document.data = canvas;
+            if (changed) {
+              if (document) {
+                document.data = canvas;
+              }
+              CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+              await writeCanvas(canvasUri, canvas);
             }
-            CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
-            await writeCanvas(canvasUri, canvas);
-          }
-        } catch { /* ignore */ }
+          } catch { /* ignore */ }
+        }
       }
     }, 600);
+  });
+
+  watcher.onDidCreate(uri => {
+    pendingDeleteUris.delete(uri.fsPath);
+    pendingChangeUris.set(uri.fsPath, uri);
+    if (changeDebounceTimer) { clearTimeout(changeDebounceTimer); }
+    changeDebounceTimer = setTimeout(async () => {
+      const uris = Array.from(pendingChangeUris.values());
+      pendingChangeUris.clear();
+      changeDebounceTimer = undefined;
+      if (uris.length === 0) { return; }
+      const rswsFiles = await vscode.workspace.findFiles('**/*.rsws');
+      for (const uri of uris) {
+        for (const canvasUri of rswsFiles) {
+          const webview = CanvasEditorProvider.activeWebviews.get(canvasUri.fsPath);
+          try {
+            const { canvas, document } = await getCanvasState(canvasUri);
+            const canvasDir = path.dirname(canvasUri.fsPath);
+            const relPath = path.relative(canvasDir, uri.fsPath).split(path.sep).join('/');
+            let changed = false;
+            for (const node of canvas.nodes) {
+              if (node.file_path !== relPath) { continue; }
+              const wasMissing = !!node.meta?.file_missing;
+              if (wasMissing) {
+                node.meta = { ...node.meta, file_missing: false };
+                webview?.postMessage({ type: 'nodeFileStatus', nodeId: node.id, missing: false });
+                changed = true;
+              }
+            }
+            if (changed) {
+              if (document) {
+                document.data = canvas;
+              }
+              CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
+              await writeCanvas(canvasUri, canvas);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }, 200);
   });
 
   context.subscriptions.push(watcher);
@@ -402,7 +477,7 @@ async function pickCanvas(uris: vscode.Uri[]): Promise<vscode.Uri | undefined> {
 }
 
 async function exportMarkdown(canvasUri: vscode.Uri): Promise<void> {
-  const canvas = await readCanvas(canvasUri);
+  const { canvas } = await getCanvasState(canvasUri);
   const dataNodes = canvas.nodes
     .filter(n => ['paper', 'note', 'code', 'ai_output', 'image', 'data'].includes(n.node_type))
     .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
@@ -437,7 +512,7 @@ async function exportMarkdown(canvasUri: vscode.Uri): Promise<void> {
 }
 
 async function exportJson(canvasUri: vscode.Uri): Promise<void> {
-  const canvas = await readCanvas(canvasUri);
+  const { canvas } = await getCanvasState(canvasUri);
   const saveUri = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.file(
       path.join(path.dirname(canvasUri.fsPath), `${canvas.metadata.title}.json`)

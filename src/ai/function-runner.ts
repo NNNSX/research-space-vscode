@@ -28,8 +28,10 @@ function getRegistry(): ToolRegistry {
 // ── Active run registry (for cancel support) ───────────────────────────────
 const activeRuns = new Map<string, AbortController>();
 const nodeToRunId = new Map<string, string>();
+const cancelledRuns = new Set<string>();
 
 export function cancelRun(runId: string): void {
+  cancelledRuns.add(runId);
   activeRuns.get(runId)?.abort();
   activeRuns.delete(runId);
 }
@@ -37,6 +39,25 @@ export function cancelRun(runId: string): void {
 export function cancelRunByNodeId(nodeId: string): void {
   const runId = nodeToRunId.get(nodeId);
   if (runId) { cancelRun(runId); nodeToRunId.delete(nodeId); }
+}
+
+function registerActiveRun(runId: string, controller: AbortController): void {
+  activeRuns.set(runId, controller);
+  if (cancelledRuns.has(runId)) {
+    controller.abort();
+  }
+}
+
+function isRunCancelled(runId: string): boolean {
+  return cancelledRuns.has(runId);
+}
+
+function cleanupRunTracking(runId: string, nodeId: string): void {
+  activeRuns.delete(runId);
+  cancelledRuns.delete(runId);
+  if (nodeToRunId.get(nodeId) === runId) {
+    nodeToRunId.delete(nodeId);
+  }
 }
 
 // ── Options type ────────────────────────────────────────────────────────────
@@ -130,12 +151,35 @@ function trimTextToTokenBudget(text: string, maxTokens: number): string {
   return text.slice(0, low).trimEnd();
 }
 
-function applyInputTokenBudget(contents: AIContent[], maxTokens?: number): AIContent[] {
+interface TextBudgetResult {
+  contents: AIContent[];
+  trimmedTextBlocks: number;
+  omittedTextBlocks: number;
+}
+
+interface MultimodalBudgetOptions {
+  maxTokens?: number;
+  maxImages: number;
+  minImagesToKeep?: number;
+  maxImageBytes: number;
+  maxImageTokenShare?: number;
+}
+
+interface MultimodalBudgetResult {
+  contents: AIContent[];
+  keptImages: number;
+  droppedImages: number;
+  droppedImageTitles: string[];
+  trimmedTextBlocks: number;
+  omittedTextBlocks: number;
+}
+
+function applyInputTokenBudgetDetailed(contents: AIContent[], maxTokens?: number): TextBudgetResult {
   if (!maxTokens || maxTokens <= 0) {
-    return contents;
+    return { contents, trimmedTextBlocks: 0, omittedTextBlocks: 0 };
   }
 
-  const pinnedTitles = new Set(['User Message', 'User Question']);
+  const pinnedTitles = new Set(['User Message', 'User Question', 'Input Budget Notice']);
   const pinnedIndexes = new Set<number>();
   let pinnedTokens = 0;
 
@@ -149,6 +193,8 @@ function applyInputTokenBudget(contents: AIContent[], maxTokens?: number): AICon
 
   let remainingTokens = Math.max(maxTokens - pinnedTokens, 0);
   const nextContents: AIContent[] = [];
+  let trimmedTextBlocks = 0;
+  let omittedTextBlocks = 0;
 
   for (let i = 0; i < contents.length; i++) {
     const content = contents[i];
@@ -172,17 +218,142 @@ function applyInputTokenBudget(contents: AIContent[], maxTokens?: number): AICon
     }
 
     if (remainingTokens <= 0) {
+      omittedTextBlocks += 1;
       continue;
     }
 
     const trimmedText = trimTextToTokenBudget(text, remainingTokens);
     if (trimmedText) {
+      if (trimmedText !== text) {
+        trimmedTextBlocks += 1;
+      }
       nextContents.push({ ...content, text: trimmedText });
       remainingTokens -= estimateTextTokens(trimmedText);
+    } else {
+      omittedTextBlocks += 1;
     }
   }
 
-  return nextContents;
+  return { contents: nextContents, trimmedTextBlocks, omittedTextBlocks };
+}
+
+function applyInputTokenBudget(contents: AIContent[], maxTokens?: number): AIContent[] {
+  return applyInputTokenBudgetDetailed(contents, maxTokens).contents;
+}
+
+function estimateImageBytes(content: AIContent): number {
+  if (content.type !== 'image') {
+    return 0;
+  }
+  const base64 = content.base64 ?? '';
+  if (!base64) {
+    return 0;
+  }
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function estimateImageInputTokens(content: AIContent): number {
+  const bytes = estimateImageBytes(content);
+  if (bytes <= 0) {
+    return 1024;
+  }
+  return Math.max(1024, Math.ceil(bytes / 512));
+}
+
+function applyMultimodalInputBudget(contents: AIContent[], opts: MultimodalBudgetOptions): MultimodalBudgetResult {
+  const imageIndexes = contents
+    .map((content, index) => ({ content, index }))
+    .filter((entry): entry is { content: AIContent & { type: 'image' }; index: number } => entry.content.type === 'image');
+
+  if (imageIndexes.length === 0) {
+    const textBudget = applyInputTokenBudgetDetailed(contents, opts.maxTokens);
+    return {
+      contents: textBudget.contents,
+      keptImages: 0,
+      droppedImages: 0,
+      droppedImageTitles: [],
+      trimmedTextBlocks: textBudget.trimmedTextBlocks,
+      omittedTextBlocks: textBudget.omittedTextBlocks,
+    };
+  }
+
+  const maxImages = Math.max(1, opts.maxImages);
+  const minImagesToKeep = Math.max(0, Math.min(opts.minImagesToKeep ?? 0, maxImages));
+  const maxImageBytes = Math.max(1, opts.maxImageBytes);
+  const maxTokens = opts.maxTokens && opts.maxTokens > 0 ? opts.maxTokens : undefined;
+  const imageTokenBudget = maxTokens
+    ? Math.max(1024, Math.floor(maxTokens * Math.min(Math.max(opts.maxImageTokenShare ?? 0.7, 0.25), 1)))
+    : undefined;
+
+  const keepImageIndexes = new Set<number>();
+  const droppedImageTitles: string[] = [];
+  let keptImages = 0;
+  let usedImageBytes = 0;
+  let usedImageTokens = 0;
+
+  for (const entry of imageIndexes) {
+    const imageBytes = estimateImageBytes(entry.content);
+    const imageTokens = estimateImageInputTokens(entry.content);
+    const withinCount = keptImages < maxImages;
+    const withinBytes = usedImageBytes + imageBytes <= maxImageBytes;
+    const forceKeep = keptImages < minImagesToKeep;
+    const withinTokenBudget = !imageTokenBudget || forceKeep || usedImageTokens + imageTokens <= imageTokenBudget;
+
+    if (withinCount && withinBytes && withinTokenBudget) {
+      keepImageIndexes.add(entry.index);
+      keptImages += 1;
+      usedImageBytes += imageBytes;
+      usedImageTokens += imageTokens;
+      continue;
+    }
+
+    droppedImageTitles.push(entry.content.title || 'Untitled');
+  }
+
+  const prunedContents = contents.filter((content, index) => content.type !== 'image' || keepImageIndexes.has(index));
+  const remainingTextBudget = maxTokens ? Math.max(maxTokens - usedImageTokens, 0) : undefined;
+  const textBudget = applyInputTokenBudgetDetailed(prunedContents, remainingTextBudget);
+
+  return {
+    contents: textBudget.contents,
+    keptImages,
+    droppedImages: droppedImageTitles.length,
+    droppedImageTitles,
+    trimmedTextBlocks: textBudget.trimmedTextBlocks,
+    omittedTextBlocks: textBudget.omittedTextBlocks,
+  };
+}
+
+function resolveMultimodalBudgetOptions(aiType: string, toolId: string, maxTokens?: number): MultimodalBudgetOptions {
+  if (aiType === 'video_generation') {
+    return {
+      maxTokens,
+      maxImages: 1,
+      minImagesToKeep: 1,
+      maxImageBytes: 6 * 1024 * 1024,
+      maxImageTokenShare: 0.75,
+    };
+  }
+
+  if (aiType === 'image_edit') {
+    const isFusion = toolId === 'image-fusion';
+    return {
+      maxTokens,
+      maxImages: isFusion ? 4 : 1,
+      minImagesToKeep: isFusion ? 2 : 1,
+      maxImageBytes: isFusion ? 16 * 1024 * 1024 : 6 * 1024 * 1024,
+      maxImageTokenShare: isFusion ? 0.8 : 0.75,
+    };
+  }
+
+  return {
+    maxTokens,
+    maxImages: 4,
+    minImagesToKeep: 0,
+    maxImageBytes: 12 * 1024 * 1024,
+    maxImageTokenShare: 0.7,
+  };
 }
 
 // ── Main executor ──────────────────────────────────────────────────────────
@@ -230,6 +401,8 @@ export async function runFunctionNode(
     const msg = e instanceof Error ? e.message : String(e);
     reportNodeIssue(webview, nodeId, runId, msg);
     return { success: false, runId, errorMessage: msg };
+  } finally {
+    cleanupRunTracking(runId, nodeId);
   }
 }
 
@@ -292,8 +465,7 @@ export async function runBatchFunctionNode(
     // After each run the canvas on disk was updated — refresh our local copy
     // so subsequent runs see the newly added output nodes (for collision avoidance).
     if (result.success && result.outputNode) {
-      canvas.nodes.push(result.outputNode);
-      canvas.edges.push({ id: uuid(), source: nodeId, target: result.outputNode.id, edge_type: 'ai_generated' });
+      appendPersistedOutputToCanvas(canvas, nodeId, result.outputNode);
       completed++;
     } else {
       failed++;
@@ -337,6 +509,9 @@ async function _runFunctionNodeInner(
   webview: vscode.Webview,
   opts?: RunFunctionOpts
 ): Promise<FunctionRunResult> {
+  if (isRunCancelled(runId)) {
+    return { success: false, runId, errorMessage: 'Cancelled' };
+  }
   const aiType = toolDef.apiType ?? 'chat';
 
   // F2: Run Guard — check run condition before doing anything else
@@ -357,6 +532,9 @@ async function _runFunctionNodeInner(
   if ('error' in executionPlan) {
     reportNodeIssue(webview, nodeId, runId, executionPlan.error, 'missing_input');
     return { success: false, runId, errorMessage: executionPlan.error };
+  }
+  if (isRunCancelled(runId)) {
+    return { success: false, runId, errorMessage: 'Cancelled' };
   }
   const upstreamNodes = executionPlan.upstreamNodes;
   const nodeRoleMap = executionPlan.nodeRoleMap;
@@ -540,9 +718,49 @@ async function _runFunctionNodeInner(
     contents.push({ type: 'text', title: 'User Question', text: query });
   }
 
-  if (effectiveContextTokens) {
-    const reservedInputTokens = Math.max(512, estimateTextTokens(systemPrompt) + 256);
-    const effectiveInputBudget = Math.max(effectiveContextTokens - reservedInputTokens, 1);
+  const reservedInputTokens = effectiveContextTokens
+    ? Math.max(512, estimateTextTokens(systemPrompt) + 256)
+    : undefined;
+  const effectiveInputBudget = effectiveContextTokens && reservedInputTokens
+    ? Math.max(effectiveContextTokens - reservedInputTokens, 1)
+    : undefined;
+  const shouldApplyMultimodalBudget = contents.some(c => c.type === 'image') && (
+    aiType === 'image_edit' ||
+    aiType === 'video_generation' ||
+    (aiType === 'chat' && toolDef.supportsImages)
+  );
+
+  if (shouldApplyMultimodalBudget) {
+    const budgetResult = applyMultimodalInputBudget(
+      contents,
+      resolveMultimodalBudgetOptions(aiType, toolId, effectiveInputBudget)
+    );
+    contents.length = 0;
+    contents.push(...budgetResult.contents);
+
+    if (budgetResult.droppedImages > 0 || budgetResult.trimmedTextBlocks > 0 || budgetResult.omittedTextBlocks > 0) {
+      const warningParts: string[] = [];
+      if (budgetResult.droppedImages > 0) {
+        warningParts.push(`保留 ${budgetResult.keptImages} 张图，省略 ${budgetResult.droppedImages} 张图`);
+      }
+      if (budgetResult.trimmedTextBlocks > 0) {
+        warningParts.push(`裁剪 ${budgetResult.trimmedTextBlocks} 段文本`);
+      }
+      if (budgetResult.omittedTextBlocks > 0) {
+        warningParts.push(`省略 ${budgetResult.omittedTextBlocks} 段超长文本`);
+      }
+      const droppedTitlePreview = budgetResult.droppedImageTitles.slice(0, 3).join('、');
+      const suffix = budgetResult.droppedImages > 0 && droppedTitlePreview
+        ? `（已省略：${droppedTitlePreview}${budgetResult.droppedImages > 3 ? ' 等' : ''}）`
+        : '';
+      webview.postMessage({
+        type: 'fnStatusUpdate',
+        nodeId,
+        status: 'running',
+        progressText: `已按输入预算裁剪：${warningParts.join('；')}${suffix}`,
+      });
+    }
+  } else if (effectiveInputBudget) {
     const cappedContents = applyInputTokenBudget(contents, effectiveInputBudget);
     contents.length = 0;
     contents.push(...cappedContents);
@@ -632,7 +850,7 @@ async function _runFunctionNodeInner(
   // 6. Stream
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: 'AI 生成中…' });
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   let fullText = '';
   let lastProgressUpdate = 0;
@@ -669,9 +887,15 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: msg };
   }
   activeRuns.delete(runId);
+  if (isRunCancelled(runId) || controller.signal.aborted) {
+    return { success: false, runId, errorMessage: 'Cancelled' };
+  }
 
   // 8. Post-process
   const processed = registry.postProcess(toolId, fullText);
+  if (isRunCancelled(runId)) {
+    return { success: false, runId, errorMessage: 'Cancelled' };
+  }
 
   // 9. Write output file
   const aiDir = await ensureAiOutputDir(canvasUri);
@@ -693,12 +917,12 @@ async function _runFunctionNodeInner(
     position: outPos,
     size: outSize,
     file_path: relPath,
-    meta: {
+    meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, canvas, {
       content_preview: processed.slice(0, 300),
       ai_readable_chars: processed.length,
       ai_provider: provider.name,
       ai_model: effectiveModel || undefined,
-    },
+    }),
   };
 
   // 11. Create ai_generated edge
@@ -710,8 +934,7 @@ async function _runFunctionNodeInner(
   };
 
   // 12. Persist
-  canvas.nodes.push(outNode);
-  canvas.edges.push(outEdge);
+  appendPersistedOutputToCanvas(canvas, nodeId, outNode);
   CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
   await writeCanvas(canvasUri, canvas);
 
@@ -782,7 +1005,7 @@ async function runImageGen(
     const maxImages = Math.max(1, Math.min(8, Number(params['max_images'] ?? 4) || 4));
     const watermark = Boolean(params['watermark'] ?? true);
     const controller = new AbortController();
-    activeRuns.set(runId, controller);
+    registerActiveRun(runId, controller);
     return runDoubaoImageGroupOutput(fnNode, prompt, model, size, maxImages, watermark, canvasUri, webview, runId, apiKey, controller);
   }
 
@@ -792,7 +1015,7 @@ async function runImageGen(
   const webSearch = Boolean(params['web_search'] ?? false);
   const model = (params['model'] as string) || settingsDefaultModel || 'gemini-3.1-flash-image-preview';
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   if (isDoubaoSeedreamModel(model)) {
     return runImageGenDoubao(fnNode, prompt, model, size, watermark, webSearch, canvasUri, webview, runId, apiKey, controller);
@@ -874,7 +1097,7 @@ async function runImageGenGemini(
       position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 200 }, activeDoc?.data),
       size: { width: 240, height: 200 },
       file_path: relPath,
-      meta: { display_mode: 'file' },
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDoc?.data, { display_mode: 'file' }),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
@@ -1086,7 +1309,7 @@ async function runTts(
   const voice = (params['voice'] as string) ?? 'coral';
   const responseFormat = (params['response_format'] as string) ?? 'mp3';
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   try {
     const response = await fetch('https://aihubmix.com/v1/audio/speech', {
@@ -1120,7 +1343,7 @@ async function runTts(
       position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 120 }, activeDocTTS?.data),
       size: { width: 240, height: 120 },
       file_path: relPath,
-      meta: buildMultimodalNodeMeta(model),
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDocTTS?.data, buildMultimodalNodeMeta(model)),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
@@ -1206,7 +1429,7 @@ async function runStt(
   const responseFormat = (params['response_format'] as string) ?? 'text';
 
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   try {
     // Use Node.js 18+ built-in FormData
@@ -1253,10 +1476,10 @@ async function runStt(
       position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 280, height: 160 }, activeDoc?.data),
       size: { width: 280, height: 160 },
       file_path: relPath,
-      meta: buildMultimodalNodeMeta(model, {
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDoc?.data, buildMultimodalNodeMeta(model, {
         content_preview: transcriptText.slice(0, 300),
         ai_readable_chars: transcriptText.length,
-      }),
+      })),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
@@ -1330,7 +1553,7 @@ async function runVideoGen(
   }
 
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   try {
     let submitResp: Response;
@@ -1440,7 +1663,7 @@ async function runVideoGen(
       position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 280, height: 180 }, activeDocVG?.data),
       size: { width: 280, height: 180 },
       file_path: relPath,
-      meta: buildMultimodalNodeMeta(model),
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDocVG?.data, buildMultimodalNodeMeta(model)),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 
@@ -1507,21 +1730,172 @@ function calcPreferredBlueprintOutputPosition(
   outSize: { width: number; height: number },
   canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
 ): { x: number; y: number } {
-  if (canvas) {
-    const directOutputTarget = canvas.edges
-      .filter(edge => edge.source === nodeId && edge.edge_type === 'ai_generated')
-      .map(edge => canvas.nodes.find(node => node.id === edge.target))
-      .find(node =>
-        !!node && (
-          node.meta?.blueprint_placeholder_kind === 'output' ||
-          node.meta?.blueprint_bound_slot_kind === 'output'
-        )
-      );
-    if (directOutputTarget?.position) {
-      return { ...directOutputTarget.position };
-    }
+  const directOutputTarget = resolveBlueprintOutputTarget(nodeId, canvas);
+  if (directOutputTarget?.position) {
+    return {
+      x: directOutputTarget.position.x + (directOutputTarget.size?.width ?? 240) + 72,
+      y: directOutputTarget.position.y + Math.max(((directOutputTarget.size?.height ?? 136) - outSize.height) / 2, 0),
+    };
+  }
+  if (hasBlueprintInternalPipelineConsumers(nodeId, fnNode, canvas)) {
+    return {
+      x: fnNode.position.x + Math.max((fnNode.size.width - outSize.width) / 2, 12),
+      y: fnNode.position.y + Math.max((fnNode.size.height - outSize.height) / 2, 12),
+    };
   }
   return calcOutputPosition(fnNode, outSize, canvas?.nodes ?? []);
+}
+
+function resolveBlueprintOutputTarget(
+  nodeId: string,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): CanvasNode | null {
+  if (!canvas) { return null; }
+
+  const directBlueprintTargets = canvas.edges
+    .filter(edge =>
+      edge.source === nodeId &&
+      (edge.edge_type === 'ai_generated' || edge.edge_type === 'data_flow')
+    )
+    .map(edge => canvas.nodes.find(node => node.id === edge.target))
+    .filter((node): node is CanvasNode => !!node);
+
+  const outputPlaceholderNode = directBlueprintTargets.find(node =>
+    node.meta?.blueprint_placeholder_kind === 'output'
+  );
+
+  const existingBoundOutputNode = directBlueprintTargets.find(node =>
+    node.meta?.blueprint_bound_slot_kind === 'output'
+  );
+
+  return outputPlaceholderNode ?? existingBoundOutputNode ?? null;
+}
+
+function buildPersistedBlueprintOutputMeta(
+  nodeId: string,
+  fnNode: CanvasNode,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+  extra?: CanvasNode['meta'],
+): CanvasNode['meta'] {
+  const directOutputTarget = resolveBlueprintOutputTarget(nodeId, canvas);
+  const slotId = directOutputTarget?.meta?.blueprint_placeholder_slot_id
+    ?? directOutputTarget?.meta?.blueprint_bound_slot_id;
+  const instanceId = directOutputTarget?.meta?.blueprint_placeholder_kind === 'output'
+    ? directOutputTarget.meta?.blueprint_instance_id
+    : directOutputTarget?.meta?.blueprint_bound_slot_kind === 'output'
+      ? directOutputTarget.meta?.blueprint_bound_instance_id
+      : undefined;
+  const slotTitle = directOutputTarget?.meta?.blueprint_placeholder_title
+    ?? directOutputTarget?.meta?.blueprint_bound_slot_title
+    ?? directOutputTarget?.title;
+  const isHiddenBlueprintRuntimeOutput = !slotId && hasBlueprintInternalPipelineConsumers(nodeId, fnNode, canvas);
+
+  return {
+    ...(extra ?? {}),
+    ...(fnNode.meta?.blueprint_def_id ? { blueprint_def_id: fnNode.meta.blueprint_def_id } : {}),
+    ...(fnNode.meta?.blueprint_color ? { blueprint_color: fnNode.meta.blueprint_color } : {}),
+    ...(isHiddenBlueprintRuntimeOutput
+      ? {
+          blueprint_instance_id: fnNode.meta?.blueprint_instance_id,
+          blueprint_runtime_hidden: true,
+        }
+      : {}),
+    ...(slotId && instanceId
+      ? {
+          blueprint_bound_instance_id: instanceId,
+          blueprint_bound_slot_id: slotId,
+          blueprint_bound_slot_title: slotTitle,
+          blueprint_bound_slot_kind: 'output' as const,
+        }
+      : {}),
+  };
+}
+
+function resolveBlueprintOutputPlaceholderTarget(
+  nodeId: string,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): CanvasNode | null {
+  const directOutputTarget = resolveBlueprintOutputTarget(nodeId, canvas);
+  if (!canvas || !directOutputTarget) { return null; }
+  if (directOutputTarget.meta?.blueprint_placeholder_kind === 'output') {
+    return directOutputTarget;
+  }
+
+  const instanceId = directOutputTarget.meta?.blueprint_bound_slot_kind === 'output'
+    ? directOutputTarget.meta?.blueprint_bound_instance_id
+    : undefined;
+  const slotId = directOutputTarget.meta?.blueprint_bound_slot_kind === 'output'
+    ? directOutputTarget.meta?.blueprint_bound_slot_id
+    : undefined;
+  if (!instanceId || !slotId) { return null; }
+
+  return canvas.nodes.find(node =>
+    node.meta?.blueprint_instance_id === instanceId &&
+    node.meta?.blueprint_placeholder_kind === 'output' &&
+    node.meta?.blueprint_placeholder_slot_id === slotId
+  ) ?? null;
+}
+
+function buildPersistedBlueprintBindingEdge(
+  nodeId: string,
+  outNode: CanvasNode,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): CanvasEdge | null {
+  if (
+    outNode.meta?.blueprint_bound_slot_kind !== 'output' ||
+    !outNode.meta?.blueprint_bound_instance_id ||
+    !outNode.meta?.blueprint_bound_slot_id
+  ) {
+    return null;
+  }
+
+  const placeholderTarget = resolveBlueprintOutputPlaceholderTarget(nodeId, canvas);
+  if (!placeholderTarget) { return null; }
+
+  return {
+    id: uuid(),
+    source: placeholderTarget.id,
+    target: outNode.id,
+    edge_type: 'data_flow',
+    role: outNode.meta.blueprint_bound_slot_id,
+  };
+}
+
+function appendPersistedOutputToCanvas(
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'>,
+  nodeId: string,
+  outNode: CanvasNode,
+): CanvasEdge[] {
+  canvas.nodes.push(outNode);
+  const placeholderTarget = resolveBlueprintOutputPlaceholderTarget(nodeId, canvas);
+  const generatedEdge: CanvasEdge = {
+    id: uuid(),
+    source: nodeId,
+    target: placeholderTarget?.id ?? outNode.id,
+    edge_type: 'ai_generated',
+  };
+  const edgesToAppend: CanvasEdge[] = [generatedEdge];
+  const bindingEdge = buildPersistedBlueprintBindingEdge(nodeId, outNode, canvas);
+  if (bindingEdge) {
+    edgesToAppend.push(bindingEdge);
+  }
+  canvas.edges.push(...edgesToAppend);
+  return edgesToAppend;
+}
+
+function hasBlueprintInternalPipelineConsumers(
+  nodeId: string,
+  fnNode: CanvasNode,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): boolean {
+  const instanceId = fnNode.meta?.blueprint_instance_id;
+  if (!instanceId || !canvas) { return false; }
+
+  return canvas.edges.some(edge => {
+    if (edge.edge_type !== 'pipeline_flow' || edge.source !== nodeId) { return false; }
+    const targetNode = canvas.nodes.find(node => node.id === edge.target);
+    return targetNode?.meta?.blueprint_instance_id === instanceId;
+  });
 }
 
 const DOUBAO_SEEDREAM_ROUTE_MODEL = 'doubao-seedream-5.0-lite';
@@ -1685,7 +2059,7 @@ async function persistGeneratedImages(
       },
       size: outSize,
       file_path: relPath,
-      meta: buildMultimodalNodeMeta(model, { display_mode: 'file' }),
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDoc?.data, buildMultimodalNodeMeta(model, { display_mode: 'file' })),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
     outputNodes.push(outNode);
@@ -1700,8 +2074,12 @@ async function persistGeneratedImages(
   }
 
   if (activeDoc) {
-    activeDoc.data.nodes.push(...outputNodes);
-    activeDoc.data.edges.push(...outputEdges);
+    const persistedEdges: CanvasEdge[] = [];
+    for (const outputNode of outputNodes) {
+      persistedEdges.push(...appendPersistedOutputToCanvas(activeDoc.data, nodeId, outputNode));
+    }
+    outputEdges.length = 0;
+    outputEdges.push(...persistedEdges.filter(edge => edge.edge_type === 'ai_generated'));
     CanvasEditorProvider.suppressRevert(canvasUri.fsPath);
     await writeCanvas(canvasUri, activeDoc.data);
   }
@@ -1769,7 +2147,7 @@ async function runImageEdit(
   const watermark = Boolean(params['watermark'] ?? false);
 
   const controller = new AbortController();
-  activeRuns.set(runId, controller);
+  registerActiveRun(runId, controller);
 
   if (_toolDef.id === 'image-fusion') {
     return runDoubaoImageFusion(fnNode, prompt, model, imageContents, size, watermark, canvasUri, webview, runId, apiKey, controller);
@@ -1841,7 +2219,7 @@ async function runImageEdit(
       position: calcPreferredBlueprintOutputPosition(nodeId, fnNode, { width: 240, height: 200 }, activeDocIE?.data),
       size: { width: 240, height: 200 },
       file_path: relPath,
-      meta: buildMultimodalNodeMeta(model, { display_mode: 'file' }),
+      meta: buildPersistedBlueprintOutputMeta(nodeId, fnNode, activeDocIE?.data, buildMultimodalNodeMeta(model, { display_mode: 'file' })),
     };
     const outEdge: CanvasEdge = { id: uuid(), source: nodeId, target: outNode.id, edge_type: 'ai_generated' };
 

@@ -56,6 +56,7 @@ export function BoardDropdown() {
     <>
       <button
         ref={btnRef}
+        data-board-dropdown-anchor
         onClick={toggle}
         title="画板/工作区"
         style={{
@@ -118,6 +119,7 @@ function DropdownPanel({ boards, rect, creating, newName, newColor, nameInputRef
     const close = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('[data-board-dropdown]')) return;
+      if (target.closest('[data-board-dropdown-anchor]')) return;
       onClose();
     };
     const closeKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

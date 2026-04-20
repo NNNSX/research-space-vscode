@@ -33,11 +33,12 @@ import { SettingsPanel } from '../panels/SettingsPanel';
 import { EmptyCanvasGuide } from './EmptyCanvasGuide';
 import { SelectionToolbar } from './SelectionToolbar';
 import { BoardOverlays } from './BoardOverlay';
+import { BlueprintOverlays } from './BlueprintOverlay';
 import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
 import { PipelineToolbar } from '../pipeline/PipelineToolbar';
 import { isBlueprintInputPlaceholderNode, isDataNode, isGroupHubNode } from '../../../../src/core/canvas-model';
-import type { AiTool } from '../../../../src/core/canvas-model';
+import type { AiTool, CanvasFile, CanvasNode } from '../../../../src/core/canvas-model';
 import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
 const nodeTypes: NodeTypes = {
@@ -51,6 +52,147 @@ const edgeTypes: EdgeTypes = {
   custom: CustomEdge,
   pipeline: PipelineEdge,
 };
+
+const NODE_TYPE_LABELS: Partial<Record<CanvasNode['node_type'], string>> = {
+  paper: 'PDF / 论文',
+  note: '笔记文本',
+  code: '代码文本',
+  image: '图像',
+  ai_output: 'AI 文本输出',
+  audio: '音频',
+  video: '视频',
+  data: '表格数据',
+  experiment_log: '实验记录',
+  task: '任务清单',
+  blueprint: '蓝图',
+};
+
+function describeNodeType(type: CanvasNode['node_type']): string {
+  return NODE_TYPE_LABELS[type] ?? type;
+}
+
+function describeAcceptTypes(types: CanvasNode['node_type'][] | undefined): string {
+  if (!types || types.length === 0) { return '任意数据节点'; }
+  return types.map(describeNodeType).join(' / ');
+}
+
+function getConnectionValidationResult(
+  file: CanvasFile,
+  connection: Connection,
+): { valid: boolean; reason?: string } {
+  if (!connection.source || !connection.target) {
+    return { valid: false, reason: '连接失败：未命中有效的起点或终点。' };
+  }
+  if (connection.source === connection.target) {
+    return { valid: false, reason: '连接失败：节点不能连接到自己。' };
+  }
+
+  const sourceNode = file.nodes.find(n => n.id === connection.source);
+  const targetNode = file.nodes.find(n => n.id === connection.target);
+  if (!sourceNode || !targetNode) {
+    return { valid: false, reason: '连接失败：目标节点不存在或已失效。' };
+  }
+
+  if (sourceNode.node_type === 'function' && targetNode.node_type === 'function') {
+    if (wouldCreateCycle(file.edges, connection.source, connection.target)) {
+      return { valid: false, reason: '连接失败：这条 Pipeline 连线会形成循环依赖。' };
+    }
+    return { valid: true };
+  }
+
+  if (isGroupHubNode(targetNode)) {
+    return sourceNode.node_type !== 'function'
+      ? { valid: true }
+      : { valid: false, reason: '连接失败：节点组不接受功能节点直接作为普通数据输入。' };
+  }
+
+  if (isGroupHubNode(sourceNode)) {
+    return (targetNode.node_type === 'function' || isGroupHubNode(targetNode))
+      ? { valid: true }
+      : { valid: false, reason: '连接失败：节点组只能连接到功能节点或其他节点组。' };
+  }
+
+  if (targetNode.node_type === 'blueprint') {
+    if (!connection.targetHandle) {
+      return { valid: false, reason: '连接失败：请拖到蓝图输入槽位的圆点上，而不是蓝图外框本体。' };
+    }
+    if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) {
+      return { valid: false, reason: '连接失败：蓝图输入槽位只接受数据节点。' };
+    }
+    const slot = targetNode.meta?.blueprint_input_slot_defs?.find(item => item.id === connection.targetHandle);
+    if (!slot) {
+      return { valid: false, reason: '连接失败：未命中有效的蓝图输入槽位。' };
+    }
+    if (!slot.allow_multiple) {
+      const alreadyBound = file.edges.some(edge =>
+        edge.target === connection.target &&
+        edge.targetHandle === connection.targetHandle &&
+        edge.edge_type === 'data_flow'
+      );
+      if (alreadyBound) {
+        return { valid: false, reason: `连接失败：槽位“${slot.title}”当前只允许 1 条输入，请先删除旧连接。` };
+      }
+    }
+    return { valid: true };
+  }
+
+  if (isBlueprintInputPlaceholderNode(targetNode)) {
+    if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) {
+      return { valid: false, reason: '连接失败：蓝图输入占位只接受数据节点。' };
+    }
+    if (
+      sourceNode.meta?.blueprint_instance_id &&
+      sourceNode.meta.blueprint_instance_id === targetNode.meta?.blueprint_instance_id
+    ) {
+      return { valid: false, reason: '连接失败：蓝图输入占位不能再接回本实例内部节点，请连接实例外部输入。' };
+    }
+    const accepts = targetNode.meta?.blueprint_placeholder_accepts ?? [];
+    if (isDataNode(sourceNode) && accepts.length > 0 && !accepts.includes(sourceNode.node_type)) {
+      const slotTitle = targetNode.meta?.blueprint_placeholder_title ?? targetNode.title ?? '该输入槽位';
+      return {
+        valid: false,
+        reason: `连接失败：槽位“${slotTitle}”只接受 ${describeAcceptTypes(accepts)}，当前拖入的是 ${describeNodeType(sourceNode.node_type)}。`,
+      };
+    }
+    if (!targetNode.meta?.blueprint_placeholder_allow_multiple) {
+      const alreadyBound = file.edges.some(edge =>
+        edge.target === connection.target &&
+        edge.edge_type === 'data_flow'
+      );
+      if (alreadyBound) {
+        const slotTitle = targetNode.meta?.blueprint_placeholder_title ?? targetNode.title ?? '该输入槽位';
+        return { valid: false, reason: `连接失败：槽位“${slotTitle}”当前是单绑定，请先移除旧输入。` };
+      }
+    }
+    const duplicateBinding = file.edges.some(edge =>
+      edge.source === connection.source &&
+      edge.target === connection.target &&
+      edge.edge_type === 'data_flow'
+    );
+    if (duplicateBinding) {
+      return { valid: false, reason: '连接失败：这条输入连线已经存在，无需重复连接。' };
+    }
+    return { valid: true };
+  }
+
+  if (targetNode.node_type === 'function') {
+    return sourceNode.node_type !== 'function'
+      ? { valid: true }
+      : { valid: false, reason: '连接失败：功能节点之间只能建立 Pipeline 连线。' };
+  }
+
+  return { valid: false, reason: `连接失败：${describeNodeType(sourceNode.node_type)} 不能直接连接到 ${describeNodeType(targetNode.node_type)}。` };
+}
+
+function getEventClientPoint(event: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent): { x: number; y: number } | null {
+  if ('clientX' in event && typeof event.clientX === 'number') {
+    return { x: event.clientX, y: event.clientY };
+  }
+  if ('changedTouches' in event && event.changedTouches && event.changedTouches.length > 0) {
+    return { x: event.changedTouches[0].clientX, y: event.changedTouches[0].clientY };
+  }
+  return null;
+}
 
 export function Canvas() {
   const nodes = useCanvasStore(s => s.nodes);
@@ -82,6 +224,7 @@ export function Canvas() {
   const clearSelection = useCanvasStore(s => s.clearSelection);
   const updateViewport = useCanvasStore(s => s.updateViewport);
   const saveNow = useCanvasStore(s => s.saveNow);
+  const setError = useCanvasStore(s => s.setError);
   const initialCanvasLoadActive = useCanvasStore(s => s.initialCanvasLoadActive);
   const initialCanvasLoadSessionId = useCanvasStore(s => s.currentInitialCanvasLoadStats?.sessionId ?? null);
   const { screenToFlowPosition, fitView, setViewport, getViewport } = useReactFlow();
@@ -96,6 +239,8 @@ export function Canvas() {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ edgeId: string; x: number; y: number } | null>(null);
   const dragLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingConnectionStartRef = useRef<{ sourceId: string; sourceHandle?: string | null } | null>(null);
+  const connectionCommittedRef = useRef(false);
 
   // Undo / Redo keyboard shortcuts
   useEffect(() => {
@@ -143,6 +288,7 @@ export function Canvas() {
 
   const handleConnect = useCallback(
     (connection: Parameters<typeof onConnect>[0]) => {
+      connectionCommittedRef.current = true;
       onConnect(connection);
     },
     [onConnect]
@@ -153,78 +299,57 @@ export function Canvas() {
     (connection: Edge | Connection) => {
       const state = useCanvasStore.getState();
       if (!state.canvasFile) { return true; }
-      const sourceNode = state.canvasFile.nodes.find(n => n.id === connection.source);
-      const targetNode = state.canvasFile.nodes.find(n => n.id === connection.target);
-
-      // Self-loop is never valid
-      if (connection.source === connection.target) { return false; }
-      if (!sourceNode || !targetNode) { return false; }
-
-      // Function → Function: check for cycles
-      if (sourceNode?.node_type === 'function' && targetNode?.node_type === 'function') {
-        return !wouldCreateCycle(state.canvasFile.edges, connection.source, connection.target);
-      }
-
-      if (isGroupHubNode(targetNode)) {
-        return sourceNode.node_type !== 'function';
-      }
-
-      if (isGroupHubNode(sourceNode)) {
-        return targetNode.node_type === 'function' || isGroupHubNode(targetNode);
-      }
-
-      if (targetNode.node_type === 'blueprint') {
-        if (!connection.targetHandle) { return false; }
-        if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) { return false; }
-        const slot = targetNode.meta?.blueprint_input_slot_defs?.find(item => item.id === connection.targetHandle);
-        if (!slot) { return false; }
-        if (!slot.allow_multiple) {
-          const alreadyBound = state.canvasFile.edges.some(edge =>
-            edge.target === connection.target &&
-            edge.targetHandle === connection.targetHandle &&
-            edge.edge_type === 'data_flow'
-          );
-          if (alreadyBound) { return false; }
-        }
-        return true;
-      }
-
-      if (isBlueprintInputPlaceholderNode(targetNode)) {
-        if (!(isDataNode(sourceNode) || isGroupHubNode(sourceNode))) { return false; }
-        if (
-          sourceNode.meta?.blueprint_instance_id &&
-          sourceNode.meta.blueprint_instance_id === targetNode.meta?.blueprint_instance_id
-        ) {
-          return false;
-        }
-        const accepts = targetNode.meta?.blueprint_placeholder_accepts ?? [];
-        if (isDataNode(sourceNode) && accepts.length > 0 && !accepts.includes(sourceNode.node_type)) {
-          return false;
-        }
-        if (!targetNode.meta?.blueprint_placeholder_allow_multiple) {
-          const alreadyBound = state.canvasFile.edges.some(edge =>
-            edge.target === connection.target &&
-            edge.edge_type === 'data_flow'
-          );
-          if (alreadyBound) { return false; }
-        }
-        const duplicateBinding = state.canvasFile.edges.some(edge =>
-          edge.source === connection.source &&
-          edge.target === connection.target &&
-          edge.edge_type === 'data_flow'
-        );
-        if (duplicateBinding) { return false; }
-        return true;
-      }
-
-      if (targetNode.node_type === 'function') {
-        return sourceNode.node_type !== 'function';
-      }
-
-      return false;
+      return getConnectionValidationResult(state.canvasFile, connection as Connection).valid;
     },
     []
   );
+
+  const handleConnectStart = useCallback((_event: unknown, params: { nodeId?: string; handleId?: string | null }) => {
+    if (!params.nodeId) {
+      pendingConnectionStartRef.current = null;
+      return;
+    }
+    connectionCommittedRef.current = false;
+    pendingConnectionStartRef.current = {
+      sourceId: params.nodeId,
+      sourceHandle: params.handleId ?? null,
+    };
+  }, []);
+
+  const handleConnectEnd = useCallback((event: MouseEvent | TouchEvent) => {
+    const pending = pendingConnectionStartRef.current;
+    const didCommit = connectionCommittedRef.current;
+    pendingConnectionStartRef.current = null;
+    connectionCommittedRef.current = false;
+
+    if (didCommit || !pending) { return; }
+
+    const state = useCanvasStore.getState();
+    if (!state.canvasFile) { return; }
+
+    const point = getEventClientPoint(event);
+    if (!point) { return; }
+    const targetElement = document.elementFromPoint(point.x, point.y) as HTMLElement | null;
+    if (!targetElement) { return; }
+
+    const handleEl = targetElement.closest('[data-handleid]') as HTMLElement | null;
+    const nodeEl = targetElement.closest('.react-flow__node') as HTMLElement | null;
+    const targetNodeId = handleEl?.getAttribute('data-nodeid')
+      ?? nodeEl?.getAttribute('data-id')
+      ?? undefined;
+    if (!targetNodeId) { return; }
+
+    const candidate: Connection = {
+      source: pending.sourceId,
+      sourceHandle: pending.sourceHandle ?? undefined,
+      target: targetNodeId,
+      targetHandle: handleEl?.getAttribute('data-handleid') ?? undefined,
+    };
+    const result = getConnectionValidationResult(state.canvasFile, candidate);
+    if (!result.valid && result.reason) {
+      setError(result.reason);
+    }
+  }, [setError]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (
@@ -463,8 +588,30 @@ export function Canvas() {
   useEffect(() => {
     if (!searchOpen || searchMatches.length === 0 || searchIndex < 0) { return; }
     const nodeId = searchMatches[searchIndex];
+    const matchedNode = nodes.find(node => node.id === nodeId);
+    if (
+      matchedNode?.hidden &&
+      matchedNode.data.node_type === 'blueprint' &&
+      matchedNode.data.meta?.blueprint_instance_id
+    ) {
+      const instanceId = matchedNode.data.meta.blueprint_instance_id;
+      const visibleMemberIds = nodes
+        .filter(node =>
+          !node.hidden &&
+          node.id !== nodeId &&
+          (
+            node.data.meta?.blueprint_instance_id === instanceId ||
+            node.data.meta?.blueprint_bound_instance_id === instanceId
+          )
+        )
+        .map(node => ({ id: node.id }));
+      if (visibleMemberIds.length > 0) {
+        fitView({ nodes: visibleMemberIds, padding: 0.3, duration: 220 });
+        return;
+      }
+    }
     fitView({ nodes: [{ id: nodeId }], padding: 0.3, duration: 220 });
-  }, [searchOpen, searchMatches, searchIndex, fitView]);
+  }, [searchOpen, searchMatches, searchIndex, fitView, nodes]);
 
   const collapsedNodeIds = useMemo(() => {
     const ids = new Set<string>();
@@ -484,7 +631,7 @@ export function Canvas() {
     const visualNodes = (!hasSearch && !hasCollapsedGroups)
       ? nodes
       : nodes.map(n => {
-          const hidden = collapsedNodeIds.has(n.id);
+          const hidden = !!n.hidden || collapsedNodeIds.has(n.id);
           let style = n.style;
 
           if (hasSearch && !hidden) {
@@ -537,6 +684,8 @@ export function Canvas() {
           onNodesChange={onNodesChange}
           onEdgesChange={handleEdgesChange}
           onConnect={handleConnect}
+          onConnectStart={handleConnectStart}
+          onConnectEnd={handleConnectEnd}
           isValidConnection={isValidConnection}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
@@ -575,6 +724,7 @@ export function Canvas() {
             nodeColor="var(--vscode-badge-background)"
           />
           <BoardOverlays />
+          <BlueprintOverlays />
           {edgeContextMenu && (
             <EdgeContextMenu
               edgeId={edgeContextMenu.edgeId}

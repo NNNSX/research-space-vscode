@@ -39,6 +39,14 @@ interface PipelineContext {
   pauseResolve: (() => void) | null;
 }
 
+interface RunPipelinePlanOptions {
+  initialNodeStatuses?: Map<string, PipelineNodeStatus>;
+  initialOutputContents?: Map<string, AIContent>;
+  initialOutputNodes?: Map<string, CanvasNode>;
+  runMode?: 'full' | 'resume';
+  reusedCachedNodeCount?: number;
+}
+
 // Active pipeline contexts (for pause/resume/cancel from outside)
 const activePipelines = new Map<string, PipelineContext>();
 
@@ -77,10 +85,17 @@ function postBlueprintRunRejectedIfNeeded(
   executionCanvas: CanvasFile,
   webview: vscode.Webview,
   message: string,
+  options?: { runMode?: 'full' | 'resume'; reusedCachedNodeCount?: number },
 ): void {
   const triggerNode = executionCanvas.nodes.find(node => node.id === triggerNodeId);
   if (!isBlueprintInstanceContainerNode(triggerNode)) { return; }
-  webview.postMessage({ type: 'blueprintRunRejected', containerNodeId: triggerNodeId, message });
+  webview.postMessage({
+    type: 'blueprintRunRejected',
+    containerNodeId: triggerNodeId,
+    message,
+    runMode: options?.runMode,
+    reusedCachedNodeCount: options?.reusedCachedNodeCount,
+  });
 }
 
 export function pausePipeline(pipelineId: string): void {
@@ -102,6 +117,11 @@ export function cancelPipeline(pipelineId: string): void {
   if (!ctx) { return; }
   ctx.isCancelled = true;
   ctx.abortController.abort();
+  for (const [nodeId, status] of ctx.nodeStatuses.entries()) {
+    if (status === 'running') {
+      cancelRunByNodeId(nodeId);
+    }
+  }
   // Also resume if paused so the loop can exit
   if (ctx.pauseResolve) { ctx.pauseResolve(); }
 }
@@ -135,11 +155,15 @@ export async function runPipelinePlan(
   executionCanvas: CanvasFile,
   canvasUri: vscode.Uri,
   webview: vscode.Webview,
+  options?: RunPipelinePlanOptions,
 ): Promise<void> {
   let canvas = executionCanvas;
 
   if (plan.layers.length === 0) {
-    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, '没有可执行的管道节点');
+    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, '没有可执行的管道节点', {
+      runMode: options?.runMode,
+      reusedCachedNodeCount: options?.reusedCachedNodeCount,
+    });
     webview.postMessage({ type: 'error', message: '没有可执行的管道节点' });
     return;
   }
@@ -151,7 +175,10 @@ export async function runPipelinePlan(
       .filter(e => e.severity === 'error')
       .map(e => e.message)
       .join('\n');
-    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, `Pipeline 校验失败:\n${errorMessages}`);
+    postBlueprintRunRejectedIfNeeded(triggerNodeId, executionCanvas, webview, `Pipeline 校验失败:\n${errorMessages}`, {
+      runMode: options?.runMode,
+      reusedCachedNodeCount: options?.reusedCachedNodeCount,
+    });
     webview.postMessage({ type: 'error', message: `Pipeline 校验失败:\n${errorMessages}` });
     return;
   }
@@ -159,13 +186,18 @@ export async function runPipelinePlan(
 
   const pipelineId = uuid();
   const totalCount = plan.pipelineNodeIds.length;
+  const seededStatuses = options?.initialNodeStatuses ?? new Map<string, PipelineNodeStatus>();
+  const nodeStatuses = new Map<string, PipelineNodeStatus>();
+  for (const id of plan.pipelineNodeIds) {
+    nodeStatuses.set(id, seededStatuses.get(id) ?? 'waiting');
+  }
   const ctx: PipelineContext = {
     pipelineId,
     triggerNodeId,
     plan,
-    nodeStatuses: new Map(plan.pipelineNodeIds.map(id => [id, 'waiting' as PipelineNodeStatus])),
-    outputContents: new Map(),
-    outputNodes: new Map(),
+    nodeStatuses,
+    outputContents: new Map(options?.initialOutputContents ?? []),
+    outputNodes: new Map(options?.initialOutputNodes ?? []),
     isPaused: false,
     isCancelled: false,
     abortController: new AbortController(),
@@ -182,6 +214,10 @@ export async function runPipelinePlan(
     triggerNodeId,
     nodeIds: plan.pipelineNodeIds,
     totalNodes: totalCount,
+    initialNodeStatuses: Object.fromEntries(ctx.nodeStatuses),
+    initialCompletedNodes: countCompletedNodes(ctx),
+    runMode: options?.runMode ?? 'full',
+    reusedCachedNodeCount: options?.reusedCachedNodeCount ?? 0,
   });
 
   for (const w of warnings) {
@@ -196,10 +232,12 @@ export async function runPipelinePlan(
   // Clear any stale per-node status from a previous run. Waiting/skip/running
   // states are driven by the pipeline-specific status messages.
   for (const nodeId of plan.pipelineNodeIds) {
-    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+    if ((ctx.nodeStatuses.get(nodeId) ?? 'waiting') !== 'done') {
+      webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' });
+    }
   }
 
-  let completedCount = 0;
+  let completedCount = countCompletedNodes(ctx);
 
   try {
     for (let layerIdx = 0; layerIdx < plan.layers.length; layerIdx++) {
@@ -212,7 +250,8 @@ export async function runPipelinePlan(
 
       for (const nodeId of layer.nodeIds) {
         if (ctx.isCancelled) { break; }
-        if (ctx.nodeStatuses.get(nodeId) === 'skipped') { continue; }
+        const existingStatus = ctx.nodeStatuses.get(nodeId);
+        if (existingStatus === 'done' || existingStatus === 'skipped') { continue; }
 
         // Check if any upstream node failed → skip this node
         const dependencyNodeIds = plan.dependencyNodeIdsByNode[nodeId] ?? [];
@@ -306,11 +345,26 @@ async function runPipelineNode(
   canvasUri: vscode.Uri,
   webview: vscode.Webview,
 ): Promise<FunctionRunResult> {
+  if (ctx.isCancelled || ctx.abortController.signal.aborted) {
+    return {
+      success: false,
+      runId: uuid(),
+      errorMessage: 'Cancelled',
+    };
+  }
   ctx.nodeStatuses.set(nodeId, 'running');
   webview.postMessage({ type: 'pipelineNodeStart', pipelineId: ctx.pipelineId, nodeId });
 
   // Re-read canvas for this node's run (may have been updated by earlier nodes)
   const freshCanvas = await readCanvas(canvasUri);
+  if (ctx.isCancelled || ctx.abortController.signal.aborted) {
+    cancelRunByNodeId(nodeId);
+    return {
+      success: false,
+      runId: uuid(),
+      errorMessage: 'Cancelled',
+    };
+  }
   const executionPlan = buildFunctionExecutionPlan(nodeId, freshCanvas, ['data_flow', 'pipeline_flow']);
   if ('error' in executionPlan) {
     return {

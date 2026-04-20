@@ -12,9 +12,24 @@ interface NodeContextMenuProps {
   onClose: () => void;
   filePath?: string;      // D2: open file item (data nodes)
   canDuplicate?: boolean; // D2: copy node (data + function nodes)
+  extraActions?: Array<{
+    label: string;
+    onClick: (e: React.MouseEvent) => void;
+    danger?: boolean;
+  }>;
 }
 
-export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, filePath, canDuplicate }: NodeContextMenuProps) {
+export function NodeContextMenu({
+  nodeId,
+  nodeType,
+  nodeTitle,
+  x,
+  y,
+  onClose,
+  filePath,
+  canDuplicate,
+  extraActions,
+}: NodeContextMenuProps) {
   const onNodesChange = useCanvasStore(s => s.onNodesChange);
   const onEdgesChange = useCanvasStore(s => s.onEdgesChange);
   const edges = useCanvasStore(s => s.edges);
@@ -123,6 +138,18 @@ export function NodeContextMenu({ nodeId, nodeType, nodeTitle, x, y, onClose, fi
       {canDuplicate && (
         <MenuItem label="⧉ 复制节点" onClick={handleDuplicate} />
       )}
+      {(extraActions ?? []).map(action => (
+        <MenuItem
+          key={action.label}
+          label={action.label}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+            action.onClick(e);
+          }}
+          danger={action.danger}
+        />
+      ))}
       <MenuItem label="🗑 从画布删除" onClick={handleDelete} danger />
     </>
   );

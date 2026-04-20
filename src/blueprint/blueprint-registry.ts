@@ -112,15 +112,20 @@ export async function readBlueprintDefinition(filePath: string): Promise<Bluepri
 export async function saveBlueprintDefinition(
   canvasDir: string,
   definition: BlueprintDefinition,
+  overwriteFilePath?: string,
 ): Promise<BlueprintRegistryEntry> {
   const dir = await ensureBlueprintDir(canvasDir);
   const fileBase = sanitizeBlueprintFileBase(definition.title);
   const fileName = `${fileBase}.blueprint.json`;
-  const fileUri = vscode.Uri.joinPath(dir, fileName);
+  const desiredFileUri = vscode.Uri.joinPath(dir, fileName);
+  const overwriteUri = overwriteFilePath ? vscode.Uri.file(overwriteFilePath) : undefined;
 
   try {
-    await vscode.workspace.fs.stat(fileUri);
-    throw new Error(`已存在同名蓝图文件：${fileName}。请修改蓝图名称后再保存。`);
+    await vscode.workspace.fs.stat(desiredFileUri);
+    const sameOverwriteTarget = overwriteUri && overwriteUri.fsPath === desiredFileUri.fsPath;
+    if (!sameOverwriteTarget) {
+      throw new Error(`已存在同名蓝图文件：${fileName}。请修改蓝图名称后再保存。`);
+    }
   } catch (e) {
     if (!(e instanceof vscode.FileSystemError)) {
       throw e;
@@ -139,6 +144,31 @@ export async function saveBlueprintDefinition(
   };
 
   const encoded = Buffer.from(JSON.stringify(nextDef, null, 2), 'utf-8');
-  await vscode.workspace.fs.writeFile(fileUri, encoded);
-  return toRegistryEntry(fileUri.fsPath, nextDef);
+  await vscode.workspace.fs.writeFile(desiredFileUri, encoded);
+
+  if (
+    overwriteUri &&
+    overwriteUri.fsPath !== desiredFileUri.fsPath
+  ) {
+    try {
+      await vscode.workspace.fs.delete(overwriteUri);
+    } catch (e) {
+      if (!(e instanceof vscode.FileSystemError)) {
+        throw e;
+      }
+    }
+  }
+
+  return toRegistryEntry(desiredFileUri.fsPath, nextDef);
+}
+
+export async function deleteBlueprintDefinition(filePath: string): Promise<void> {
+  const fileUri = vscode.Uri.file(filePath);
+  try {
+    await vscode.workspace.fs.delete(fileUri);
+  } catch (e) {
+    if (!(e instanceof vscode.FileSystemError)) {
+      throw e;
+    }
+  }
 }

@@ -9,6 +9,7 @@ export const NODE_PORT_IDS = {
 } as const;
 
 export type NodePortDirection = 'in' | 'out';
+export type NodePortVariant = 'default' | 'blueprint-placeholder';
 
 export function getNodePortLabel(direction: NodePortDirection): string {
   return direction === 'in' ? '输入通道' : '输出通道';
@@ -20,7 +21,11 @@ export function normalizeNodePortId(id?: string | null): string | undefined {
   return id;
 }
 
-export function buildNodePortStyle(color: string, direction: NodePortDirection): React.CSSProperties {
+export function buildNodePortStyle(
+  color: string,
+  direction: NodePortDirection,
+  variant: NodePortVariant = 'default',
+): React.CSSProperties {
   return {
     width: NODE_PORT_HIT_SIZE,
     height: NODE_PORT_HIT_SIZE,
@@ -33,7 +38,9 @@ export function buildNodePortStyle(color: string, direction: NodePortDirection):
     zIndex: 120,
     filter: 'none',
     ['--rs-port-color' as string]: color,
-    ['--rs-port-size' as string]: `${NODE_PORT_SIZE}px`,
+    ['--rs-port-size' as string]: `${variant === 'blueprint-placeholder' ? NODE_PORT_SIZE + 1 : NODE_PORT_SIZE}px`,
     ['--rs-port-direction' as string]: direction,
+    ['--rs-port-ring-size' as string]: variant === 'blueprint-placeholder' ? '8px' : '6px',
+    ['--rs-port-ring-alpha' as string]: variant === 'blueprint-placeholder' ? '32%' : '20%',
   };
 }

@@ -6,6 +6,7 @@ import type { AIModelCapabilities } from './model-capabilities';
 
 // Static fallback — vscode.lm API doesn't enumerate per-user model entitlements
 const COPILOT_STATIC_MODELS: ModelInfo[] = [
+  { id: 'gpt-4.1',           name: 'GPT-4.1',           description: 'OpenAI GPT-4.1' },
   { id: 'gpt-4o',            name: 'GPT-4o',            description: 'OpenAI GPT-4o' },
   { id: 'gpt-4o-mini',       name: 'GPT-4o Mini',       description: 'Faster & cheaper GPT-4o' },
   { id: 'o1',                name: 'o1',                description: 'OpenAI o1 reasoning' },
@@ -49,17 +50,20 @@ export class CopilotProvider implements AIProvider {
   async resolveModel(modelOverride?: string): Promise<string | undefined> {
     const globalModel = vscode.workspace
       .getConfiguration('researchSpace.ai')
-      .get<string>('copilotModel', '');
+      .get<string>('copilotModel', 'gpt-4.1');
     const preferredModel = (modelOverride && modelOverride !== 'auto')
       ? modelOverride
-      : (globalModel || undefined);
+      : (globalModel || 'gpt-4.1');
 
     const selector: vscode.LanguageModelChatSelector = { vendor: 'copilot' };
     if (preferredModel) {
       (selector as Record<string, string>)['id'] = preferredModel;
     }
 
-    const models = await vscode.lm.selectChatModels(selector);
+    let models = await vscode.lm.selectChatModels(selector);
+    if (models.length === 0 && preferredModel) {
+      models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+    }
     if (models.length === 0) {
       throw new Error('No Copilot model available');
     }

@@ -342,6 +342,9 @@ function FullFunctionNode({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const heightSyncOuterRafRef = useRef<number | null>(null);
+  const heightSyncInnerRafRef = useRef<number | null>(null);
+  const lastAutoHeightRef = useRef<number>(data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT);
 
   // v2.0: Cycle error shake animation
   const cycleErrorNodeId = useCanvasStore(s => (s as any)._cycleErrorNodeId) as string | null;
@@ -502,7 +505,11 @@ function FullFunctionNode({
   const modelOptions: NodeSelectOption[] = [
     {
       value: '',
-      label: visibleModels === null ? '加载中…' : currentProviderAutoModelLabel,
+      label: visibleModels === null
+        ? '加载中…'
+        : currentProvider === 'copilot'
+          ? `跟随全局（${effectiveGlobalModelLabel || 'gpt-4.1'}）`
+          : currentProviderAutoModelLabel,
       disabled: visibleModels === null,
     },
     ...((visibleModels ?? []).map(model => ({
@@ -632,6 +639,8 @@ function FullFunctionNode({
 
   const selectStyle: React.CSSProperties = {
     flex: 1,
+    width: '100%',
+    boxSizing: 'border-box',
     background: 'var(--vscode-dropdown-background)',
     color: 'var(--vscode-dropdown-foreground)',
     border: '1px solid var(--vscode-dropdown-border)',
@@ -702,23 +711,46 @@ function FullFunctionNode({
     }
   })();
 
+  useEffect(() => {
+    lastAutoHeightRef.current = data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT;
+  }, [data.size?.height]);
+
   const scheduleNodeHeightSync = useCallback(() => {
     const el = contentRef.current;
     if (!el) { return; }
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
+    if (heightSyncOuterRafRef.current !== null) {
+      window.cancelAnimationFrame(heightSyncOuterRafRef.current);
+      heightSyncOuterRafRef.current = null;
+    }
+    if (heightSyncInnerRafRef.current !== null) {
+      window.cancelAnimationFrame(heightSyncInnerRafRef.current);
+      heightSyncInnerRafRef.current = null;
+    }
+    heightSyncOuterRafRef.current = window.requestAnimationFrame(() => {
+      heightSyncOuterRafRef.current = null;
+      heightSyncInnerRafRef.current = window.requestAnimationFrame(() => {
+      heightSyncInnerRafRef.current = null;
+      if (!el.isConnected || contentRef.current !== el) { return; }
       const currentWidth = data.size?.width ?? 280;
       const currentHeight = data.size?.height ?? MIN_FUNCTION_NODE_HEIGHT;
+      // Do not use getBoundingClientRect() here:
+      // React Flow scales nodes with CSS transforms, and DOMRect height would then
+      // include viewport zoom, causing auto-height to drift larger/smaller after
+      // reloads, zoom changes, or seemingly harmless re-renders.
       const contentHeight = Math.max(
-        Math.ceil(el.getBoundingClientRect().height),
         Math.ceil(el.scrollHeight),
         Math.ceil(el.clientHeight),
+        Math.ceil(el.offsetHeight),
       );
       const requiredHeight = Math.max(
         MIN_FUNCTION_NODE_HEIGHT,
         Math.ceil(contentHeight + FUNCTION_NODE_AUTO_HEIGHT_PADDING),
       );
       if (Math.abs(requiredHeight - currentHeight) > 2) {
+        if (Math.abs(requiredHeight - lastAutoHeightRef.current) <= 2) {
+          return;
+        }
+        lastAutoHeightRef.current = requiredHeight;
         updateNodeSize(id, currentWidth, requiredHeight);
       } else {
         updateNodeInternals(id);
@@ -762,7 +794,17 @@ function FullFunctionNode({
       scheduleNodeHeightSync();
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (heightSyncOuterRafRef.current !== null) {
+        window.cancelAnimationFrame(heightSyncOuterRafRef.current);
+        heightSyncOuterRafRef.current = null;
+      }
+      if (heightSyncInnerRafRef.current !== null) {
+        window.cancelAnimationFrame(heightSyncInnerRafRef.current);
+        heightSyncInnerRafRef.current = null;
+      }
+    };
   }, [scheduleNodeHeightSync]);
 
   return (
@@ -1394,7 +1436,12 @@ function NodeSelect({
       value={value}
       disabled={disabled}
       onChange={e => onChange(e.target.value)}
-      style={style}
+      style={{
+        width: '100%',
+        display: 'block',
+        boxSizing: 'border-box',
+        ...style,
+      }}
     >
       {options.map(option => (
         <option key={`${option.value || '__empty__'}-${option.label}`} value={option.value} disabled={option.disabled}>
