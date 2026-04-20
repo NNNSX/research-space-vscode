@@ -245,6 +245,11 @@ my-workspace/
 
 ---
 
+## 贡献者
+
+- **NNNSX** — 项目发起、产品设计与主要开发
+- **[@codex](https://github.com/codex)** — 协作开发、问题排查与实现支持
+
 ## 致谢
 
 Research Space 的开发离不开以下优秀的开源项目，在此表示衷心感谢：
