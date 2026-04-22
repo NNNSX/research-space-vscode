@@ -1,0 +1,4 @@
+{
+  "researchSpace.ai.provider": "ollama",
+  "researchSpace.ai.ollamaModel": "qwen3.5:0.8b"
+}

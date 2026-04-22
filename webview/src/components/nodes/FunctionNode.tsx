@@ -79,6 +79,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   copilot:   'GitHub Copilot',
   anthropic: 'Anthropic Claude',
   ollama:    'Ollama（本地）',
+  omlx:      'oMLX',
 };
 
 // Node type icons for displaying upstream nodes in the inputs list
@@ -691,7 +692,7 @@ function FullFunctionNode({
       ? { kind: data.meta.fn_issue_kind, message: data.meta.fn_issue_message }
       : null
   );
-  const showIssueBanner = !!nodeIssue && (effectiveStatus === 'error' || pipelineFailed || pipelineSkipped);
+  const showIssueBanner = !settings?.testMode && !!nodeIssue && (effectiveStatus === 'error' || pipelineFailed || pipelineSkipped);
   const showStopButton = isVisuallyRunning || countdown !== null;
   const calmBorder = `${selected ? NODE_SELECTED_BORDER_WIDTH : NODE_BORDER_WIDTH}px solid ${selected ? effectiveStatusColor : 'var(--vscode-panel-border)'}`;
   const calmBoxShadow = selected

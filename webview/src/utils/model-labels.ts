@@ -4,6 +4,7 @@ const BUILTIN_DEFAULT_MODEL_IDS: Record<string, string> = {
   copilot: 'gpt-4.1',
   anthropic: 'claude-sonnet-4-6',
   ollama: 'llama3.2',
+  omlx: '',
 };
 
 type FavoriteModelMatcher = {
@@ -112,6 +113,12 @@ const OPTIMISTIC_FAVORITE_MODEL_IDS: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'claude-opus-4-6',
   ],
+  omlx: [
+    'qwen3.5:0.8b',
+    'qwen3.5:7b',
+    'llama3.2',
+    'gemma3:4b',
+  ],
 };
 const AIHUBMIX_OPTIMISTIC_FAVORITE_MODEL_IDS = [
   'gemini-3.1-pro-preview',
@@ -158,6 +165,7 @@ export function getProviderDisplayName(providerId: string, settings: SettingsSna
   if (providerId === 'copilot') { return 'GitHub Copilot'; }
   if (providerId === 'anthropic') { return 'Anthropic Claude'; }
   if (providerId === 'ollama') { return 'Ollama'; }
+  if (providerId === 'omlx') { return 'oMLX'; }
   const custom = settings?.customProviders?.find(cp => cp.id === providerId);
   return custom?.name ?? providerId;
 }
@@ -167,6 +175,7 @@ export function getConfiguredProviderModelId(providerId: string, settings: Setti
   if (providerId === 'copilot') { return settings.copilotModel ?? ''; }
   if (providerId === 'anthropic') { return settings.anthropicModel ?? BUILTIN_DEFAULT_MODEL_IDS.anthropic; }
   if (providerId === 'ollama') { return settings.ollamaModel ?? BUILTIN_DEFAULT_MODEL_IDS.ollama; }
+  if (providerId === 'omlx') { return settings.omlxModel ?? BUILTIN_DEFAULT_MODEL_IDS.omlx; }
   const custom = settings.customProviders?.find(cp => cp.id === providerId);
   return custom?.defaultModel ?? '';
 }
@@ -185,9 +194,9 @@ export function getFavoriteModelsForProvider(
   }
 
   const modelIds = models?.map(model => model.id) ?? [];
-  if (providerId === 'ollama') {
-    const ollamaPreferred = models?.filter(model => /qwen|llama|gemma|mistral|deepseek/i.test(model.id)).slice(0, 6) ?? [];
-    return ollamaPreferred.map(model => model.id);
+  if (providerId === 'ollama' || providerId === 'omlx') {
+    const localPreferred = models?.filter(model => /qwen|llama|gemma|mistral|deepseek/i.test(model.id)).slice(0, 6) ?? [];
+    return localPreferred.map(model => model.id);
   }
 
   if (providerId in BUILTIN_FAVORITE_MODEL_MATCHERS) {

@@ -37,17 +37,20 @@ export interface AIProvider {
 import { CopilotProvider } from './copilot';
 import { AnthropicProvider } from './anthropic';
 import { OllamaProvider } from './ollama';
+import { OMLXProvider } from './omlx';
 import { CustomProvider } from './custom';
 
 const copilotProvider = new CopilotProvider();
 const anthropicProvider = new AnthropicProvider();
 const ollamaProvider = new OllamaProvider();
+const omlxProvider = new OMLXProvider();
 
 // Exported for CanvasEditorProvider to access by ID without going through getProvider fallback
 export const PROVIDER_MAP: Record<string, AIProvider> = {
   copilot:   copilotProvider,
   anthropic: anthropicProvider,
   ollama:    ollamaProvider,
+  omlx:      omlxProvider,
 };
 
 /** Build a CustomProvider from config, or return undefined if not found. */
@@ -67,7 +70,7 @@ export async function getProvider(preferredId?: string): Promise<AIProvider> {
     ? preferredId
     : config.get<string>('provider', 'copilot');
 
-  const staticProviders: AIProvider[] = [copilotProvider, anthropicProvider, ollamaProvider];
+  const staticProviders: AIProvider[] = [copilotProvider, anthropicProvider, ollamaProvider, omlxProvider];
 
   // If a specific provider was requested (not auto), try it first and skip fallback
   if (preferredId && preferredId !== 'auto') {
@@ -101,7 +104,7 @@ export async function getProvider(preferredId?: string): Promise<AIProvider> {
     if (await p.isAvailable()) { return p; }
   }
   throw new Error(
-    'No AI provider available. Please configure an Anthropic API Key in Settings, or install GitHub Copilot.'
+    'No AI provider available. Please configure Anthropic / Ollama / oMLX in Settings, or install GitHub Copilot.'
   );
 }
 

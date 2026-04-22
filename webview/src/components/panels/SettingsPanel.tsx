@@ -651,6 +651,7 @@ function buildProviderOptions(customProviders: CustomProviderConfig[]): Searchab
     { value: 'copilot', label: 'GitHub Copilot', keywords: ['copilot', 'github'] },
     { value: 'anthropic', label: 'Anthropic Claude', keywords: ['anthropic', 'claude'] },
     { value: 'ollama', label: 'Ollama（本地）', keywords: ['ollama', 'local', '本地'] },
+    { value: 'omlx', label: 'oMLX（本地）', keywords: ['omlx', 'local', '本地'] },
     ...customProviders.map(cp => ({
       value: cp.id,
       label: cp.name,
@@ -668,6 +669,7 @@ export function SettingsPanel() {
   const petEnabled = usePetStore(s => s.enabled);
   const petType = usePetStore(s => s.pet.petType);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
+  const [showOmlxKey, setShowOmlxKey] = useState(false);
   const [detailView, setDetailView] = useState<'llm' | 'multimodal' | 'canvas' | 'pet' | null>(null);
   const [favoriteProviderId, setFavoriteProviderId] = useState<string | null>(null);
   const [llmTab, setLlmTab] = useState<'overview' | 'builtin' | 'custom'>('overview');
@@ -712,6 +714,7 @@ export function SettingsPanel() {
       requestModelCache('anthropic');
     }
     requestModelCache('ollama');
+    requestModelCache('omlx');
     for (const cp of (settings?.customProviders ?? [])) {
       requestModelCache(cp.id);
     }
@@ -888,6 +891,43 @@ export function SettingsPanel() {
         </Field>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button onClick={() => setFavoriteProviderId('ollama')} style={smallBtnStyle}>⭐ 常用模型</button>
+        </div>
+      </Section>
+
+      <Section title="oMLX（本地）">
+        <Field label="Base URL">
+          <input
+            key={settings.omlxBaseUrl}
+            style={inputStyle}
+            defaultValue={settings.omlxBaseUrl}
+            placeholder="http://localhost:8000/v1"
+            onBlur={e => saveSetting('omlxBaseUrl', e.target.value)}
+          />
+        </Field>
+        <Field label="API Key（可选）">
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input
+              key={settings.omlxApiKey}
+              style={{ ...inputStyle, flex: 1 }}
+              type={showOmlxKey ? 'text' : 'password'}
+              defaultValue={settings.omlxApiKey}
+              placeholder="未启用鉴权时可留空"
+              onChange={e => queueSetting('omlxApiKey', e.target.value)}
+            />
+            <button onClick={() => setShowOmlxKey(v => !v)} style={smallBtnStyle}>
+              {showOmlxKey ? '👁' : '🔒'}
+            </button>
+          </div>
+        </Field>
+        <Field label="默认模型">
+          <ModelSelect
+            providerId="omlx"
+            value={settings.omlxModel}
+            onChange={v => saveSetting('omlxModel', v)}
+          />
+        </Field>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button onClick={() => setFavoriteProviderId('omlx')} style={smallBtnStyle}>⭐ 常用模型</button>
         </div>
       </Section>
     </>

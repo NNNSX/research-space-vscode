@@ -130,7 +130,7 @@ export class OllamaProvider implements AIProvider {
   async *stream(
     systemPrompt: string,
     contents: AIContent[],
-    opts?: { signal?: AbortSignal; maxTokens?: number; model?: string }
+    opts?: { signal?: AbortSignal; maxTokens?: number; model?: string; think?: boolean }
   ): AsyncIterable<string> {
     // Per-node model override > global setting
     const model = await this.resolveModel(opts?.model);
@@ -185,6 +185,7 @@ export class OllamaProvider implements AIProvider {
       body: JSON.stringify({
         model,
         stream: true,
+        ...(opts?.think === false ? { think: false } : {}),
         messages,
         ...(opts?.maxTokens ? { options: { num_predict: opts.maxTokens } } : {}),
       }),

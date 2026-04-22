@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.1-alpha.55",
+  "version": "2.1.1-alpha.66",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -178,7 +178,8 @@
           "enum": [
             "copilot",
             "anthropic",
-            "ollama"
+            "ollama",
+            "omlx"
           ],
           "default": "copilot",
           "description": "Preferred AI provider (falls back automatically if unavailable)"
@@ -214,6 +215,21 @@
           "type": "string",
           "default": "llama3.2",
           "description": "Ollama model name"
+        },
+        "researchSpace.ai.omlxBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000/v1",
+          "description": "oMLX OpenAI-compatible base URL"
+        },
+        "researchSpace.ai.omlxApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "oMLX API Key (optional when auth is disabled)"
+        },
+        "researchSpace.ai.omlxModel": {
+          "type": "string",
+          "default": "",
+          "description": "oMLX model name"
         },
         "researchSpace.ai.maxOutputTokens": {
           "type": "number",

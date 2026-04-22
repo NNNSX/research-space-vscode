@@ -71,7 +71,7 @@
 
 ## AI Provider 配置
 
-插件支持三种 AI Provider，按优先级自动降级：
+插件支持四种内置 AI Provider，按优先级自动降级：
 
 **GitHub Copilot**（零配置，推荐）
 - 需要 VSCode 中已安装并登录 GitHub Copilot
@@ -86,6 +86,12 @@
 - 需本地运行 [Ollama](https://ollama.com)，默认地址 `http://localhost:11434`
 - 可用模型列表自动从本地实例同步
 - 图片输入需要多模态模型（如 qwen2-vl、llava、gemma3、llama3.2-vision）；非视觉模型会弹出警告提示
+
+**oMLX**（本地 OpenAI 兼容）
+- 需本地运行 [oMLX](https://github.com/jundot/omlx)，默认地址 `http://localhost:8000/v1`
+- 可用模型列表自动从本地实例的 `/v1/models` 同步
+- 聊天推理通过 `/v1/chat/completions` 执行
+- 如本地未启用鉴权，API Key 可留空
 
 **自定义 OpenAI 兼容 Provider**（如 AIHubMix）
 - 可在设置面板里追加 Base URL + API Key + 默认模型
@@ -187,11 +193,14 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `researchSpace.ai.provider` | `copilot` | 全局 AI Provider（copilot / anthropic / ollama） |
+| `researchSpace.ai.provider` | `copilot` | 全局 AI Provider（copilot / anthropic / ollama / omlx） |
 | `researchSpace.ai.anthropicApiKey` | — | Anthropic API Key |
 | `researchSpace.ai.anthropicModel` | `claude-sonnet-4-6` | Anthropic 全局模型 |
 | `researchSpace.ai.ollamaBaseUrl` | `http://localhost:11434` | Ollama 服务地址 |
 | `researchSpace.ai.ollamaModel` | `llama3.2` | Ollama 全局模型 |
+| `researchSpace.ai.omlxBaseUrl` | `http://localhost:8000/v1` | oMLX 服务地址 |
+| `researchSpace.ai.omlxApiKey` | — | oMLX API Key（可选） |
+| `researchSpace.ai.omlxModel` | — | oMLX 全局模型 |
 | `researchSpace.ai.maxOutputTokens` | `0` | 聊天类功能节点的最大输出 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.maxContextTokens` | `0` | 聊天类功能节点的最大上下文 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.favoriteModels` | `{}` | 每个 provider 的常用模型列表；功能节点模型下拉优先只显示这里勾选的模型 |
@@ -260,7 +269,7 @@ my-workspace/
 
 ## 版本历史
 
-当前版本：**v2.1.1-alpha.55**（2026-04-22）
+当前版本：**v2.1.1-alpha.66**（2026-04-22）
 
 完整版本历史请查看 [CHANGELOG](CHANGELOG.md)。
 

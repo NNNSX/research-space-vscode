@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'node:fs/promises';
 import { CanvasEditorProvider } from './providers/CanvasEditorProvider';
 import { WorkspaceTreeProvider, ResearchSpaceTreeItem } from './providers/WorkspaceTreeProvider';
 import { registerAddToCanvas } from './commands/add-to-canvas';
@@ -7,6 +8,24 @@ import { registerNewCanvas } from './commands/new-canvas';
 import { readCanvas, writeCanvas } from './core/storage';
 import { toAbsPath, toRelPath } from './core/storage';
 import { extractPreviewWithMeta } from './core/content-extractor';
+import { getProvider, type AIContent } from './ai/provider';
+
+function getTestAuditLogPath(): string | null {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) { return null; }
+  return path.join(workspaceRoot, 'rs-test-audit.jsonl');
+}
+
+async function appendTestAuditEntry(entry: Record<string, unknown>): Promise<string | null> {
+  const auditPath = getTestAuditLogPath();
+  if (!auditPath) { return null; }
+  const payload = `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...entry,
+  })}\n`;
+  await fs.appendFile(auditPath, payload, 'utf8');
+  return auditPath;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   // ── Custom Editor Provider ────────────────────────────────────────────────
@@ -94,6 +113,73 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!webview || !message || typeof message !== 'object') { return false; }
         if (targetPath && !CanvasEditorProvider.canvasSessionIds.has(targetPath)) { return false; }
         return webview.postMessage(message as Record<string, unknown>);
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.runOllamaSmoke',
+      async () => {
+        const provider = await getProvider('ollama');
+        const model = await provider.resolveModel();
+        const contents: AIContent[] = [
+          {
+            type: 'text',
+            title: 'smoke-test',
+            text: '只回复 RS_OK，不要输出其他内容。',
+          },
+        ];
+        const streamOpts = {
+          model,
+          maxTokens: 16,
+          signal: AbortSignal.timeout(20000),
+          think: false,
+        };
+        let text = '';
+        for await (const chunk of provider.stream('', contents, streamOpts)) {
+          text += chunk;
+          if (text.length >= 128) { break; }
+        }
+        console.log(`[Research Space Test] Ollama smoke completed via ${model}: ${text.trim() || '<empty>'}`);
+        const auditPath = await appendTestAuditEntry({
+          kind: 'ollama-smoke',
+          providerId: provider.id,
+          model,
+          text: text.trim(),
+        });
+        return {
+          providerId: provider.id,
+          model,
+          text: text.trim(),
+          auditPath,
+        };
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.inspectOllamaProvider',
+      async () => {
+        const provider = await getProvider('ollama');
+        const model = await provider.resolveModel();
+        const models = await provider.listModels();
+        const capabilities = provider.getModelCapabilities
+          ? await provider.getModelCapabilities(model)
+          : null;
+        console.log(
+          `[Research Space Test] Ollama provider inspection via ${model}: ` +
+          `${models.length} models, capabilities=${capabilities ? 'ok' : 'missing'}`
+        );
+        const auditPath = await appendTestAuditEntry({
+          kind: 'ollama-provider-inspection',
+          providerId: provider.id,
+          model,
+          modelCount: models.length,
+          capabilities,
+        });
+        return {
+          providerId: provider.id,
+          model,
+          models,
+          capabilities,
+          auditPath,
+        };
       }
     )
   );

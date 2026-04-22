@@ -6006,6 +6006,7 @@ function resolveDefaultsFromSettings(settings: SettingsSnapshot | null): { provi
   if (p === 'copilot')        { model = settings.copilotModel || 'gpt-4.1'; }
   else if (p === 'anthropic') { model = settings.anthropicModel ?? ''; }
   else if (p === 'ollama')    { model = settings.ollamaModel ?? ''; }
+  else if (p === 'omlx')      { model = settings.omlxModel ?? ''; }
   else {
     const cp = settings.customProviders?.find(c => c.id === p);
     model = cp?.defaultModel ?? '';

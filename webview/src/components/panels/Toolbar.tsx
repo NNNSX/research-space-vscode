@@ -331,7 +331,7 @@ const STEPS: { icon: string; title: string; desc: string }[] = [
   {
     icon: '🤖',
     title: '7. AI 服务商',
-    desc: '支持 GitHub Copilot（零配置推荐）、Anthropic Claude、Ollama（本地离线）及自定义 OpenAI 兼容服务商（如 AIHubMix，支持图像分析）。可在「⚙ 设置」面板全局配置，也可在每个功能节点上单独覆盖。',
+    desc: '支持 GitHub Copilot（零配置推荐）、Anthropic Claude、Ollama（本地离线）、oMLX（本地 OpenAI 兼容）及自定义 OpenAI 兼容服务商（如 AIHubMix，支持图像分析）。可在「⚙ 设置」面板全局配置，也可在每个功能节点上单独覆盖。',
   },
   {
     icon: '🎨',

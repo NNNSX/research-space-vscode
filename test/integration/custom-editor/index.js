@@ -1,3 +1,6 @@
+const aiSettings = require('./ai-settings.test.js');
+const ollamaProvider = require('./ollama-provider.test.js');
+const ollamaSmoke = require('./ollama-smoke.test.js');
 const smoke = require('./smoke.test.js');
 const saveReload = require('./save-reload.test.js');
 const undoRedo = require('./undo-redo.test.js');
@@ -16,6 +19,9 @@ const blueprintRunHistoryReload = require('./blueprint-run-history-reload.test.j
 const blueprintRunHistoryMessageFlow = require('./blueprint-run-history-message-flow.test.js');
 
 async function run() {
+  await aiSettings.run();
+  await ollamaProvider.run();
+  await ollamaSmoke.run();
   await smoke.run();
   await saveReload.run();
   await undoRedo.run();

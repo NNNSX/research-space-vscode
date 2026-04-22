@@ -1614,6 +1614,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       anthropicModel:           ai.get<string>('anthropicModel', 'claude-sonnet-4-6'),
       ollamaBaseUrl:            ai.get<string>('ollamaBaseUrl', 'http://localhost:11434'),
       ollamaModel:              ai.get<string>('ollamaModel', 'llama3.2'),
+      omlxBaseUrl:              ai.get<string>('omlxBaseUrl', 'http://localhost:8000/v1'),
+      omlxApiKey:               ai.get<string>('omlxApiKey', ''),
+      omlxModel:                ai.get<string>('omlxModel', ''),
       maxOutputTokens:          ai.get<number>('maxOutputTokens', 0),
       maxContextTokens:         ai.get<number>('maxContextTokens', 0),
       autoSave:                 canvas.get<boolean>('autoSave', true),
@@ -1629,6 +1632,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       aiHubMixVideoGenModel:    ai.get<string>('aiHubMixVideoGenModel', ''),
       petAiProvider:            pet.get<string>('aiProvider', 'auto'),
       petAiModel:               pet.get<string>('aiModel', ''),
+      testMode:                 process.env.RESEARCH_SPACE_TEST_MODE === '1',
     };
   }
 
@@ -1643,6 +1647,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'anthropicModel':          await ai.update('anthropicModel', value, target);          break;
       case 'ollamaBaseUrl':           await ai.update('ollamaBaseUrl', value, target);           break;
       case 'ollamaModel':             await ai.update('ollamaModel', value, target);             break;
+      case 'omlxBaseUrl':             await ai.update('omlxBaseUrl', value, target);             break;
+      case 'omlxApiKey':              await ai.update('omlxApiKey', value, target);              break;
+      case 'omlxModel':               await ai.update('omlxModel', value, target);               break;
       case 'maxOutputTokens':         await ai.update('maxOutputTokens', value, target);         break;
       case 'maxContextTokens':        await ai.update('maxContextTokens', value, target);        break;
       case 'autoSave':                await canvasCfg.update('autoSave', value, target);         break;

@@ -100,6 +100,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const updateNodeInternals = useUpdateNodeInternals();
   const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
   const edges = useCanvasStore(s => s.edges);
+  const settings = useCanvasStore(s => s.settings);
   const imageUriMap = useCanvasStore(s => s.imageUriMap);
   const nodeDefs = useCanvasStore(s => s.nodeDefs);
   const previewNodeSize = useCanvasStore(s => s.previewNodeSize);
@@ -214,13 +215,13 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       canvasNodes,
     });
     const boundNodes = boundNodesBySlot.get(outputSlotId) ?? [];
-    const issueCards = Object.entries(pipelineState?.nodeIssues ?? {}).map(([nodeId, issue]) => ({
+    const issueCards = settings?.testMode ? [] : Object.entries(pipelineState?.nodeIssues ?? {}).map(([nodeId, issue]) => ({
       nodeId,
       title: canvasNodes.find(node => node.id === nodeId)?.title ?? nodeId,
       kind: issue.kind,
       message: issue.message,
     }));
-    if (issueCards.length === 0 && containerNode?.meta?.blueprint_last_run_status === 'failed' && containerNode.meta?.blueprint_last_issue_node_title) {
+    if (!settings?.testMode && issueCards.length === 0 && containerNode?.meta?.blueprint_last_run_status === 'failed' && containerNode.meta?.blueprint_last_issue_node_title) {
       issueCards.push({
         nodeId: containerNode.meta?.blueprint_last_issue_node_id,
         title: containerNode.meta.blueprint_last_issue_node_title,
@@ -261,6 +262,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     pipelineState?.isRunning,
     pipelineState?.nodeIssues,
     pipelineState?.nodeStatuses,
+    settings?.testMode,
   ]);
   const inputPlaceholderMissingRequired = !!(
     placeholderBindingInfo &&
@@ -270,6 +272,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const outputSlotFailedWithoutOutput = !!(
     outputSlotRuntimeInfo &&
     !outputSlotRuntimeInfo.currentNode &&
+    !settings?.testMode &&
     (outputSlotRuntimeInfo.issue?.kind === 'upstream_failed' || outputSlotRuntimeInfo.lastRunStatus === 'failed')
   );
   const outputSlotCancelledWithoutOutput = !!(

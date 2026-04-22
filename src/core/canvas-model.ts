@@ -27,6 +27,9 @@ export interface SettingsSnapshot {
   anthropicModel: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
+  omlxBaseUrl: string;
+  omlxApiKey: string;
+  omlxModel: string;
   maxOutputTokens?: number;
   maxContextTokens?: number;
   autoSave: boolean;
@@ -42,6 +45,7 @@ export interface SettingsSnapshot {
   aiHubMixVideoGenModel?: string;   // Default model for video generation (v0.6.2)
   petAiProvider?: string;            // Pet AI provider override: 'auto' | provider id (v0.10.7)
   petAiModel?: string;               // Pet AI model override (empty = provider default) (v0.10.7)
+  testMode?: boolean;
 }
 
 // ── Node types ─────────────────────────────────────────────────────────────

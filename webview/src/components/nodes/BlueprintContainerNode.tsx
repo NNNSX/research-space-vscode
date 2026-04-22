@@ -46,6 +46,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
   const accent = blueprint.meta?.blueprint_color ?? '#2f7d68';
   const edges = useCanvasStore(s => s.edges);
   const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
+  const settings = useCanvasStore(s => s.settings);
   const pipelineState = useCanvasStore(s => s.pipelineState);
   const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
   const inputSlots = blueprint.meta?.blueprint_input_slot_defs ?? [];
@@ -181,6 +182,7 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
       ? 'var(--vscode-terminal-ansiRed)'
       : accent;
   const currentIssueCards = useMemo(() => {
+    if (settings?.testMode) { return []; }
     if (!instancePipelineState) { return []; }
     return Object.entries(instancePipelineState.nodeIssues)
       .map(([nodeId, issue]) => ({
@@ -191,8 +193,8 @@ export function BlueprintContainerNode({ id, data, selected }: NodeProps) {
       }))
       .slice(-3)
       .reverse();
-  }, [canvasNodes, instancePipelineState]);
-  const fallbackIssueCard = lastRunStatus === 'failed' && lastIssueNodeTitle
+  }, [canvasNodes, instancePipelineState, settings?.testMode]);
+  const fallbackIssueCard = !settings?.testMode && lastRunStatus === 'failed' && lastIssueNodeTitle
     ? {
         nodeId: lastIssueNodeId,
         title: lastIssueNodeTitle,
