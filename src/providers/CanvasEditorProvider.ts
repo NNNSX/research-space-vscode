@@ -85,6 +85,8 @@ function buildBlueprintCopyTitle(title: string, existingTitles: Set<string>): st
 export class CanvasDocument implements vscode.CustomDocument {
   readonly uri: vscode.Uri;
   data: CanvasFile;
+  private readonly _undoStack: CanvasFile[] = [];
+  private readonly _redoStack: CanvasFile[] = [];
 
   // Collected disposables (event listener subscriptions) — cleaned up on dispose()
   readonly disposables: vscode.Disposable[] = [];
@@ -104,6 +106,35 @@ export class CanvasDocument implements vscode.CustomDocument {
   constructor(uri: vscode.Uri, data: CanvasFile) {
     this.uri = uri;
     this.data = data;
+  }
+
+  private _cloneCanvas(data: CanvasFile): CanvasFile {
+    return JSON.parse(JSON.stringify(data)) as CanvasFile;
+  }
+
+  applyEdit(nextData: CanvasFile): void {
+    if (JSON.stringify(nextData) === JSON.stringify(this.data)) { return; }
+    this._undoStack.push(this._cloneCanvas(this.data));
+    if (this._undoStack.length > 100) {
+      this._undoStack.shift();
+    }
+    this._redoStack.length = 0;
+    this.data = this._cloneCanvas(nextData);
+    this._onDidChange.fire();
+  }
+
+  undo(): void {
+    const previous = this._undoStack.pop();
+    if (!previous) { return; }
+    this._redoStack.push(this._cloneCanvas(this.data));
+    this.data = previous;
+  }
+
+  redo(): void {
+    const next = this._redoStack.pop();
+    if (!next) { return; }
+    this._undoStack.push(this._cloneCanvas(this.data));
+    this.data = next;
   }
 
   dispose(): void {
@@ -170,6 +201,47 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     });
   }
 
+  private _syncDocumentToWebview(document: CanvasDocument): void {
+    const wv = CanvasEditorProvider.activeWebviews.get(document.uri.fsPath);
+    const sessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
+    wv?.postMessage({
+      type: 'init',
+      data: document.data,
+      workspaceRoot: path.dirname(document.uri.fsPath),
+      sessionId,
+    });
+  }
+
+  applyTestEdit(document: CanvasDocument, nextData: CanvasFile): boolean {
+    const before = JSON.stringify(document.data);
+    document.applyEdit(nextData);
+    if (JSON.stringify(document.data) === before) { return false; }
+    this._syncDocumentToWebview(document);
+    return true;
+  }
+
+  undoTestEdit(document: CanvasDocument): boolean {
+    const before = JSON.stringify(document.data);
+    this._undoDocumentEdit(document);
+    return JSON.stringify(document.data) !== before;
+  }
+
+  redoTestEdit(document: CanvasDocument): boolean {
+    const before = JSON.stringify(document.data);
+    this._redoDocumentEdit(document);
+    return JSON.stringify(document.data) !== before;
+  }
+
+  private _undoDocumentEdit(document: CanvasDocument): void {
+    document.undo();
+    this._syncDocumentToWebview(document);
+  }
+
+  private _redoDocumentEdit(document: CanvasDocument): void {
+    document.redo();
+    this._syncDocumentToWebview(document);
+  }
+
   // ── Document lifecycle ────────────────────────────────────────────────────
 
   async openCustomDocument(
@@ -187,8 +259,8 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         this._onDidChangeCustomDocument.fire({
           document: doc,
           label: 'Canvas Edit',
-          undo: () => doc.undo(),
-          redo: () => doc.redo(),
+          undo: () => this._undoDocumentEdit(doc),
+          redo: () => this._redoDocumentEdit(doc),
         });
       })
     );
@@ -333,14 +405,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       return;
     }
     document.data = await readCanvas(document.uri);
-    const wv = CanvasEditorProvider.activeWebviews.get(document.uri.fsPath);
-    const sessionId = CanvasEditorProvider.bumpCanvasSession(document.uri.fsPath);
-    wv?.postMessage({
-      type: 'init',
-      data: document.data,
-      workspaceRoot: path.dirname(document.uri.fsPath),
-      sessionId,
-    });
+    this._syncDocumentToWebview(document);
   }
 
   async backupCustomDocument(

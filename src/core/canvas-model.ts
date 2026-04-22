@@ -139,6 +139,7 @@ export interface NodeMeta {
   blueprint_placeholder_allow_multiple?: boolean;
   blueprint_placeholder_replacement_mode?: BlueprintReplacementMode;
   blueprint_placeholder_hint?: string;
+  blueprint_output_position_manual?: boolean;
   blueprint_runtime_hidden?: boolean;
   blueprint_definition_missing?: boolean;
   blueprint_definition_missing_message?: string;
@@ -167,6 +168,23 @@ export interface CanvasNode {
   file_path?: string;           // Relative to .rsws directory
   meta?: NodeMeta;
 }
+
+export type DataCanvasNode = CanvasNode & { node_type: DataNodeType };
+export type FunctionCanvasNode = CanvasNode & { node_type: 'function' };
+export type GroupHubCanvasNode = CanvasNode & { node_type: 'group_hub' };
+export type BlueprintCanvasNode = CanvasNode & { node_type: 'blueprint' };
+export type BlueprintPlaceholderCanvasNode = CanvasNode & {
+  meta: NodeMeta & { blueprint_placeholder_kind: 'input' | 'output' };
+};
+export type BlueprintInputPlaceholderCanvasNode = CanvasNode & {
+  meta: NodeMeta & { blueprint_placeholder_kind: 'input' };
+};
+export type BlueprintOutputPlaceholderCanvasNode = CanvasNode & {
+  meta: NodeMeta & { blueprint_placeholder_kind: 'output' };
+};
+export type BlueprintInstanceContainerCanvasNode = BlueprintCanvasNode & {
+  meta: NodeMeta & { blueprint_instance_id: string };
+};
 
 // ── Canvas edge ─────────────────────────────────────────────────────────────
 export interface CanvasEdge {
@@ -305,6 +323,23 @@ export interface PetState {
   widgetOffsetY?: number;
   widgetLeft?: number;
   widgetTop?: number;
+  miniGameStatsDate?: string;
+  snakeLastScore?: number;
+  snakeBestScoreToday?: number;
+  snakeBestScore?: number;
+  snakeLastPlayedAt?: string;
+  twenty48LastScore?: number;
+  twenty48BestScoreToday?: number;
+  twenty48BestScore?: number;
+  twenty48LastPlayedAt?: string;
+  sudokuLastScore?: number;
+  sudokuBestScoreToday?: number;
+  sudokuBestScore?: number;
+  sudokuLastPlayedAt?: string;
+  flappyLastScore?: number;
+  flappyBestScoreToday?: number;
+  flappyBestScore?: number;
+  flappyLastPlayedAt?: string;
 }
 
 export type PetSettingsKey = 'pet.enabled' | 'pet.groundTheme' | 'pet.restReminder';
@@ -374,27 +409,27 @@ export function isCanvasFile(obj: unknown): obj is CanvasFile {
   );
 }
 
-export function isDataNode(node: CanvasNode): boolean {
-  return ['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'experiment_log', 'task', 'data'].includes(node.node_type);
+export function isDataNode(node: CanvasNode | undefined | null): node is DataCanvasNode {
+  return !!node && ['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'experiment_log', 'task', 'data'].includes(node.node_type);
 }
 
-export function isFunctionNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isFunctionNode(node: CanvasNode | undefined | null): node is FunctionCanvasNode {
   return !!node && node.node_type === 'function';
 }
 
-export function isBlueprintPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isBlueprintPlaceholderNode(node: CanvasNode | undefined | null): node is BlueprintPlaceholderCanvasNode {
   return !!node && !!node.meta?.blueprint_placeholder_kind;
 }
 
-export function isBlueprintInputPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isBlueprintInputPlaceholderNode(node: CanvasNode | undefined | null): node is BlueprintInputPlaceholderCanvasNode {
   return !!node && node.meta?.blueprint_placeholder_kind === 'input';
 }
 
-export function isBlueprintOutputPlaceholderNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isBlueprintOutputPlaceholderNode(node: CanvasNode | undefined | null): node is BlueprintOutputPlaceholderCanvasNode {
   return !!node && node.meta?.blueprint_placeholder_kind === 'output';
 }
 
-export function isBlueprintInstanceContainerNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isBlueprintInstanceContainerNode(node: CanvasNode | undefined | null): node is BlueprintInstanceContainerCanvasNode {
   return !!node && node.node_type === 'blueprint' && !!node.meta?.blueprint_instance_id;
 }
 
@@ -403,7 +438,7 @@ export function isBlueprintInstanceContainerNode(node: CanvasNode | undefined | 
  * transparent so grouped children stay interactive, but their graph semantics
  * must stay aligned with ordinary nodes for drag/select/connect/delete.
  */
-export function isGroupHubNode(node: CanvasNode | undefined | null): node is CanvasNode {
+export function isGroupHubNode(node: CanvasNode | undefined | null): node is GroupHubCanvasNode {
   return !!node && node.node_type === 'group_hub';
 }
 

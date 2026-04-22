@@ -105,6 +105,10 @@ const MIN_FUNCTION_NODE_HEIGHT = 168;
 const FUNCTION_NODE_PADDING = NODE_CONTENT_GUTTER;
 const FUNCTION_NODE_AUTO_HEIGHT_PADDING = Math.ceil(NODE_SELECTED_BORDER_WIDTH * 2) + 2;
 
+function stopEditableFieldMouseDown(event: React.MouseEvent<HTMLElement>) {
+  event.stopPropagation();
+}
+
 // ── Inject keyframe animations once ───────────────────────────────────────
 const FN_STYLE_ID = 'rs-fn-running-animations';
 function ensureFnAnimations() {
@@ -1167,8 +1171,10 @@ function FullFunctionNode({
               {promptOpen && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <textarea
+                    className="nodrag"
                     value={promptDraft}
                     onChange={e => handlePromptChange(e.target.value)}
+                    onMouseDown={stopEditableFieldMouseDown}
                     placeholder={TOOL_DEFAULT_PROMPTS[tool] ?? '输入自定义系统 Prompt…'}
                     rows={6}
                     style={{
@@ -1376,9 +1382,11 @@ function ChatPromptEditor({
 
       {/* Chat textarea */}
       <textarea
+        className="nodrag"
         ref={chatTextareaRef}
         value={chatDraft}
         onChange={e => onChatChange(e.target.value)}
+        onMouseDown={stopEditableFieldMouseDown}
         placeholder={upstreamNodes.length > 0
           ? '输入 Prompt… 点击上方文件标签可插入 @引用'
           : '输入 Prompt… 连接文件后可通过 @文件名 引用'
@@ -1433,9 +1441,11 @@ function NodeSelect({
 }) {
   return (
     <select
+      className="nodrag"
       value={value}
       disabled={disabled}
       onChange={e => onChange(e.target.value)}
+      onMouseDown={stopEditableFieldMouseDown}
       style={{
         width: '100%',
         display: 'block',
@@ -1553,12 +1563,14 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={labelStyle}>{param.label}</span>
             <input
+              className="nodrag"
               type="text"
               value={customDraft}
               onChange={e => {
                 setCustomDraft(e.target.value);
                 updateNodeParamValue(nodeData.id, param.name, e.target.value);
               }}
+              onMouseDown={stopEditableFieldMouseDown}
               placeholder="输入模型 ID（如 black-forest-labs/FLUX.1-kontext-pro）"
               style={{ ...inputBase }}
             />
@@ -1691,8 +1703,10 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)' }}>{param.label}</span>
           <textarea
+            className="nodrag"
             value={String(currentValue)}
             onChange={e => updateNodeParamValue(nodeData.id, param.name, e.target.value)}
+            onMouseDown={stopEditableFieldMouseDown}
             placeholder="输入问题…"
             rows={3}
             style={{
@@ -1711,9 +1725,11 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={labelStyle}>{param.label}</span>
         <input
+          className="nodrag"
           type="text"
           value={String(currentValue)}
           onChange={e => updateNodeParamValue(nodeData.id, param.name, e.target.value)}
+          onMouseDown={stopEditableFieldMouseDown}
           style={{ ...inputBase }}
         />
       </div>
@@ -1725,9 +1741,11 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={labelStyle}>{param.label}</span>
         <input
+          className="nodrag"
           type="number"
           value={Number(currentValue)}
           onChange={e => updateNodeParamValue(nodeData.id, param.name, Number(e.target.value))}
+          onMouseDown={stopEditableFieldMouseDown}
           style={{ ...inputBase, width: 70, flex: 'none' }}
         />
       </div>
@@ -1738,9 +1756,11 @@ function ParamControl({ param, nodeData, globalDefaultModel = '', isMultimodal =
     return (
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
         <input
+          className="nodrag"
           type="checkbox"
           checked={Boolean(currentValue)}
           onChange={e => updateNodeParamValue(nodeData.id, param.name, e.target.checked)}
+          onMouseDown={stopEditableFieldMouseDown}
           style={{ cursor: 'pointer' }}
         />
         <span style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)' }}>{param.label}</span>

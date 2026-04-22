@@ -24,3 +24,9 @@ Thumbs.db
 
 # Debug
 *.log
+
+# Test artifacts
+coverage/
+test-results/
+.vitest/
+.vscode-test/

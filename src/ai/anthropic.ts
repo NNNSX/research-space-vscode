@@ -69,7 +69,7 @@ export class AnthropicProvider implements AIProvider {
     }
   }
 
-  async resolveModel(modelOverride?: string): Promise<string | undefined> {
+  async resolveModel(modelOverride?: string): Promise<string> {
     const config = vscode.workspace.getConfiguration('researchSpace.ai');
     const configured = config.get<string>('anthropicModel', 'claude-sonnet-4-6');
     return (modelOverride && modelOverride !== 'auto')
@@ -102,7 +102,6 @@ export class AnthropicProvider implements AIProvider {
     contents: AIContent[],
     opts?: { signal?: AbortSignal; maxTokens?: number; model?: string }
   ): AsyncIterable<string> {
-    const config = vscode.workspace.getConfiguration('researchSpace.ai');
     const apiKey = this.apiKey;
     // Per-node model override > global setting
     const model = await this.resolveModel(opts?.model);

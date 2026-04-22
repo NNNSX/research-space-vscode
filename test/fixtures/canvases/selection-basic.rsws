@@ -1,0 +1,120 @@
+{
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "input-note",
+      "node_type": "note",
+      "title": "输入笔记",
+      "position": {
+        "x": 80,
+        "y": 120
+      },
+      "size": {
+        "width": 240,
+        "height": 160
+      },
+      "file_path": "notes/input.md"
+    },
+    {
+      "id": "summarize-fn",
+      "node_type": "function",
+      "title": "摘要",
+      "position": {
+        "x": 420,
+        "y": 120
+      },
+      "size": {
+        "width": 280,
+        "height": 353
+      },
+      "meta": {
+        "ai_tool": "summarize",
+        "param_values": {
+          "language": "zh",
+          "style": "academic",
+          "maxLength": 500,
+          "focus": ""
+        },
+        "fn_status": "idle",
+        "input_schema": [
+          {
+            "name": "language",
+            "type": "select",
+            "label": "输出语言",
+            "options": [
+              "zh",
+              "en"
+            ],
+            "default": "zh"
+          },
+          {
+            "name": "style",
+            "type": "select",
+            "label": "写作风格",
+            "options": [
+              "academic",
+              "casual"
+            ],
+            "default": "academic"
+          },
+          {
+            "name": "maxLength",
+            "type": "number",
+            "label": "最大字数",
+            "default": 500
+          },
+          {
+            "name": "focus",
+            "type": "text",
+            "label": "关注点",
+            "default": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "summary-output",
+      "node_type": "ai_output",
+      "title": "摘要结果",
+      "position": {
+        "x": 780,
+        "y": 120
+      },
+      "size": {
+        "width": 240,
+        "height": 160
+      },
+      "file_path": "outputs/summary.md",
+      "meta": {
+        "ai_provider": "copilot",
+        "ai_model": "gpt-4.1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-input-to-fn",
+      "source": "input-note",
+      "target": "summarize-fn",
+      "edge_type": "data_flow"
+    },
+    {
+      "id": "edge-fn-to-output",
+      "source": "summarize-fn",
+      "target": "summary-output",
+      "edge_type": "ai_generated"
+    }
+  ],
+  "viewport": {
+    "x": -793.5,
+    "y": -124.32142857142856,
+    "zoom": 1.9535714285714285
+  },
+  "metadata": {
+    "title": "基础蓝图选区",
+    "created_at": "2026-04-21T00:00:00.000Z",
+    "updated_at": "2026-04-21T17:08:05.579Z"
+  },
+  "boards": [],
+  "nodeGroups": []
+}

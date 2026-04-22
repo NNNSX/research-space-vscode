@@ -19,7 +19,7 @@ import { translateTool } from './translate';
 import { drawTool } from './draw';
 import { ragTool } from './rag';
 
-export const AI_TOOLS: Record<AiTool, AIToolDef> = {
+export const AI_TOOLS: Record<Exclude<AiTool, 'chat'>, AIToolDef> = {
   summarize: summarizeTool,
   polish:    polishTool,
   review:    reviewTool,

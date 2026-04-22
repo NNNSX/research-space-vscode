@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.1-alpha.1",
+  "version": "2.1.1-alpha.55",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -351,24 +351,37 @@
   "scripts": {
     "build": "npm run build:ext && npm run build:webview",
     "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --sourcemap",
+    "build:ext:package": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
     "build:webview": "cd webview && npm run build",
+    "build:webview:package": "cd webview && RS_VSCODE_SOURCEMAP=false npm run build",
+    "clean:package-dist": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build:package": "npm run clean:package-dist && npm run build:ext:package && npm run build:webview:package",
     "watch": "concurrently \"npm run watch:ext\" \"npm run watch:webview\"",
     "watch:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --sourcemap --watch",
     "watch:webview": "cd webview && npm run dev",
-    "package": "npm run build && vsce package",
-    "lint": "eslint src --ext ts"
+    "package": "npm run build:package && vsce package",
+    "lint": "eslint src --ext ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "node ./test/integration/run-integration.js",
+    "verify": "npm run lint && npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/vscode": "^1.93.0",
     "@types/uuid": "^10.0.0",
+    "@types/vscode": "^1.93.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.0.0",
     "concurrently": "^9.0.0",
     "esbuild": "^0.25.0",
     "eslint": "^9.0.0",
-    "typescript": "^5.7.0"
+    "jsdom": "^29.0.2",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.4"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

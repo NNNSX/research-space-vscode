@@ -351,16 +351,10 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
               : '该输出槽位当前还没有回填结果。')
       : null;
   const placeholderSecondaryText = isBlueprintInputPlaceholder
-    ? (placeholderBindingInfo
-      ? `接受类型：${placeholderBindingInfo.accepts.length > 0
-        ? placeholderBindingInfo.accepts.map(type => describeBlueprintAcceptType(type)).join('、')
-        : '任意数据节点'} · ${placeholderBindingInfo.required ? '必填输入槽位' : '可选输入槽位'} · ${placeholderBindingInfo.allowMultiple ? '允许多个输入' : '单绑定'}`
-      : null)
+    ? null
     : outputSlotRuntimeInfo?.issue?.relatedNodeTitle
       ? `关联节点：${outputSlotRuntimeInfo.issue.relatedNodeTitle}`
-      : outputSlotRuntimeInfo?.slotDef
-        ? `槽位类型：${outputSlotRuntimeInfo.slotDef.allow_multiple ? '允许多个输出' : '单输出'}`
-        : null;
+      : null;
   const placeholderAction = isBlueprintInputPlaceholder
     ? (inputPlaceholderPrimaryNodeId
       ? {
@@ -381,15 +375,6 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       : outputSlotRuntimeInfo?.slotDef?.title
         ? `输出槽位：${outputSlotRuntimeInfo.slotDef.title}`
         : '输出槽位');
-  const placeholderFooterSummary = isBlueprintInputPlaceholder
-    ? (placeholderBindingInfo?.titles.length
-      ? `当前绑定：${placeholderBindingInfo.titles.slice(0, 3).join('、')}${placeholderBindingInfo.titles.length > 3 ? ` 等 ${placeholderBindingInfo.titles.length} 个节点` : ''}`
-      : '请从左侧输入通道接入符合类型的外部节点。')
-    : (outputSlotRuntimeInfo?.currentNode
-      ? `当前回填：${outputSlotRuntimeInfo.currentNode.title}`
-      : outputSlotRuntimeInfo?.issue?.relatedNodeTitle
-        ? `关联节点：${outputSlotRuntimeInfo.issue.relatedNodeTitle}`
-        : '结果会从蓝图内部回填到这个输出槽位。');
   const placeholderFooterChips = isBlueprintInputPlaceholder
     ? [
         placeholderBindingInfo?.accepts?.length
@@ -968,73 +953,24 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
               }}>
                 {placeholderFooterTitle}
               </div>
-              <div style={{
-                fontSize: 10,
-                color: isBlueprintInputPlaceholder
-                  ? (placeholderBindingInfo?.count
-                    ? accentColor
-                    : 'var(--vscode-inputValidation-warningForeground)')
-                  : outputSlotFailedWithoutOutput
-                    ? 'var(--vscode-inputValidation-errorForeground, #f48771)'
-                    : outputSlotWaiting
-                      ? accentColor
-                      : 'var(--vscode-descriptionForeground)',
-                fontWeight: 600,
-                lineHeight: 1.45,
-                wordBreak: 'break-word',
-              }}>
-                {placeholderPrimaryText}
-              </div>
-              {!isBlueprintInputPlaceholder && placeholderFooterSummary && (
-                <div style={{
-                  fontSize: 10,
-                  color: 'var(--vscode-descriptionForeground)',
-                  lineHeight: 1.45,
-                  wordBreak: 'break-word',
-                }}>
-                  {placeholderFooterSummary}
-                </div>
-              )}
-              {!isBlueprintInputPlaceholder && (
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {placeholderFooterChips.map(chip => (
-                    <span
-                      key={chip}
-                      style={{
-                        fontSize: 9,
-                        padding: '1px 5px',
-                        background: withAlpha(accentColor, 0.08, 'transparent'),
-                        color: accentColor,
-                        border: `1px solid ${withAlpha(accentColor, 0.2, 'var(--vscode-panel-border)')}`,
-                        borderRadius: 10,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {chip}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {!isBlueprintInputPlaceholder && placeholderAction && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => selectExclusiveNode(placeholderAction.nodeId)}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {placeholderFooterChips.map(chip => (
+                  <span
+                    key={chip}
                     style={{
-                      borderRadius: 999,
-                      border: `1px solid ${withAlpha(accentColor, 0.28, 'var(--vscode-panel-border)')}`,
+                      fontSize: 9,
+                      padding: '1px 5px',
                       background: withAlpha(accentColor, 0.08, 'transparent'),
                       color: accentColor,
-                      padding: '2px 8px',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      cursor: 'pointer',
+                      border: `1px solid ${withAlpha(accentColor, 0.2, 'var(--vscode-panel-border)')}`,
+                      borderRadius: 10,
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    {placeholderAction.label}
-                  </button>
-                </div>
-              )}
+                    {chip}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 

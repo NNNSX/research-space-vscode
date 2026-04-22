@@ -97,7 +97,7 @@ export class CopilotProvider implements AIProvider {
     const model = models[0];
 
     // Build message parts
-    const parts: vscode.LanguageModelChatMessagePart[] = [];
+    const parts: Array<vscode.LanguageModelTextPart | vscode.LanguageModelDataPart> = [];
     if (systemPrompt) {
       parts.push(new vscode.LanguageModelTextPart(systemPrompt + '\n\n'));
     }

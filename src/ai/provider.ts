@@ -12,7 +12,7 @@ export interface AIContent {
   // Image
   localPath?: string;   // For Copilot: vscode.Uri.file(localPath)
   base64?: string;      // For Anthropic: base64 encoded
-  mediaType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  mediaType?: string;
 }
 
 // ── Provider interface ──────────────────────────────────────────────────────

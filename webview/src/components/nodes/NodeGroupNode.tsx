@@ -395,9 +395,11 @@ function RenameDialog({ inputRef, name, setName, onConfirm, onCancel }: {
       >
         <div style={{ fontSize: 13, fontWeight: 700 }}>重命名节点组</div>
         <input
+          className="nodrag"
           ref={inputRef}
           value={name}
           onChange={e => setName(e.target.value)}
+          onMouseDown={e => e.stopPropagation()}
           onKeyDown={e => {
             if (e.key === 'Enter') { onConfirm(); }
             if (e.key === 'Escape') { onCancel(); }

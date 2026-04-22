@@ -303,7 +303,11 @@ interface CanvasState {
   ): void;
   createDataNode(nodeType: 'experiment_log' | 'task', position: { x: number; y: number }): void;
   updateNodeParamValue(nodeId: string, key: string, value: unknown): void;
-  updateNodeMeta(nodeId: string, patch: Partial<import('../../../src/core/canvas-model').NodeMeta>): void;
+  updateNodeMeta(
+    nodeId: string,
+    patch: Partial<import('../../../src/core/canvas-model').NodeMeta>,
+    syncMode?: 'deferred' | 'immediate',
+  ): void;
   syncBlueprintDefinitionAvailability(succeededPaths: string[], failedPaths: string[]): void;
   updateViewport(viewport: { x: number; y: number; zoom: number }): void;
   previewNodeSize(nodeId: string, width: number, height: number): void;
@@ -674,13 +678,54 @@ function normalizeBlueprintNodes(file: CanvasFile): CanvasFile {
   let changed = false;
   const nextNodes = nodes.map(node => {
     if (node.node_type !== 'blueprint') { return node; }
-    if (node.meta?.blueprint_instance_id) { return node; }
+    const currentMeta = node.meta ?? {};
+    const currentRunHistory = Array.isArray(currentMeta.blueprint_run_history) ? currentMeta.blueprint_run_history : null;
+    const normalizedRunHistory = currentRunHistory
+      ? currentRunHistory
+        .map((entry, index) => ({ entry, index, time: Date.parse(entry.finishedAt) }))
+        .sort((left, right) => {
+          const leftTime = Number.isFinite(left.time) ? left.time : Number.NEGATIVE_INFINITY;
+          const rightTime = Number.isFinite(right.time) ? right.time : Number.NEGATIVE_INFINITY;
+          if (rightTime !== leftTime) {
+            return rightTime - leftTime;
+          }
+          return left.index - right.index;
+        })
+        .map(item => item.entry)
+      : null;
+    const runHistoryChanged = !!(
+      currentRunHistory &&
+      normalizedRunHistory &&
+      normalizedRunHistory.some((entry, index) => entry !== currentRunHistory[index])
+    );
+
+    if (node.meta?.blueprint_instance_id) {
+      if (!runHistoryChanged) { return node; }
+      changed = true;
+      return {
+        ...node,
+        meta: {
+          ...currentMeta,
+          blueprint_run_history: normalizedRunHistory ?? undefined,
+        },
+      };
+    }
+
     const normalizedSize = computeBlueprintSizeFromNode(node);
     const sameWidth = node.size.width === normalizedSize.width;
     const sameHeight = node.size.height === normalizedSize.height;
-    if (sameWidth && sameHeight) { return node; }
+    if (sameWidth && sameHeight && !runHistoryChanged) { return node; }
     changed = true;
-    return { ...node, size: normalizedSize };
+    return {
+      ...node,
+      size: normalizedSize,
+      meta: runHistoryChanged
+        ? {
+          ...currentMeta,
+          blueprint_run_history: normalizedRunHistory ?? undefined,
+        }
+        : node.meta,
+    };
   });
 
   return changed ? { ...file, nodes: nextNodes } : file;
@@ -945,6 +990,8 @@ function migrateBlueprintInstancesAgainstDefinitions(
     const dataNodeById = new Map<string, FlowNode>();
     const validInputSlotIds = new Set(definition.input_slots.map(slot => slot.id));
     const validOutputSlotIds = new Set(definition.output_slots.map(slot => slot.id));
+    const inputSlotMap = new Map(definition.input_slots.map(slot => [slot.id, slot]));
+    const outputSlotMap = new Map(definition.output_slots.map(slot => [slot.id, slot]));
     const expectedInstanceEdges: FlowEdge[] = [];
     let instanceChanged = false;
 
@@ -1094,7 +1141,14 @@ function migrateBlueprintInstancesAgainstDefinitions(
         source: sourceNode.id,
         target: targetNode.id,
         type: edge.edge_type === 'pipeline_flow' ? 'pipeline' : 'custom',
-        data: { edge_type: edge.edge_type, role: edge.role },
+        data: {
+          edge_type: edge.edge_type === 'pipeline_flow' ? 'pipeline_flow' : (
+            edge.source.kind === 'function_node' && edge.target.kind === 'output_slot'
+              ? 'ai_generated'
+              : 'data_flow'
+          ),
+          role: edge.role,
+        },
       };
       expectedInstanceEdges.push(nextEdge);
       if (edges.some(existing => sameEdgeSemantics(existing, nextEdge))) {
@@ -1117,6 +1171,41 @@ function migrateBlueprintInstancesAgainstDefinitions(
     );
     if (staleInternalNodeIds.size > 0) {
       nodes = nodes.filter(node => !staleInternalNodeIds.has(node.id));
+      changed = true;
+      instanceChanged = true;
+    }
+
+    let reboundLegacyBoundNode = false;
+    nodes = nodes.map(node => {
+      if (node.data.meta?.blueprint_bound_instance_id !== instanceId || !node.data.meta?.blueprint_bound_slot_kind) {
+        return node;
+      }
+
+      const slotKind = node.data.meta.blueprint_bound_slot_kind;
+      const slotRef = resolveCompatibleBlueprintSlotReference(
+        slotKind === 'input' ? inputSlotMap : outputSlotMap,
+        slotKind,
+        node.data.meta.blueprint_bound_slot_id,
+        node.data.meta.blueprint_bound_slot_title,
+      );
+      if (!slotRef || slotRef.slotId === node.data.meta.blueprint_bound_slot_id) {
+        return node;
+      }
+
+      reboundLegacyBoundNode = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          meta: {
+            ...(node.data.meta ?? {}),
+            blueprint_bound_slot_id: slotRef.slotId,
+            blueprint_bound_slot_title: slotRef.slotDef.title,
+          },
+        },
+      };
+    });
+    if (reboundLegacyBoundNode) {
       changed = true;
       instanceChanged = true;
     }
@@ -1315,6 +1404,41 @@ function buildImplicitBlueprintOutputSlotId(sourceFunctionId: string): string {
 function buildImplicitBlueprintOutputTitle(sourceFunctionTitle: string | undefined): string {
   const normalizedTitle = sourceFunctionTitle?.trim();
   return normalizedTitle ? `输出结果 · ${normalizedTitle}` : '输出结果';
+}
+
+function resolveCompatibleBlueprintSlotReference(
+  slotMap: Map<string, BlueprintSlotDef>,
+  slotKind: 'input' | 'output',
+  slotId: string | undefined,
+  slotTitle: string | undefined,
+): { slotId: string; slotDef: BlueprintSlotDef } | undefined {
+  if (!slotId || slotMap.size === 0) { return undefined; }
+
+  const direct = slotMap.get(slotId);
+  if (direct) {
+    return { slotId, slotDef: direct };
+  }
+
+  if (slotKind === 'output') {
+    const implicitMatches = Array.from(slotMap.values()).filter(slot =>
+      !!slot.source_function_node_id &&
+      buildImplicitBlueprintOutputSlotId(slot.source_function_node_id) === slotId,
+    );
+    if (implicitMatches.length === 1) {
+      const match = implicitMatches[0];
+      return { slotId: match.id, slotDef: match };
+    }
+  }
+
+  const normalizedTitle = slotTitle?.trim();
+  if (!normalizedTitle) { return undefined; }
+  const titleMatches = Array.from(slotMap.values()).filter(slot => slot.title.trim() === normalizedTitle);
+  if (titleMatches.length === 1) {
+    const match = titleMatches[0];
+    return { slotId: match.id, slotDef: match };
+  }
+
+  return undefined;
 }
 
 function synthesizeImplicitBlueprintOutputSlots(definition: BlueprintDefinition): BlueprintDefinition {
@@ -1611,7 +1735,12 @@ function dispatchSave(mode: 'auto' | 'manual', fileOverride?: CanvasFile | null)
 
 function debouncedSave(file: CanvasFile | null, syncMode: 'deferred' | 'immediate' = 'deferred') {
   if (!file) { return; }
-  syncCanvasState(file, syncMode === 'immediate');
+  const immediate = syncMode === 'immediate';
+  syncCanvasState(file, immediate);
+  if (immediate) {
+    dispatchSave('auto', file);
+    return;
+  }
   markCanvasDirty(file);
 }
 
@@ -1961,13 +2090,6 @@ function applyBlueprintOutputFill(
 
   const slotId = fillTargetNode.meta?.blueprint_placeholder_slot_id ?? fillTargetNode.meta?.blueprint_bound_slot_id;
   const slotTitle = fillTargetNode.meta?.blueprint_placeholder_title ?? fillTargetNode.meta?.blueprint_bound_slot_title ?? fillTargetNode.title;
-  const blueprintContainerNode = flowNodes.find(node =>
-    node.data.node_type === 'blueprint' &&
-    node.data.meta?.blueprint_instance_id === instanceId
-  )?.data;
-  const outputSlotDef = fillMode === 'output' && slotId
-    ? blueprintContainerNode?.meta?.blueprint_output_slot_defs?.find(slot => slot.id === slotId)
-    : undefined;
   const outputPlaceholderCarrier = fillMode === 'output' && slotId
     ? (flowNodes.find(node =>
         node.data.meta?.blueprint_instance_id === instanceId &&
@@ -1975,12 +2097,6 @@ function applyBlueprintOutputFill(
         node.data.meta?.blueprint_placeholder_slot_id === slotId
       )?.data ?? (outputPlaceholderNode && outputPlaceholderNode.meta?.blueprint_placeholder_slot_id === slotId ? outputPlaceholderNode : undefined))
     : undefined;
-  const allowMultipleOutput = fillMode === 'output'
-    ? (outputPlaceholderCarrier?.meta?.blueprint_placeholder_allow_multiple
-      ?? fillTargetNode.meta?.blueprint_placeholder_allow_multiple
-      ?? outputSlotDef?.allow_multiple
-      ?? false)
-    : false;
   const existingActiveBoundOutputCount = fillMode === 'output' && slotId
     ? flowNodes.filter(node =>
       node.data.meta?.blueprint_bound_instance_id === instanceId &&
@@ -1994,7 +2110,7 @@ function applyBlueprintOutputFill(
   const filledPosition = fillMode === 'output'
     ? {
       x: anchorNode.position.x + anchorNode.size.width + 72,
-      y: anchorNode.position.y + Math.max((anchorNode.size.height - generatedNode.size.height) / 2, 0) + (allowMultipleOutput ? existingActiveBoundOutputCount * 36 : 0),
+      y: anchorNode.position.y + Math.max((anchorNode.size.height - generatedNode.size.height) / 2, 0) + (existingActiveBoundOutputCount * 36),
     }
     : { ...anchorNode.position };
   const filledNode: CanvasNode = {
@@ -2031,7 +2147,7 @@ function applyBlueprintOutputFill(
 
   if (fillMode === 'output') {
     const placeholderNode = outputPlaceholderCarrier;
-    const staleOutputNodeIds = slotId
+    const historicalBoundOutputNodeIds = slotId
       ? new Set(
           flowNodes
             .filter(node =>
@@ -2043,48 +2159,19 @@ function applyBlueprintOutputFill(
         )
       : new Set<string>();
 
-    const nextNodes = flowNodes
-      .filter(node => !staleOutputNodeIds.has(node.id))
-      .concat(createFlowNodeFromCanvasNode(filledNode));
+    const nextNodes = flowNodes.concat(createFlowNodeFromCanvasNode(filledNode));
 
     const nextEdges: FlowEdge[] = [];
     for (const edge of flowEdges) {
-      const sourceIsStaleOutput = staleOutputNodeIds.has(edge.source);
-      const targetIsStaleOutput = staleOutputNodeIds.has(edge.target);
-      if (!sourceIsStaleOutput && !targetIsStaleOutput) {
-        if (!nextEdges.some(existing => sameEdgeSemantics(existing, edge))) {
-          nextEdges.push(edge);
-        }
-        continue;
-      }
-
       if (
-        edge.data?.edge_type === 'data_flow' &&
-        ((sourceIsStaleOutput && edge.target === placeholderNode?.id) ||
-         (edge.source === placeholderNode?.id && targetIsStaleOutput))
-      ) {
-        continue;
-      }
-
-      if (
+        historicalBoundOutputNodeIds.has(edge.target) &&
         edge.source === generatedEdge.source &&
-        targetIsStaleOutput &&
         (edge.data?.edge_type === 'ai_generated' || edge.data?.edge_type === 'data_flow')
       ) {
         continue;
       }
-
-      const reboundEdge: FlowEdge = {
-        ...edge,
-        id: uuid(),
-        source: sourceIsStaleOutput ? filledNode.id : edge.source,
-        target: targetIsStaleOutput ? filledNode.id : edge.target,
-      };
-      if (reboundEdge.source === reboundEdge.target) {
-        continue;
-      }
-      if (!nextEdges.some(existing => sameEdgeSemantics(existing, reboundEdge))) {
-        nextEdges.push(reboundEdge);
+      if (!nextEdges.some(existing => sameEdgeSemantics(existing, edge))) {
+        nextEdges.push(edge);
       }
     }
 
@@ -2521,8 +2608,16 @@ function normalizeBlueprintArtifactsAgainstContainers(file: CanvasFile): CanvasF
           ? containerInfo.inputSlots
           : containerInfo.outputSlots;
         const hasAuthoritativeSlotDefs = slotMap.size > 0;
-        const slotId = nextMeta.blueprint_placeholder_slot_id;
-        const slotDef = slotId && hasAuthoritativeSlotDefs ? slotMap.get(slotId) : undefined;
+        const slotRef = hasAuthoritativeSlotDefs
+          ? resolveCompatibleBlueprintSlotReference(
+            slotMap,
+            nextMeta.blueprint_placeholder_kind === 'input' ? 'input' : 'output',
+            nextMeta.blueprint_placeholder_slot_id,
+            nextMeta.blueprint_placeholder_title,
+          )
+          : undefined;
+        const slotId = slotRef?.slotId ?? nextMeta.blueprint_placeholder_slot_id;
+        const slotDef = hasAuthoritativeSlotDefs ? slotRef?.slotDef : undefined;
         if (!slotId) {
           changed = true;
           continue;
@@ -2537,6 +2632,10 @@ function normalizeBlueprintArtifactsAgainstContainers(file: CanvasFile): CanvasF
             changed = true;
           }
           continue;
+        }
+        if (nextMeta.blueprint_placeholder_slot_id !== slotId) {
+          nextMeta.blueprint_placeholder_slot_id = slotId;
+          nodeChanged = true;
         }
         if (nextMeta.blueprint_placeholder_title !== slotDef.title) {
           nextMeta.blueprint_placeholder_title = slotDef.title;
@@ -2570,8 +2669,16 @@ function normalizeBlueprintArtifactsAgainstContainers(file: CanvasFile): CanvasF
         ? containerInfo.inputSlots
         : containerInfo.outputSlots;
       const hasAuthoritativeSlotDefs = slotMap.size > 0;
-      const slotId = nextMeta.blueprint_bound_slot_id;
-      const slotDef = slotId && hasAuthoritativeSlotDefs ? slotMap.get(slotId) : undefined;
+      const slotRef = hasAuthoritativeSlotDefs
+        ? resolveCompatibleBlueprintSlotReference(
+          slotMap,
+          nextMeta.blueprint_bound_slot_kind,
+          nextMeta.blueprint_bound_slot_id,
+          nextMeta.blueprint_bound_slot_title,
+        )
+        : undefined;
+      const slotId = slotRef?.slotId ?? nextMeta.blueprint_bound_slot_id;
+      const slotDef = hasAuthoritativeSlotDefs ? slotRef?.slotDef : undefined;
       if (!slotId) {
         delete nextMeta.blueprint_bound_instance_id;
         delete nextMeta.blueprint_bound_slot_id;
@@ -2587,6 +2694,10 @@ function normalizeBlueprintArtifactsAgainstContainers(file: CanvasFile): CanvasF
         delete nextMeta.blueprint_bound_slot_id;
         delete nextMeta.blueprint_bound_slot_title;
         delete nextMeta.blueprint_bound_slot_kind;
+        nodeChanged = true;
+      } else if (nextMeta.blueprint_bound_slot_id !== slotId) {
+        nextMeta.blueprint_bound_slot_id = slotId;
+        nextMeta.blueprint_bound_slot_title = slotDef.title;
         nodeChanged = true;
       } else if (nextMeta.blueprint_bound_slot_title !== slotDef.title) {
         nextMeta.blueprint_bound_slot_title = slotDef.title;
@@ -3185,26 +3296,8 @@ function normalizeLegacyBlueprintOutputBindings(file: CanvasFile): CanvasFile {
         changedInstanceIds.add(instanceId);
       }
 
-      const activeBoundNodes = slot.allow_multiple ? boundNodes : boundNodes.slice(-1);
-      const demotedBoundNodeIds = new Set(
-        boundNodes
-          .filter(node => !activeBoundNodes.some(active => active.id === node.id))
-          .map(node => node.id),
-      );
-
-      if (demotedBoundNodeIds.size > 0) {
-        nodes = nodes.map(node => {
-          if (!demotedBoundNodeIds.has(node.id)) { return node; }
-          const nextMeta = { ...(node.meta ?? {}) };
-          delete nextMeta.blueprint_bound_instance_id;
-          delete nextMeta.blueprint_bound_slot_id;
-          delete nextMeta.blueprint_bound_slot_title;
-          delete nextMeta.blueprint_bound_slot_kind;
-          return { ...node, meta: nextMeta };
-        });
-        changed = true;
-        changedInstanceIds.add(instanceId);
-      }
+      const activeBoundNodes = boundNodes;
+      const demotedBoundNodeIds = new Set<string>();
 
       const targetInternalNodeIds = new Set(
         nodes
@@ -3227,7 +3320,8 @@ function normalizeLegacyBlueprintOutputBindings(file: CanvasFile): CanvasFile {
         if (
           isBlueprintSlotDataFlowEdge(edge) &&
           reboundLegacyTargetNodeIds.has(edge.target) &&
-          targetInternalNodeIds.has(edge.source)
+          targetInternalNodeIds.has(edge.source) &&
+          edge.source !== placeholderNode.id
         ) {
           const reboundEdge: CanvasEdge = {
             ...edge,
@@ -3304,6 +3398,34 @@ function extractBlueprintOutputTimestampKey(filePath?: string): string {
   return match?.[1] ?? '';
 }
 
+function isCanvasNodeOverlappingRect(
+  node: CanvasNode,
+  rect: { x: number; y: number; width: number; height: number },
+): boolean {
+  return (
+    node.position.x < rect.x + rect.width &&
+    node.position.x + node.size.width > rect.x &&
+    node.position.y < rect.y + rect.height &&
+    node.position.y + node.size.height > rect.y
+  );
+}
+
+function shouldAutoRepositionBlueprintBoundOutput(
+  node: CanvasNode,
+  containerNode: CanvasNode,
+): boolean {
+  if (node.meta?.blueprint_output_position_manual) {
+    return false;
+  }
+
+  return isCanvasNodeOverlappingRect(node, {
+    x: containerNode.position.x,
+    y: containerNode.position.y,
+    width: containerNode.size.width,
+    height: containerNode.size.height,
+  });
+}
+
 function normalizeBlueprintOutputSupportEdges(file: CanvasFile): CanvasFile {
   const containerByInstanceId = new Map<string, CanvasNode>();
   for (const node of file.nodes) {
@@ -3368,11 +3490,15 @@ function normalizeBlueprintOutputSupportEdges(file: CanvasFile): CanvasFile {
       const boundIndex = Math.max(0, siblingBoundNodes.findIndex(candidate => candidate.id === node.id));
       const desiredPosition = {
         x: placeholderNode.position.x + placeholderNode.size.width + 72,
-        y: placeholderNode.position.y + Math.max((placeholderNode.size.height - node.size.height) / 2, 0) + ((slotDef?.allow_multiple ?? false) ? boundIndex * 36 : 0),
+        y: placeholderNode.position.y + Math.max((placeholderNode.size.height - node.size.height) / 2, 0) + (boundIndex * 36),
       };
+      const shouldAutoReposition = shouldAutoRepositionBlueprintBoundOutput(node, containerNode);
       if (
-        Math.abs(node.position.x - desiredPosition.x) > 0.01 ||
-        Math.abs(node.position.y - desiredPosition.y) > 0.01
+        shouldAutoReposition &&
+        (
+          Math.abs(node.position.x - desiredPosition.x) > 0.01 ||
+          Math.abs(node.position.y - desiredPosition.y) > 0.01
+        )
       ) {
         nextNodes = nextNodes.map(candidate =>
           candidate.id === node.id
@@ -3415,142 +3541,7 @@ function normalizeBlueprintOutputSupportEdges(file: CanvasFile): CanvasFile {
 }
 
 function normalizeBlueprintCurrentOutputBindings(file: CanvasFile): CanvasFile {
-  const slotMultiplicity = new Map<string, boolean>();
-  const placeholderIdsByKey = new Map<string, string>();
-  for (const node of file.nodes) {
-    if (node.node_type !== 'blueprint' || !node.meta?.blueprint_instance_id) { continue; }
-    for (const slot of node.meta.blueprint_output_slot_defs ?? []) {
-      slotMultiplicity.set(`${node.meta.blueprint_instance_id}::${slot.id}`, !!slot.allow_multiple);
-    }
-  }
-  for (const node of file.nodes) {
-    if (
-      node.meta?.blueprint_placeholder_kind !== 'output' ||
-      !node.meta?.blueprint_instance_id ||
-      !node.meta?.blueprint_placeholder_slot_id
-    ) {
-      continue;
-    }
-    placeholderIdsByKey.set(`${node.meta.blueprint_instance_id}::${node.meta.blueprint_placeholder_slot_id}`, node.id);
-  }
-  const slotGroups = new Map<string, Array<{ index: number; node: CanvasNode }>>();
-
-  file.nodes.forEach((node, index) => {
-    const meta = node.meta;
-    if (
-      meta?.blueprint_bound_slot_kind !== 'output' ||
-      !meta.blueprint_bound_instance_id ||
-      !meta.blueprint_bound_slot_id
-    ) {
-      return;
-    }
-    const key = `${meta.blueprint_bound_instance_id}::${meta.blueprint_bound_slot_id}`;
-    const group = slotGroups.get(key) ?? [];
-    group.push({ index, node });
-    slotGroups.set(key, group);
-  });
-
-  const demotedNodeIds = new Set<string>();
-  const demotedNodeKeys = new Map<string, string>();
-  const keepNodeIdByDemotedNodeId = new Map<string, string>();
-  for (const [key, group] of slotGroups.entries()) {
-    if (!slotMultiplicity.has(key)) { continue; }
-    if (slotMultiplicity.get(key)) { continue; }
-    if (group.length <= 1) { continue; }
-
-    let keep = group[0];
-    for (const candidate of group.slice(1)) {
-      const keepHasFile = !!keep.node.file_path;
-      const candidateHasFile = !!candidate.node.file_path;
-      if (candidateHasFile && !keepHasFile) {
-        keep = candidate;
-        continue;
-      }
-      if (candidateHasFile === keepHasFile) {
-        const keepTs = extractBlueprintOutputTimestampKey(keep.node.file_path);
-        const candidateTs = extractBlueprintOutputTimestampKey(candidate.node.file_path);
-        if (candidateTs > keepTs || (candidateTs === keepTs && candidate.index > keep.index)) {
-          keep = candidate;
-        }
-      }
-    }
-
-    for (const candidate of group) {
-      if (candidate.node.id !== keep.node.id) {
-        demotedNodeIds.add(candidate.node.id);
-        demotedNodeKeys.set(candidate.node.id, key);
-        keepNodeIdByDemotedNodeId.set(candidate.node.id, keep.node.id);
-      }
-    }
-  }
-
-  if (demotedNodeIds.size === 0) {
-    return file;
-  }
-
-  const nextEdges: CanvasEdge[] = [];
-  for (const edge of file.edges) {
-    if (!demotedNodeIds.has(edge.source) && !demotedNodeIds.has(edge.target)) {
-      if (!nextEdges.some(existing => sameCanvasEdgeSemantics(existing, edge))) {
-        nextEdges.push(edge);
-      }
-      continue;
-    }
-
-    const reboundEdge: CanvasEdge = {
-      ...edge,
-      id: uuid(),
-      source: demotedNodeIds.has(edge.source)
-        ? (keepNodeIdByDemotedNodeId.get(edge.source) ?? edge.source)
-        : edge.source,
-      target: demotedNodeIds.has(edge.target)
-        ? (keepNodeIdByDemotedNodeId.get(edge.target) ?? edge.target)
-        : edge.target,
-    };
-
-    if (reboundEdge.source === reboundEdge.target) {
-      continue;
-    }
-
-    if (edge.edge_type === 'data_flow') {
-      if (demotedNodeIds.has(edge.source)) {
-        const slotKey = demotedNodeKeys.get(edge.source);
-        if (slotKey && placeholderIdsByKey.get(slotKey) === edge.target) {
-          const placeholderBindingEdge: CanvasEdge = {
-            ...reboundEdge,
-            target: placeholderIdsByKey.get(slotKey) ?? reboundEdge.target,
-          };
-          if (!nextEdges.some(existing => sameCanvasEdgeSemantics(existing, placeholderBindingEdge))) {
-            nextEdges.push(placeholderBindingEdge);
-          }
-          continue;
-        }
-      }
-      if (demotedNodeIds.has(edge.target)) {
-        const slotKey = demotedNodeKeys.get(edge.target);
-        if (slotKey && placeholderIdsByKey.get(slotKey) === edge.source) {
-          const placeholderBindingEdge: CanvasEdge = {
-            ...reboundEdge,
-            source: placeholderIdsByKey.get(slotKey) ?? reboundEdge.source,
-          };
-          if (!nextEdges.some(existing => sameCanvasEdgeSemantics(existing, placeholderBindingEdge))) {
-            nextEdges.push(placeholderBindingEdge);
-          }
-          continue;
-        }
-      }
-    }
-
-    if (!nextEdges.some(existing => sameCanvasEdgeSemantics(existing, reboundEdge))) {
-      nextEdges.push(reboundEdge);
-    }
-  }
-
-  return {
-    ...file,
-    nodes: file.nodes.filter(node => !demotedNodeIds.has(node.id)),
-    edges: nextEdges,
-  };
+  return file;
 }
 
 function normalizeCanvasFileForRuntime(
@@ -4070,6 +4061,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set(state => {
       if (!state.canvasFile) { return {}; }
       const updated = applyNodeChanges(expandedChanges, state.nodes) as FlowNode[];
+      const movedBlueprintBoundOutputIds = new Set(
+        expandedChanges
+          .filter((change): change is Extract<NodeChange, { type: 'position' }> => change.type === 'position')
+          .map(change => change.id),
+      );
+      const markedManualPositionNodes = updated.map(node => {
+        if (!movedBlueprintBoundOutputIds.has(node.id)) { return node; }
+        if (node.data.meta?.blueprint_bound_slot_kind !== 'output') { return node; }
+        if (node.data.meta?.blueprint_output_position_manual) { return node; }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            meta: {
+              ...(node.data.meta ?? {}),
+              blueprint_output_position_manual: true,
+            },
+          },
+        };
+      });
 
       const removedIds = new Set(
         expandedChanges.filter(c => c.type === 'remove').map(c => c.id)
@@ -4078,7 +4089,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         expandedChanges.filter(c => c.type === 'position').map(c => c.id)
       );
       const changedBlueprintInstanceIds = new Set<string>();
-      for (const node of updated) {
+      for (const node of markedManualPositionNodes) {
         if (removedIds.has(node.id)) { continue; }
         if (movedIds.has(node.id) && node.data.meta?.blueprint_instance_id) {
           changedBlueprintInstanceIds.add(node.data.meta.blueprint_instance_id);
@@ -4098,11 +4109,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           .filter((g): g is NodeGroup => !!g && g.nodeIds.length > 0);
       }
       if (movedIds.size > 0) {
-        nodeGroups = recalcGroupsForNodeIds(nodeGroups, updated, movedIds);
+        nodeGroups = recalcGroupsForNodeIds(nodeGroups, markedManualPositionNodes, movedIds);
       }
 
       const activeHubIds = new Set(nodeGroups.map(group => group.hubNodeId));
-      const prunedNodes = updated.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id));
+      const prunedNodes = markedManualPositionNodes.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id));
       let prunedEdges = state.edges.filter(edge => {
         if (isHubEdgeType(edge.data?.edge_type)) {
           return activeHubIds.has(edge.target);
@@ -4967,7 +4978,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
-  updateNodeMeta(nodeId, patch) {
+  updateNodeMeta(nodeId, patch, syncMode = 'deferred') {
     set(state => {
       if (!state.canvasFile) { return {}; }
       const updatedNodes = state.nodes.map(n => {
@@ -4976,7 +4987,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       });
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
       const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
-      debouncedSave(newFile);
+      debouncedSave(newFile, syncMode);
       return { nodes: updatedNodes, canvasFile: newFile };
     });
   },
@@ -5618,7 +5629,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       //    board at drag-start, NOT dynamically detected overlaps.  This
       //    prevents the "sticky" effect where passing over nodes drags them.
       const memberIds = _boardDragMembers;
-      const updatedNodes = memberIds.size > 0
+      let updatedNodes = memberIds.size > 0
         ? state.nodes.map(n =>
             memberIds.has(n.id)
               ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
@@ -5633,11 +5644,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const newBoards = [...state.boards];
       newBoards[idx] = updatedBoard;
 
+      const movedNodeIds = memberIds.size > 0 ? Array.from(memberIds) : [];
+      const changedBlueprintInstanceIds = new Set<string>();
+      for (const nodeId of movedNodeIds) {
+        const node = updatedNodes.find(candidate => candidate.id === nodeId)?.data;
+        const instanceId = node?.meta?.blueprint_instance_id;
+        if (instanceId) {
+          changedBlueprintInstanceIds.add(instanceId);
+        }
+      }
+      let nodeGroups = recalcGroupsForNodeIds(state.nodeGroups, updatedNodes, movedNodeIds);
+      updatedNodes = syncGroupHubNodes(updatedNodes, nodeGroups);
+      updatedNodes = recalcBlueprintContainersForInstanceIds(updatedNodes, changedBlueprintInstanceIds);
+
       const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, state.edges);
-      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges, boards: newBoards };
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges, boards: newBoards, nodeGroups };
       debouncedSave(newFile);
 
-      return { boards: newBoards, nodes: updatedNodes, canvasFile: newFile };
+      return { boards: newBoards, nodes: updatedNodes, canvasFile: newFile, nodeGroups };
     });
   },
 

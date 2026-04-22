@@ -97,9 +97,11 @@ export function ExperimentLogBody({ node }: { node: CanvasNode }) {
           </button>
         ))}
         <input
+          className="nodrag"
           type="date"
           value={(meta.experiment_date as string) ?? ''}
           onChange={e => update({ experiment_date: e.target.value })}
+          onMouseDown={e => e.stopPropagation()}
           style={{ ...fieldStyle, cursor: 'pointer', width: 'auto', flex: 1, minWidth: 90 }}
         />
       </div>
@@ -108,8 +110,10 @@ export function ExperimentLogBody({ node }: { node: CanvasNode }) {
       <div style={{ flexShrink: 0 }}>
         <div style={labelStyle}>实验参数</div>
         <input
+          className="nodrag"
           value={(meta.experiment_params as string) ?? ''}
           onChange={e => update({ experiment_params: e.target.value })}
+          onMouseDown={e => e.stopPropagation()}
           placeholder="lr=0.001, bs=32, epochs=100"
           style={fieldStyle}
         />
@@ -119,8 +123,10 @@ export function ExperimentLogBody({ node }: { node: CanvasNode }) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={labelStyle}>实验结果</div>
         <textarea
+          className="nodrag"
           value={(meta.experiment_result as string) ?? ''}
           onChange={e => update({ experiment_result: e.target.value })}
+          onMouseDown={e => e.stopPropagation()}
           placeholder="Acc=94.2%, Loss=0.031"
           style={{ ...fieldStyle, resize: 'none', flex: 1, minHeight: 28 }}
         />

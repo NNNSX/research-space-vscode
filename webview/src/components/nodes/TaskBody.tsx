@@ -91,9 +91,11 @@ export function TaskBody({ node }: { node: CanvasNode }) {
         {items.map(item => (
           <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
             <input
+              className="nodrag"
               type="checkbox"
               checked={item.done}
               onChange={() => toggle(item.id)}
+              onMouseDown={e => e.stopPropagation()}
               style={{ cursor: 'pointer', flexShrink: 0, accentColor: 'var(--vscode-terminal-ansiGreen)' }}
             />
             <span style={{
@@ -122,9 +124,11 @@ export function TaskBody({ node }: { node: CanvasNode }) {
       {/* Add new item */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
         <input
+          className="nodrag"
           ref={inputRef}
           value={newLabel}
           onChange={e => setNewLabel(e.target.value)}
+          onMouseDown={e => e.stopPropagation()}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }}
           placeholder="新增任务…"
           style={{

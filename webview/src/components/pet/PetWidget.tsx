@@ -4,6 +4,7 @@ import { useDraggable } from '../../pet/use-draggable';
 import { PetMinimized } from './PetMinimized';
 import { PetRoaming, ROAMING_WIDTH, ROAMING_HEIGHT } from './PetRoaming';
 import { PetChat, CHAT_WIDTH, CHAT_HEIGHT } from './PetChat';
+import { PetGame, GAME_WIDTH, GAME_HEIGHT } from './PetGame';
 
 const TICK_INTERVAL = 3000; // ms
 const MINIMIZED_SIZE = 32;
@@ -26,6 +27,7 @@ export function PetWidget() {
 
   // Entrance animation — fade in on first render
   const [mounted, setMounted] = useState(false);
+  const [gameHeight, setGameHeight] = useState(GAME_HEIGHT);
   useEffect(() => {
     if (enabled) {
       requestAnimationFrame(() => setMounted(true));
@@ -35,8 +37,20 @@ export function PetWidget() {
   }, [enabled]);
 
   // Compute widget dimensions based on mode
-  const widgetWidth = mode === 'minimized' ? MINIMIZED_SIZE : mode === 'roaming' ? ROAMING_WIDTH : CHAT_WIDTH;
-  const widgetHeight = mode === 'minimized' ? MINIMIZED_SIZE : mode === 'roaming' ? ROAMING_HEIGHT : CHAT_HEIGHT;
+  const widgetWidth = mode === 'minimized'
+    ? MINIMIZED_SIZE
+    : mode === 'roaming'
+      ? ROAMING_WIDTH
+      : mode === 'chat'
+        ? CHAT_WIDTH
+        : GAME_WIDTH;
+  const widgetHeight = mode === 'minimized'
+    ? MINIMIZED_SIZE
+    : mode === 'roaming'
+      ? ROAMING_HEIGHT
+      : mode === 'chat'
+        ? CHAT_HEIGHT
+        : gameHeight;
 
   // Resolve initial position: widgetTop === -1 means "place at bottom-left"
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
@@ -46,11 +60,11 @@ export function PetWidget() {
     ? Math.max(0, Math.min(widgetTop, vh - widgetHeight))
     : vh - widgetHeight - 16;
 
-  // Auto-clamp position when mode changes (e.g. roaming→chat makes widget bigger)
-  // In chat mode, skip persisting — the visual clamp (clampedLeft/clampedTop) handles display,
-  // and setMode will restore the original position when chat closes.
+  // Auto-clamp position when mode changes (e.g. roaming→chat/game makes widget bigger)
+  // In chat/game mode, skip persisting — the visual clamp (clampedLeft/clampedTop) handles display,
+  // and setMode will restore the original position when the expanded panel closes.
   useEffect(() => {
-    if (!enabled || typeof window === 'undefined' || mode === 'chat') { return; }
+    if (!enabled || typeof window === 'undefined' || mode === 'chat' || mode === 'game') { return; }
     const maxLeft = window.innerWidth - widgetWidth;
     const maxTop = window.innerHeight - widgetHeight;
     if (widgetLeft > maxLeft || (widgetTop >= 0 && widgetTop > maxTop)) {
@@ -183,6 +197,7 @@ export function PetWidget() {
           {mode === 'minimized' && <PetMinimized />}
           {mode === 'roaming' && <PetRoaming dragHandleProps={handleProps} />}
           {mode === 'chat' && <PetChat dragHandleProps={handleProps} />}
+          {mode === 'game' && <PetGame dragHandleProps={handleProps} onHeightChange={setGameHeight} />}
         </div>
       </div>
 

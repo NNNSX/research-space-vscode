@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { CanvasEdge, CanvasFile, CanvasNode } from '../core/canvas-model';
+import type { CanvasEdge, CanvasFile, CanvasNode, DataCanvasNode } from '../core/canvas-model';
 import {
   isBlueprintInstanceContainerNode,
   isDataNode,
@@ -432,7 +432,7 @@ export function buildBlueprintDraftFromInstance(
     throw new Error('当前蓝图实例内没有可演化的功能节点。');
   }
 
-  const internalDataNodes = internalNodes.filter(node =>
+  const internalDataNodes = internalNodes.filter((node): node is DataCanvasNode =>
     isDataNode(node) &&
     !node.meta?.blueprint_placeholder_kind &&
     !node.meta?.blueprint_runtime_hidden
@@ -624,27 +624,6 @@ export function buildBlueprintDraftFromInstance(
       source: createFunctionRef(sourceId),
       target: targetRef,
     });
-  }
-
-  const syntheticSelectionOutputSlots = buildSyntheticTerminalOutputSlots({
-    functionDefs,
-    edges,
-    outputSlots,
-    dataNodes,
-  });
-  if (syntheticSelectionOutputSlots.length > 0) {
-    for (const slot of syntheticSelectionOutputSlots) {
-      outputSlots.push(slot);
-      slotRefByNodeId.set(slot.id, createSlotRef('output_slot', slot.id));
-      if (slot.source_function_node_id) {
-        edges.push({
-          id: uuid(),
-          edge_type: 'data_flow',
-          source: createFunctionRef(slot.source_function_node_id),
-          target: createSlotRef('output_slot', slot.id),
-        });
-      }
-    }
   }
 
   const invalidFunction = functionDefs.find(def => !def.tool_id);

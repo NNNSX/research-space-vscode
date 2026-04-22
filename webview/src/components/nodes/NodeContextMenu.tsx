@@ -104,9 +104,11 @@ export function NodeContextMenu({
         {nodeType === 'note' ? '重命名（不含扩展名）' : '重命名节点'}
       </div>
       <input
+        className="nodrag"
         ref={inputRef}
         value={draft}
         onChange={e => setDraft(e.target.value)}
+        onMouseDown={e => e.stopPropagation()}
         onKeyDown={handleKeyDown}
         style={{
           width: '100%',

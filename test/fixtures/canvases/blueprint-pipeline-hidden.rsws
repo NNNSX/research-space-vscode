@@ -1,0 +1,84 @@
+{
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "bp-container",
+      "node_type": "blueprint",
+      "title": "蓝图内 Pipeline 直连",
+      "position": { "x": 120, "y": 100 },
+      "size": { "width": 900, "height": 480 },
+      "meta": {
+        "blueprint_instance_id": "inst-pipeline-hidden",
+        "blueprint_def_id": "bp-def-pipeline-hidden",
+        "blueprint_color": "#2f7d68",
+        "blueprint_input_slot_defs": [],
+        "blueprint_output_slot_defs": []
+      }
+    },
+    {
+      "id": "fn-upstream",
+      "node_type": "function",
+      "title": "上游步骤",
+      "position": { "x": 240, "y": 180 },
+      "size": { "width": 280, "height": 220 },
+      "meta": {
+        "blueprint_instance_id": "inst-pipeline-hidden",
+        "blueprint_def_id": "bp-def-pipeline-hidden",
+        "blueprint_color": "#2f7d68",
+        "blueprint_source_kind": "function_node",
+        "blueprint_source_id": "fn_def_upstream",
+        "ai_tool": "summarize",
+        "param_values": {},
+        "fn_status": "idle"
+      }
+    },
+    {
+      "id": "runtime-output",
+      "node_type": "ai_output",
+      "title": "上游中间输出",
+      "position": { "x": 610, "y": 210 },
+      "size": { "width": 240, "height": 160 },
+      "file_path": "outputs/runtime-output.md",
+      "meta": {
+        "content_preview": "temporary runtime artifact"
+      }
+    },
+    {
+      "id": "fn-downstream",
+      "node_type": "function",
+      "title": "下游步骤",
+      "position": { "x": 720, "y": 180 },
+      "size": { "width": 280, "height": 220 },
+      "meta": {
+        "blueprint_instance_id": "inst-pipeline-hidden",
+        "blueprint_def_id": "bp-def-pipeline-hidden",
+        "blueprint_color": "#2f7d68",
+        "blueprint_source_kind": "function_node",
+        "blueprint_source_id": "fn_def_downstream",
+        "ai_tool": "review",
+        "param_values": {},
+        "fn_status": "idle"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-upstream-runtime-output",
+      "source": "fn-upstream",
+      "target": "runtime-output",
+      "edge_type": "ai_generated"
+    },
+    {
+      "id": "edge-upstream-downstream-pipeline",
+      "source": "fn-upstream",
+      "target": "fn-downstream",
+      "edge_type": "pipeline_flow"
+    }
+  ],
+  "viewport": { "x": 0, "y": 0, "zoom": 1 },
+  "metadata": {
+    "title": "蓝图 Pipeline 中间结果隐藏",
+    "created_at": "2026-04-21T00:00:00.000Z",
+    "updated_at": "2026-04-21T00:00:00.000Z"
+  }
+}

@@ -190,6 +190,23 @@ export interface PetState {
   widgetOffsetY?: number;        // legacy
   widgetLeft?: number;
   widgetTop?: number;
+  miniGameStatsDate?: string;
+  snakeLastScore?: number;
+  snakeBestScoreToday?: number;
+  snakeBestScore?: number;
+  snakeLastPlayedAt?: string;
+  twenty48LastScore?: number;
+  twenty48BestScoreToday?: number;
+  twenty48BestScore?: number;
+  twenty48LastPlayedAt?: string;
+  sudokuLastScore?: number;
+  sudokuBestScoreToday?: number;
+  sudokuBestScore?: number;
+  sudokuLastPlayedAt?: string;
+  flappyLastScore?: number;
+  flappyBestScoreToday?: number;
+  flappyBestScore?: number;
+  flappyLastPlayedAt?: string;
 }
 
 export function createDefaultPetState(): PetState {
@@ -206,6 +223,23 @@ export function createDefaultPetState(): PetState {
     lastInteraction: now,
     unlockedPets: ['dog', 'fox'],
     streakDays: 0,
+    miniGameStatsDate: now.slice(0, 10),
+    snakeLastScore: 0,
+    snakeBestScoreToday: 0,
+    snakeBestScore: 0,
+    snakeLastPlayedAt: now,
+    twenty48LastScore: 0,
+    twenty48BestScoreToday: 0,
+    twenty48BestScore: 0,
+    twenty48LastPlayedAt: now,
+    sudokuLastScore: 0,
+    sudokuBestScoreToday: 0,
+    sudokuBestScore: 0,
+    sudokuLastPlayedAt: now,
+    flappyLastScore: 0,
+    flappyBestScoreToday: 0,
+    flappyBestScore: 0,
+    flappyLastPlayedAt: now,
   };
 }
 

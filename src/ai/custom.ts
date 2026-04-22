@@ -19,9 +19,28 @@ interface OpenAIModelsResponse {
   data?: { id: string; object?: string }[];
 }
 
+interface OpenAIErrorBody {
+  error?: {
+    message?: unknown;
+    code?: unknown;
+    type?: unknown;
+  };
+  message?: unknown;
+  code?: unknown;
+  type?: unknown;
+}
+
 type OpenAIContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
+
+interface OpenAICompatibleRequestBody {
+  model: string;
+  stream: true;
+  messages: { role: string; content: string | OpenAIContentPart[] }[];
+  max_tokens?: number;
+  max_completion_tokens?: number;
+}
 
 function collectTextFragments(value: unknown): string[] {
   if (typeof value === 'string') {
@@ -83,6 +102,88 @@ function buildRawFallback(args: {
   );
 
   return sections.join('\n');
+}
+
+function normalizeErrorText(text: string): string | undefined {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  return normalized || undefined;
+}
+
+function parseOpenAIErrorBody(text: string): { message?: string; code?: string; type?: string } {
+  const fallback = normalizeErrorText(text);
+  try {
+    const payload = JSON.parse(text) as OpenAIErrorBody;
+    const message = normalizeErrorText(
+      typeof payload.error?.message === 'string'
+        ? payload.error.message
+        : typeof payload.message === 'string'
+          ? payload.message
+          : '',
+    ) ?? fallback;
+    const code = typeof payload.error?.code === 'string'
+      ? payload.error.code
+      : typeof payload.code === 'string'
+        ? payload.code
+        : undefined;
+    const type = typeof payload.error?.type === 'string'
+      ? payload.error.type
+      : typeof payload.type === 'string'
+        ? payload.type
+        : undefined;
+    return { message, code, type };
+  } catch {
+    return { message: fallback };
+  }
+}
+
+function isAihubmixReasoningModel(model: string): boolean {
+  return /^(gpt-5|o1|o3|o4-mini)(?:$|[-._])/i.test(model.trim());
+}
+
+export function buildCustomProviderRequestBody(args: {
+  model: string;
+  messages: { role: string; content: string | OpenAIContentPart[] }[];
+  maxTokens?: number;
+  isAihubmixProvider: boolean;
+}): OpenAICompatibleRequestBody {
+  const body: OpenAICompatibleRequestBody = {
+    model: args.model,
+    stream: true,
+    messages: args.messages,
+  };
+
+  if (!args.maxTokens || args.maxTokens <= 0) {
+    return body;
+  }
+
+  if (args.isAihubmixProvider && isAihubmixReasoningModel(args.model)) {
+    body.max_completion_tokens = args.maxTokens;
+    return body;
+  }
+
+  body.max_tokens = args.maxTokens;
+  return body;
+}
+
+export function formatCustomProviderHttpError(args: {
+  providerName: string;
+  status: number;
+  statusText: string;
+  responseText: string;
+  isAihubmixProvider: boolean;
+}): string {
+  const parsed = parseOpenAIErrorBody(args.responseText);
+
+  if (
+    args.isAihubmixProvider &&
+    args.status === 403 &&
+    parsed.code === 'insufficient_user_quota'
+  ) {
+    return 'AIHubMix 额度不足：当前 API token quota 已耗尽，请前往 AIHubMix 控制台检查配额或余额后重试。';
+  }
+
+  const suffix = parsed.message ?? normalizeErrorText(args.statusText) ?? 'Request failed';
+  return `${args.providerName} API error ${args.status}: ${suffix}`;
 }
 
 export class CustomProvider implements AIProvider {
@@ -169,6 +270,7 @@ export class CustomProvider implements AIProvider {
     }
 
     const base = this.config.baseUrl.replace(/\/$/, '');
+    const isAihubmixProvider = this.isAihubmixProvider();
     const aihubmixLimits = await this.getAihubmixModelLimits(resolvedModel);
     const maxTokens = opts?.maxTokens ?? aihubmixLimits?.maxOutput;
 
@@ -213,17 +315,23 @@ export class CustomProvider implements AIProvider {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
-      body: JSON.stringify({
+      body: JSON.stringify(buildCustomProviderRequestBody({
         model: resolvedModel,
-        stream: true,
         messages,
-        ...(maxTokens ? { max_tokens: maxTokens } : {}),
-      }),
+        maxTokens,
+        isAihubmixProvider,
+      })),
     });
 
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => resp.statusText);
-      throw new Error(`${this.name} API error ${resp.status}: ${text}`);
+      throw new Error(formatCustomProviderHttpError({
+        providerName: this.name,
+        status: resp.status,
+        statusText: resp.statusText,
+        responseText: text,
+        isAihubmixProvider,
+      }));
     }
 
     const reader = resp.body.getReader();

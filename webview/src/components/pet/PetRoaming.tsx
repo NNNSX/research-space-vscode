@@ -171,6 +171,22 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
           💬
         </button>
 
+        <button
+          onClick={(e) => { e.stopPropagation(); setMode('game'); }}
+          title="打开小游戏"
+          style={{
+            background: 'transparent',
+            color: 'var(--vscode-descriptionForeground)',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 9,
+            padding: '0 2px',
+            lineHeight: 1,
+          }}
+        >
+          🎮
+        </button>
+
         {/* Minimize button */}
         <button
           onClick={(e) => { e.stopPropagation(); setMode('minimized'); }}

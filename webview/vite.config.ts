@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+const enableSourceMap = process.env.RS_VSCODE_SOURCEMAP !== 'false';
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -21,7 +23,7 @@ export default defineConfig({
         inlineDynamicImports: true,
       },
     },
-    sourcemap: true,
+    sourcemap: enableSourceMap,
     minify: false,  // Keep readable for debugging
   },
   define: {

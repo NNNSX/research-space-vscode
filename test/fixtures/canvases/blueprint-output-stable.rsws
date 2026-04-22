@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "bp-container",
+      "node_type": "blueprint",
+      "title": "稳定输出蓝图",
+      "position": { "x": 120, "y": 100 },
+      "size": { "width": 760, "height": 420 },
+      "meta": {
+        "blueprint_instance_id": "inst-stable-output",
+        "blueprint_def_id": "bp-def-stable-output",
+        "blueprint_color": "#2f7d68",
+        "blueprint_input_slot_defs": [],
+        "blueprint_output_slot_defs": [
+          {
+            "id": "output_slot_summary",
+            "kind": "output",
+            "title": "输出结果 · 摘要节点",
+            "required": false,
+            "allow_multiple": false,
+            "accepts": ["ai_output"],
+            "source_function_node_id": "fn_def_summary",
+            "placeholder_style": "output_placeholder",
+            "replacement_mode": "attach_by_edge",
+            "binding_hint": "蓝图运行完成后，最终输出会优先回填到该占位位置。",
+            "rect": { "x": 500, "y": 130, "width": 240, "height": 136 }
+          }
+        ]
+      }
+    },
+    {
+      "id": "fn-summary",
+      "node_type": "function",
+      "title": "摘要节点",
+      "position": { "x": 250, "y": 220 },
+      "size": { "width": 280, "height": 220 },
+      "meta": {
+        "blueprint_instance_id": "inst-stable-output",
+        "blueprint_def_id": "bp-def-stable-output",
+        "blueprint_color": "#2f7d68",
+        "blueprint_source_kind": "function_node",
+        "blueprint_source_id": "fn_def_summary",
+        "ai_tool": "summarize",
+        "param_values": {},
+        "fn_status": "idle"
+      }
+    },
+    {
+      "id": "output-placeholder",
+      "node_type": "ai_output",
+      "title": "输出占位",
+      "position": { "x": 620, "y": 250 },
+      "size": { "width": 240, "height": 136 },
+      "meta": {
+        "blueprint_instance_id": "inst-stable-output",
+        "blueprint_def_id": "bp-def-stable-output",
+        "blueprint_color": "#2f7d68",
+        "blueprint_placeholder_kind": "output",
+        "blueprint_placeholder_slot_id": "output_slot_summary",
+        "blueprint_placeholder_title": "输出结果 · 摘要节点",
+        "blueprint_placeholder_accepts": ["ai_output"],
+        "blueprint_placeholder_required": false,
+        "blueprint_placeholder_allow_multiple": false,
+        "blueprint_placeholder_replacement_mode": "attach_by_edge",
+        "blueprint_placeholder_hint": "蓝图运行完成后，最终输出会优先回填到该占位位置。"
+      }
+    },
+    {
+      "id": "bound-output",
+      "node_type": "ai_output",
+      "title": "摘要结果",
+      "position": { "x": 700, "y": 250 },
+      "size": { "width": 240, "height": 160 },
+      "file_path": "outputs/summary.md",
+      "meta": {
+        "ai_provider": "copilot",
+        "ai_model": "gpt-4.1",
+        "blueprint_def_id": "bp-def-stable-output",
+        "blueprint_color": "#2f7d68",
+        "blueprint_bound_instance_id": "inst-stable-output",
+        "blueprint_bound_slot_id": "output_slot_summary",
+        "blueprint_bound_slot_title": "输出结果 · 摘要节点",
+        "blueprint_bound_slot_kind": "output"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-fn-to-placeholder",
+      "source": "fn-summary",
+      "target": "output-placeholder",
+      "edge_type": "ai_generated"
+    },
+    {
+      "id": "edge-placeholder-to-output",
+      "source": "output-placeholder",
+      "target": "bound-output",
+      "edge_type": "data_flow",
+      "role": "output_slot_summary"
+    }
+  ],
+  "viewport": { "x": 0, "y": 0, "zoom": 1 },
+  "metadata": {
+    "title": "蓝图输出稳定性回归",
+    "created_at": "2026-04-21T00:00:00.000Z",
+    "updated_at": "2026-04-21T00:00:00.000Z"
+  }
+}

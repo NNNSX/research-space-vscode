@@ -2,6 +2,59 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [2.1.1-alpha.12] — 2026-04-21
+
+- **补上“外部改回旧 `.rsws` 后重开”的迁移集成测试** — 新增 `external-migration-reload.test.js`，覆盖“画布已打开时外部把 `.rsws` 改回旧结构 → 关闭并重开 → 旧 `summaryGroups`、残留 `group_hub` 与脏边自动迁移写回 → 再次重开仍稳定”的整条自定义编辑器链路，继续收口旧结构迁移不只要在 store 层通过、也要在 VS Code 宿主层真正成立
+
+## [2.1.1-alpha.11] — 2026-04-21
+
+- **修正 board 拖动后 nodeGroup / blueprint 叠加结构的持久化漂移** — 之前 board 移动节点时只改了可见节点位置，没有同步重算 `nodeGroups.bounds`，也没有顺带回收受影响的 blueprint 外壳；结果当前会话里看似正常，但重开画布后会被加载期归一化“再挪一次”。现在 board 移动会同步重算相关节点组 bounds，并回收受影响的 blueprint 容器位置，减少重开后的结构跳变
+- **补上 board + nodeGroup + blueprint 叠加场景回归测试** — 新增 `canvas-store-overlap-persistence.test.ts`，直接覆盖“同一画板里同时包含节点组与蓝图实例，拖动画板后再重开”的稳定性，防止这条共享拖拽/持久化链路再次回归
+
+## [2.1.1-alpha.10] — 2026-04-21
+
+- **补上 nodeGroups / group_hub 旧迁移回归测试** — 新增 `canvas-store-group-migration.test.ts`，覆盖“旧画布已无节点组但还残留 `group_hub` / 边”、“历史 nodeGroups 成员列表含重复/失效节点”、“组框 bounds 需按真实成员重算”、“只保留合法 hub 边并立即写盘”等高回归场景，继续把旧 `.rsws` 迁移链路补成自动化护栏
+
+## [2.1.1-alpha.9] — 2026-04-21
+
+- **修正 `debouncedSave(..., 'immediate')` 只标脏不写盘的语义漏洞** — 之前不少“应立即落盘”的共享链路其实只做了内存同步和 pending 标记，没有真的发起保存；现在 immediate 路径会直接触发自动写盘，旧 `.rsws` 迁移、蓝图 definitions 回填等关键结构修正不再假性“已收口”
+- **继续补迁移写盘回归测试** — `canvas-store-migration-regression.test.ts` 现在除了校验旧 `summaryGroups -> boards` 和隐式 output slot 合成结果，还会显式断言这些加载期迁移会立刻发出 `canvasChanged` 写盘消息，防止以后再次出现“内存里修好了，磁盘上没保存”的回归
+
+## [2.1.1-alpha.8] — 2026-04-21
+
+- **补上旧 `.rsws` 迁移与蓝图持久化回归测试** — 新增 `canvas-store-migration-regression.test.ts`，覆盖 `summaryGroups -> boards` 迁移稳定性、旧蓝图实例隐式 output slot 合成，以及 definitions 晚到时的输出链幂等性，防止“第一次打开正常、后续重开或 definitions 回填后又漂移”的回归
+- **统一蓝图 definitions 迁移时的输出边语义** — 旧实例在 definitions 晚到后，不再额外补出一条 `function -> output placeholder` 的 `data_flow` 双连线；该路径现在和实例化链路一致，输出槽位前只保留正确的 `ai_generated` 支撑边
+
+## [2.1.1-alpha.7] — 2026-04-21
+
+- **package 专用构建开始先清空 dist** — 新增 `clean:package-dist`，让 `npm run build:package` 在无 sourcemap 构建前先删掉旧的 `dist/`；避免上一轮普通 build 残留的 `extension.js.map` 被 `vsce` 误带进最终 VSIX
+
+## [2.1.1-alpha.6] — 2026-04-21
+
+- **package 专用构建链路不再生成 sourcemap** — 新增 `build:ext:package / build:webview:package / build:package`，`npm run package` 现在会走无 sourcemap 的专用构建；保留日常 `npm run build` 的调试 sourcemap，但最终 VSIX 不再依赖 `.vscodeignore` 去“事后排除”这些包体垃圾
+- **webview build 开始支持按环境变量开关 sourcemap** — `vite.config.ts` 现在读取 `RS_VSCODE_SOURCEMAP`，默认保持开发构建可调试，打包时显式关闭
+
+## [2.1.1-alpha.5] — 2026-04-21
+
+- **彻底收掉 VSIX 中遗留的 sourcemap** — 在 `.vscodeignore` 末尾补充 `**/*.map` 兜底排除，解决前一轮 `dist/**/*.map` 仍没拦住 `dist/extension.js.map` 与 webview sourcemap 的问题
+
+## [2.1.1-alpha.4] — 2026-04-21
+
+- **继续收口 VSIX 打包内容** — `.vscodeignore` 现在会额外排除 `dist/**/*.map`、`GITHUB_RELEASE_NOTE.md`、`eslint.config.cjs`、仓库 `.gitignore` 以及 webview 侧 `package*.json`；避免这些开发/发布辅助文件继续进入最终安装包
+- **修正 `!dist/` 对 sourcemap 的反向放行** — 之前虽然全局写了 `*.map`，但后面的 `!dist/` 仍把 `dist/extension.js.map` 带回了 VSIX；现在改成在放行 `dist/` 之后再次显式排除 `dist/**/*.map`
+
+## [2.1.1-alpha.3] — 2026-04-21
+
+- **清零当前开发仓的 TypeScript 历史类型错误** — `npm run typecheck` 现已通过；这轮主要收口了 AIHubMix 模型上限缓存、Anthropic/Copilot provider 类型、legacy tool 索引、Blueprint 草稿构建类型守卫，以及 function-runner 多模态返回值与可选参数等一批长期堆积的类型漂移
+- **共享节点类型守卫改为真正收窄到具体节点类型** — `isDataNode / isFunctionNode / isGroupHubNode / blueprint placeholder` 现在会把 `CanvasNode` 精确收窄到对应节点分支，减少 blueprint、pipeline、hub 展开链路里“明明有 title/id 却被 TypeScript 推成 never”的问题
+- **蓝图实例转草稿时移除一段重复的 synthetic output slot 注入** — 之前这段残留逻辑既引用了不存在的变量，也会和后面的正式注入重复；现在保留单一路径，避免实例演化链路再出现重复输出槽位或运行期引用错误
+
+## [2.1.1-alpha.2] — 2026-04-21
+
+- **补上 Custom Editor 的 VS Code 层 undo / redo 端到端回归** — 新增 `undo-redo.test.js`，覆盖“打开画布 → 触发 provider 级编辑 → VS Code undo / redo → 保存回写文件”的完整主链路，避免 `CanvasDocument` 历史栈或自定义编辑器回调再次悄悄失效
+- **provider 级 undo / redo 现在会同步回 webview** — 当 VS Code 触发自定义编辑器的撤销/重做回调时，恢复后的画布状态会立即重新发回当前 webview，避免宿主侧历史已回滚但画布 UI 仍停留在旧状态
+- **补充内部测试命令用于集成测试观测** — 扩展现在注册隐藏的 `researchSpace.test.*` 命令，专供自动化测试读取当前活跃画布状态、注入最小 provider 级编辑，不进入命令面板，也不改变正常用户工作流
+
 ## [2.1.1-alpha.1] — 2026-04-21
 
 - **发布汇总版本：收口自 `v2.1.0-alpha.41` 以来的蓝图主线改造** — 这不是单个小补丁版，而是把 `alpha.42` 到 `alpha.140` 期间已落地的有效改动统一汇总进新的发布节点：重点包括旧蓝图实例/旧画布严格迁移、蓝图 overlay 外壳与整实例拖拽、输出槽位历史与失败后继续、蓝图最终输出持久化/恢复链路、隐式 output slot 自动补齐、输出节点外置与重开不再掉线、输入/输出占位样式与自动测高收口，以及 Copilot 默认模型改为 `gpt-4.1`、创建蓝图弹窗文本选择误关修复、普通文件节点 footer 回归修复等。详细对比说明请见 GitHub Release Notes

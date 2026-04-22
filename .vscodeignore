@@ -1,5 +1,14 @@
 node_modules/
 webview/node_modules/
+test/
+coverage/
+test-results/
+.vitest/
+.vscode-test/
+vitest.config.*
+playwright.config.*
+*.test.*
+*.spec.*
 webview/src/
 webview/vite.config.ts
 webview/tsconfig.json
@@ -11,3 +20,10 @@ tsconfig.json
 *.map
 !dist/
 !resources/
+dist/**/*.map
+.gitignore
+GITHUB_RELEASE_NOTE.md
+eslint.config.cjs
+webview/package.json
+webview/package-lock.json
+**/*.map

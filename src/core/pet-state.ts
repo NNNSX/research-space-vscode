@@ -59,6 +59,13 @@ function isoOrFallback(value: unknown, fallback: string): string {
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 }
 
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function createDefaultSharedPetState(seed?: { petType?: PetTypeId; petName?: string }): PetState {
   const now = new Date().toISOString();
   return {
@@ -73,6 +80,23 @@ export function createDefaultSharedPetState(seed?: { petType?: PetTypeId; petNam
     lastInteraction: now,
     unlockedPets: ['dog', 'fox'],
     streakDays: 0,
+    miniGameStatsDate: localDateKey(),
+    snakeLastScore: 0,
+    snakeBestScoreToday: 0,
+    snakeBestScore: 0,
+    snakeLastPlayedAt: now,
+    twenty48LastScore: 0,
+    twenty48BestScoreToday: 0,
+    twenty48BestScore: 0,
+    twenty48LastPlayedAt: now,
+    sudokuLastScore: 0,
+    sudokuBestScoreToday: 0,
+    sudokuBestScore: 0,
+    sudokuLastPlayedAt: now,
+    flappyLastScore: 0,
+    flappyBestScoreToday: 0,
+    flappyBestScore: 0,
+    flappyLastPlayedAt: now,
   };
 }
 
@@ -127,6 +151,25 @@ export function normalizePetState(raw: unknown, seed?: { petType?: PetTypeId; pe
     widgetOffsetY: Number.isFinite(raw.widgetOffsetY) ? Number(raw.widgetOffsetY) : undefined,
     widgetLeft,
     widgetTop,
+    miniGameStatsDate: typeof raw.miniGameStatsDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.miniGameStatsDate)
+      ? raw.miniGameStatsDate
+      : base.miniGameStatsDate,
+    snakeLastScore: Math.max(0, Math.floor(finiteNumber(raw.snakeLastScore, base.snakeLastScore ?? 0))),
+    snakeBestScoreToday: Math.max(0, Math.floor(finiteNumber(raw.snakeBestScoreToday, base.snakeBestScoreToday ?? 0))),
+    snakeBestScore: Math.max(0, Math.floor(finiteNumber(raw.snakeBestScore, base.snakeBestScore ?? 0))),
+    snakeLastPlayedAt: isoOrFallback(raw.snakeLastPlayedAt, base.snakeLastPlayedAt ?? base.currentSessionStart),
+    twenty48LastScore: Math.max(0, Math.floor(finiteNumber(raw.twenty48LastScore, base.twenty48LastScore ?? 0))),
+    twenty48BestScoreToday: Math.max(0, Math.floor(finiteNumber(raw.twenty48BestScoreToday, base.twenty48BestScoreToday ?? 0))),
+    twenty48BestScore: Math.max(0, Math.floor(finiteNumber(raw.twenty48BestScore, base.twenty48BestScore ?? 0))),
+    twenty48LastPlayedAt: isoOrFallback(raw.twenty48LastPlayedAt, base.twenty48LastPlayedAt ?? base.currentSessionStart),
+    sudokuLastScore: Math.max(0, Math.floor(finiteNumber(raw.sudokuLastScore, base.sudokuLastScore ?? 0))),
+    sudokuBestScoreToday: Math.max(0, Math.floor(finiteNumber(raw.sudokuBestScoreToday, base.sudokuBestScoreToday ?? 0))),
+    sudokuBestScore: Math.max(0, Math.floor(finiteNumber(raw.sudokuBestScore, base.sudokuBestScore ?? 0))),
+    sudokuLastPlayedAt: isoOrFallback(raw.sudokuLastPlayedAt, base.sudokuLastPlayedAt ?? base.currentSessionStart),
+    flappyLastScore: Math.max(0, Math.floor(finiteNumber(raw.flappyLastScore, base.flappyLastScore ?? 0))),
+    flappyBestScoreToday: Math.max(0, Math.floor(finiteNumber(raw.flappyBestScoreToday, base.flappyBestScoreToday ?? 0))),
+    flappyBestScore: Math.max(0, Math.floor(finiteNumber(raw.flappyBestScore, base.flappyBestScore ?? 0))),
+    flappyLastPlayedAt: isoOrFallback(raw.flappyLastPlayedAt, base.flappyLastPlayedAt ?? base.currentSessionStart),
   };
 }
 

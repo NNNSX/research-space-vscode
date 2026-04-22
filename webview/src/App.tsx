@@ -806,7 +806,7 @@ export function App() {
               blueprint_last_issue_node_id: undefined,
               blueprint_last_issue_node_title: undefined,
               blueprint_run_history: appendBlueprintRunHistory(containerNode?.meta?.blueprint_run_history, historyEntry),
-            });
+            }, 'immediate');
             setError(bm.message);
           }
           break;
@@ -931,7 +931,7 @@ export function App() {
                 ...(pm.status === 'failed'
                   ? { blueprint_last_run_failed_at: finishedAt }
                   : {}),
-              });
+              }, 'immediate');
             }
             setPipelineState({
               ...finalPs,

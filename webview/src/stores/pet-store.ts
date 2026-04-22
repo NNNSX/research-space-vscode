@@ -14,11 +14,32 @@ import { getUnlockedPetsForLevel, normalizePetState } from '../../../src/core/pe
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-export type PetMode = 'minimized' | 'roaming' | 'chat';
+export type PetMode = 'minimized' | 'roaming' | 'chat' | 'game';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
+}
+
+type MiniGameId = 'snake' | 'twenty48' | 'sudoku' | 'flappy';
+
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function resetDailyMiniGameStats(pet: PetState, today = localDateKey()): PetState {
+  if (pet.miniGameStatsDate === today) { return pet; }
+  return {
+    ...pet,
+    miniGameStatsDate: today,
+    snakeBestScoreToday: 0,
+    twenty48BestScoreToday: 0,
+    sudokuBestScoreToday: 0,
+    flappyBestScoreToday: 0,
+  };
 }
 
 // ── Pet store interface ────────────────────────────────────────────────────
@@ -98,6 +119,7 @@ interface PetStore {
   clearChat(): void;
   // Canvas event awareness
   notifyCanvasEvent(eventType: 'nodeAdded' | 'nodeDeleted' | 'aiDone' | 'aiError'): void;
+  recordMiniGameResult(gameId: MiniGameId, score: number): void;
 }
 
 // ── Store ──────────────────────────────────────────────────────────────────
@@ -133,7 +155,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
   },
 
   init(state, enabled, restReminderMin, groundTheme) {
-    const pet = normalizePetState(state) ?? createDefaultPetState();
+    const pet = resetDailyMiniGameStats(normalizePetState(state) ?? createDefaultPetState());
     const now = Date.now();
     set({
       pet: { ...pet, currentSessionStart: new Date().toISOString() },
@@ -175,15 +197,15 @@ export const usePetStore = create<PetStore>((set, get) => ({
     const updates: Partial<PetStore> = { mode };
 
     // Save position before entering chat; restore when leaving chat
-    if (mode === 'chat') {
+    if (mode === 'chat' || mode === 'game') {
       updates.preChatLeft = s.widgetLeft;
       updates.preChatTop = s.widgetTop;
       // When entering chat mode with empty messages, add greeting
-      if (s.chatMessages.length === 0) {
+      if (mode === 'chat' && s.chatMessages.length === 0) {
         updates.chatMessages = [{ role: 'assistant', text: `你好！我是${s.pet.petName}~ 有什么可以帮你的吗？` }];
       }
-    } else if (s.mode === 'chat' && s.preChatLeft !== null && s.preChatTop !== null) {
-      // Leaving chat → restore original position
+    } else if ((s.mode === 'chat' || s.mode === 'game') && s.preChatLeft !== null && s.preChatTop !== null) {
+      // Leaving expanded mode → restore original position
       updates.widgetLeft = s.preChatLeft;
       updates.widgetTop = s.preChatTop;
       updates.preChatLeft = null;
@@ -460,6 +482,10 @@ export const usePetStore = create<PetStore>((set, get) => ({
       `- 本次会话时长: ${sessionMin} 分钟`,
       `- 总工作时间: ${Math.floor(pet.totalWorkMinutes)} 分钟`,
       `- 连续天数: ${pet.streakDays}`,
+      `- 贪吃蛇: 最近 ${pet.snakeLastScore ?? 0} / 今日最佳 ${pet.snakeBestScoreToday ?? 0} / 历史最佳 ${pet.snakeBestScore ?? 0}`,
+      `- 2048: 最近 ${pet.twenty48LastScore ?? 0} / 今日最佳 ${pet.twenty48BestScoreToday ?? 0} / 历史最佳 ${pet.twenty48BestScore ?? 0}`,
+      `- 数独: 最近 ${pet.sudokuLastScore ?? 0} / 今日最佳 ${pet.sudokuBestScoreToday ?? 0} / 历史最佳 ${pet.sudokuBestScore ?? 0}`,
+      `- 像素鸟: 最近 ${pet.flappyLastScore ?? 0} / 今日最佳 ${pet.flappyBestScoreToday ?? 0} / 历史最佳 ${pet.flappyBestScore ?? 0}`,
       ``,
     ].join('\n');
 
@@ -532,5 +558,38 @@ export const usePetStore = create<PetStore>((set, get) => ({
         unlockedPets: getUnlockedPetsForLevel(nextLevel, s.pet.petType, s.pet.unlockedPets),
       },
     });
+  },
+
+  recordMiniGameResult(gameId, score) {
+    const safeScore = Math.max(0, Math.floor(score));
+    set(s => {
+      const today = localDateKey();
+      const nowIso = new Date().toISOString();
+      const normalizedPet = resetDailyMiniGameStats(s.pet, today);
+      const nextPet: PetState = { ...normalizedPet, miniGameStatsDate: today };
+      if (gameId === 'snake') {
+        nextPet.snakeLastScore = safeScore;
+        nextPet.snakeBestScoreToday = Math.max(normalizedPet.snakeBestScoreToday ?? 0, safeScore);
+        nextPet.snakeBestScore = Math.max(normalizedPet.snakeBestScore ?? 0, safeScore);
+        nextPet.snakeLastPlayedAt = nowIso;
+      } else if (gameId === 'twenty48') {
+        nextPet.twenty48LastScore = safeScore;
+        nextPet.twenty48BestScoreToday = Math.max(normalizedPet.twenty48BestScoreToday ?? 0, safeScore);
+        nextPet.twenty48BestScore = Math.max(normalizedPet.twenty48BestScore ?? 0, safeScore);
+        nextPet.twenty48LastPlayedAt = nowIso;
+      } else if (gameId === 'sudoku') {
+        nextPet.sudokuLastScore = safeScore;
+        nextPet.sudokuBestScoreToday = Math.max(normalizedPet.sudokuBestScoreToday ?? 0, safeScore);
+        nextPet.sudokuBestScore = Math.max(normalizedPet.sudokuBestScore ?? 0, safeScore);
+        nextPet.sudokuLastPlayedAt = nowIso;
+      } else {
+        nextPet.flappyLastScore = safeScore;
+        nextPet.flappyBestScoreToday = Math.max(normalizedPet.flappyBestScoreToday ?? 0, safeScore);
+        nextPet.flappyBestScore = Math.max(normalizedPet.flappyBestScore ?? 0, safeScore);
+        nextPet.flappyLastPlayedAt = nowIso;
+      }
+      return { pet: nextPet };
+    });
+    get().savePetState();
   },
 }));

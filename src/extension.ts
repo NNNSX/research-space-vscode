@@ -22,6 +22,82 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'researchSpace.test.getCanvasState',
+      (canvasUri?: vscode.Uri) => {
+        const target = canvasUri
+          ? CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath)
+          : Array.from(CanvasEditorProvider.activeDocuments.values())[0];
+        return target?.data ?? null;
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.applyCanvasTitleEdit',
+      (title: string, canvasUri?: vscode.Uri) => {
+        const target = canvasUri
+          ? CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath)
+          : Array.from(CanvasEditorProvider.activeDocuments.values())[0];
+        if (!target || !title.trim()) { return false; }
+        const next = JSON.parse(JSON.stringify(target.data));
+        next.metadata = {
+          ...next.metadata,
+          title,
+          updated_at: new Date().toISOString(),
+        };
+        if (Array.isArray(next.nodes) && next.nodes.length > 0) {
+          next.nodes[0] = {
+            ...next.nodes[0],
+            title,
+          };
+        }
+        return editorProvider.applyTestEdit(target, next);
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.undoCanvasEdit',
+      (canvasUri?: vscode.Uri) => {
+        const target = canvasUri
+          ? CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath)
+          : Array.from(CanvasEditorProvider.activeDocuments.values())[0];
+        if (!target) { return false; }
+        return editorProvider.undoTestEdit(target);
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.redoCanvasEdit',
+      (canvasUri?: vscode.Uri) => {
+        const target = canvasUri
+          ? CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath)
+          : Array.from(CanvasEditorProvider.activeDocuments.values())[0];
+        if (!target) { return false; }
+        return editorProvider.redoTestEdit(target);
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.isCanvasReady',
+      (canvasUri?: vscode.Uri) => {
+        const targetPath = canvasUri?.fsPath;
+        if (targetPath) {
+          return CanvasEditorProvider.canvasSessionIds.has(targetPath);
+        }
+        return CanvasEditorProvider.canvasSessionIds.size > 0;
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.postCanvasMessage',
+      async (message: unknown, canvasUri?: vscode.Uri) => {
+        const targetPath = canvasUri?.fsPath;
+        const webview = targetPath
+          ? CanvasEditorProvider.activeWebviews.get(targetPath)
+          : Array.from(CanvasEditorProvider.activeWebviews.values())[0];
+        if (!webview || !message || typeof message !== 'object') { return false; }
+        if (targetPath && !CanvasEditorProvider.canvasSessionIds.has(targetPath)) { return false; }
+        return webview.postMessage(message as Record<string, unknown>);
+      }
+    )
+  );
+
   // ── Sidebar TreeView ──────────────────────────────────────────────────────
   const treeProvider = new WorkspaceTreeProvider();
   const treeView = vscode.window.createTreeView('researchSpace.explorer', {

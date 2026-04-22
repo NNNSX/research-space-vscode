@@ -71,6 +71,7 @@ export interface FunctionRunResult {
   success: boolean;
   runId: string;
   outputNode?: CanvasNode;
+  outputContent?: AIContent;
   errorMessage?: string;
 }
 
@@ -513,6 +514,7 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: 'Cancelled' };
   }
   const aiType = toolDef.apiType ?? 'chat';
+  const nodeParams = fnNode.meta?.param_values ?? {};
 
   // F2: Run Guard — check run condition before doing anything else
   const runGuard = fnNode.meta?.run_guard ?? 'always';
@@ -545,7 +547,7 @@ async function _runFunctionNodeInner(
   }
 
   // 3. Resolve provider/model early so all providers can share unified output + context budgeting.
-  const nodeProvider = fnNode.meta.param_values?.['_provider'] as string | undefined;
+  const nodeProvider = nodeParams['_provider'] as string | undefined;
   let provider;
   try {
     provider = await getProvider(nodeProvider);
@@ -555,7 +557,7 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: msg };
   }
 
-  const nodeModel = fnNode.meta.param_values?.['_model'] as string | undefined;
+  const nodeModel = nodeParams['_model'] as string | undefined;
   const effectiveModel = await provider.resolveModel(nodeModel);
 
   // 3b. Resolve system prompt early so dynamic context budgeting can reserve room for it.
@@ -563,8 +565,8 @@ async function _runFunctionNodeInner(
     (acc, p) => { acc[p.name] = p.default; return acc; },
     {}
   );
-  const params = { ...defaultParams, ...fnNode.meta.param_values };
-  const customPrompt = fnNode.meta.param_values?.['_systemPrompt'] as string | undefined;
+  const params = { ...defaultParams, ...nodeParams };
+  const customPrompt = nodeParams['_systemPrompt'] as string | undefined;
   const systemPrompt = (customPrompt && customPrompt.trim())
     ? customPrompt.trim()
     : registry.buildSystem(toolId, params);
@@ -658,7 +660,7 @@ async function _runFunctionNodeInner(
     contents.push(...groupedContents);
   }
   if (toolId === 'chat') {
-    const chatPrompt = (fnNode.meta.param_values?.['_chatPrompt'] as string)?.trim() ?? '';
+    const chatPrompt = (nodeParams['_chatPrompt'] as string | undefined)?.trim() ?? '';
     if (!chatPrompt) {
       const msg = 'Chat 对话需要输入 Prompt，请在 Chat 节点中输入消息。';
       reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
@@ -685,7 +687,7 @@ async function _runFunctionNodeInner(
 
   // 3c. For RAG: append the user query as an explicit content block
   if (toolId === 'rag') {
-    const query = (fnNode.meta.param_values?.['query'] as string)?.trim() ?? '';
+    const query = (nodeParams['query'] as string | undefined)?.trim() ?? '';
     if (!query) {
       const msg = '文档问答需要输入问题，请填写节点上的「问题」字段。';
       reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
@@ -703,12 +705,12 @@ async function _runFunctionNodeInner(
     }
     // Apply topK: keep the topK most-recently-added text contents by character overlap with query
     // (lightweight keyword heuristic — avoids embedding dependency)
-    const topK = Number(fnNode.meta.param_values?.['topK'] ?? 5);
+    const topK = Number(nodeParams['topK'] ?? 5);
     if (contents.length > topK) {
       const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2));
       const scored = contents.map(c => {
         if (c.type !== 'text') { return { c, score: 0 }; }
-        const words = c.text.toLowerCase().split(/\s+/);
+        const words = (c.text ?? '').toLowerCase().split(/\s+/);
         const overlap = words.filter(w => queryWords.has(w)).length;
         return { c, score: overlap };
       }).sort((a, b) => b.score - a.score);
@@ -1559,6 +1561,9 @@ async function runVideoGen(
     let submitResp: Response;
 
     if (isImageToVideo && imageContent && imageContent.type === 'image') {
+      if (!imageContent.base64 || !imageContent.mediaType) {
+        throw new Error('图生视频输入缺少可用的图像内容。');
+      }
       // Image-to-video: multipart/form-data with input_reference file field
       const form = new FormData();
       form.set('model', model);
@@ -1693,35 +1698,37 @@ async function runVideoGen(
   }
 }
 
+function countExistingFunctionOutputNodes(
+  nodeId: string,
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
+): number {
+  if (!canvas) { return 0; }
+
+  const outputTargetIds = new Set(
+    canvas.edges
+      .filter(edge => edge.edge_type === 'ai_generated' && edge.source === nodeId)
+      .map(edge => edge.target),
+  );
+  if (outputTargetIds.size === 0) { return 0; }
+
+  return canvas.nodes.filter(node => outputTargetIds.has(node.id)).length;
+}
+
 // ── Output position calculator (A1) ───────────────────────────────────────────
-// Places the output node to the right of the function node and scans existing
-// nodes for bounding-box collisions. Steps down by (height + gap) until a free
-// slot is found (max 20 iterations to avoid infinite loops on very cluttered canvases).
+// Keeps normal function outputs anchored to the right of the source function and
+// applies a small vertical offset for each existing historical output, mirroring
+// the blueprint final-output stacking style.
 export function calcOutputPosition(
+  nodeId: string,
   fnNode: CanvasNode,
   outSize: { width: number; height: number },
-  existingNodes: CanvasNode[]
+  canvas: Pick<CanvasFile, 'nodes' | 'edges'> | undefined,
 ): { x: number; y: number } {
-  const GAP = 60;
-  const baseX = fnNode.position.x + fnNode.size.width + GAP;
-  const stepY = outSize.height + GAP;
-
-  for (let i = 0; i < 20; i++) {
-    const candidate = { x: baseX, y: fnNode.position.y + i * stepY };
-    const overlaps = existingNodes.some(n => {
-      if (!n.position || !n.size) { return false; }
-      return (
-        candidate.x < n.position.x + n.size.width + GAP / 2 &&
-        candidate.x + outSize.width + GAP / 2 > n.position.x &&
-        candidate.y < n.position.y + n.size.height + GAP / 2 &&
-        candidate.y + outSize.height + GAP / 2 > n.position.y
-      );
-    });
-    if (!overlaps) { return candidate; }
-  }
-  // Fallback: place below all existing nodes at baseX
-  const maxY = existingNodes.reduce((m, n) => Math.max(m, (n.position?.y ?? 0) + (n.size?.height ?? 0)), 0);
-  return { x: baseX, y: maxY + GAP };
+  const existingOutputCount = countExistingFunctionOutputNodes(nodeId, canvas);
+  return {
+    x: fnNode.position.x + fnNode.size.width + 72,
+    y: fnNode.position.y + Math.max((fnNode.size.height - outSize.height) / 2, 0) + (existingOutputCount * 36),
+  };
 }
 
 function calcPreferredBlueprintOutputPosition(
@@ -1743,7 +1750,7 @@ function calcPreferredBlueprintOutputPosition(
       y: fnNode.position.y + Math.max((fnNode.size.height - outSize.height) / 2, 12),
     };
   }
-  return calcOutputPosition(fnNode, outSize, canvas?.nodes ?? []);
+  return calcOutputPosition(nodeId, fnNode, outSize, canvas);
 }
 
 function resolveBlueprintOutputTarget(

@@ -79,19 +79,18 @@ async function fetchAllAihubmixModels(): Promise<AihubmixModelLimits[]> {
     }
 
     const payload = await resp.json() as AihubmixModelsResponse;
-    const models = Array.isArray(payload.data)
-      ? payload.data
-        .map(item => {
-          const modelId = typeof item.model_id === 'string' ? item.model_id : '';
-          if (!modelId) { return null; }
-          return {
-            modelId,
-            maxOutput: parsePositiveInt(item.max_output),
-            contextLength: parsePositiveInt(item.context_length),
-          } satisfies AihubmixModelLimits;
-        })
-        .filter((item): item is AihubmixModelLimits => !!item)
-      : [];
+    const models: AihubmixModelLimits[] = [];
+    if (Array.isArray(payload.data)) {
+      for (const item of payload.data) {
+        const modelId = typeof item.model_id === 'string' ? item.model_id : '';
+        if (!modelId) { continue; }
+        models.push({
+          modelId,
+          maxOutput: parsePositiveInt(item.max_output),
+          contextLength: parsePositiveInt(item.context_length),
+        });
+      }
+    }
 
     cachedModels = models;
     cachedAt = Date.now();
@@ -102,7 +101,7 @@ async function fetchAllAihubmixModels(): Promise<AihubmixModelLimits[]> {
     throw err;
   });
 
-  return inflight;
+  return inflight ?? [];
 }
 
 export async function getAihubmixModelLimits(model: string): Promise<AihubmixModelLimits | null> {

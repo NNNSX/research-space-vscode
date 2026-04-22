@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "input-note",
+      "node_type": "note",
+      "title": "原始材料",
+      "position": { "x": 80, "y": 120 },
+      "size": { "width": 240, "height": 160 },
+      "file_path": "notes/source.md"
+    },
+    {
+      "id": "fn-1",
+      "node_type": "function",
+      "title": "步骤一",
+      "position": { "x": 420, "y": 120 },
+      "size": { "width": 280, "height": 220 },
+      "meta": {
+        "ai_tool": "summarize",
+        "param_values": {},
+        "fn_status": "idle"
+      }
+    },
+    {
+      "id": "fn-2",
+      "node_type": "function",
+      "title": "步骤二",
+      "position": { "x": 780, "y": 120 },
+      "size": { "width": 280, "height": 220 },
+      "meta": {
+        "ai_tool": "review",
+        "param_values": {},
+        "fn_status": "idle"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-input-to-fn-1",
+      "source": "input-note",
+      "target": "fn-1",
+      "edge_type": "data_flow"
+    },
+    {
+      "id": "edge-fn-1-to-fn-2",
+      "source": "fn-1",
+      "target": "fn-2",
+      "edge_type": "pipeline_flow"
+    }
+  ],
+  "viewport": { "x": 0, "y": 0, "zoom": 1 },
+  "metadata": {
+    "title": "基础 Pipeline",
+    "created_at": "2026-04-21T00:00:00.000Z",
+    "updated_at": "2026-04-21T00:00:00.000Z"
+  }
+}

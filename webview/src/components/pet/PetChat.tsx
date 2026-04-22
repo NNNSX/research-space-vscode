@@ -119,6 +119,21 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
         <span style={{ fontSize: 9, opacity: 0.6 }}>Lv.{pet.level}</span>
         <div style={{ flex: 1 }} />
         <button
+          onClick={(e) => { e.stopPropagation(); setMode('game'); }}
+          title="打开小游戏"
+          style={{
+            background: 'transparent',
+            color: 'var(--vscode-descriptionForeground)',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 10,
+            padding: '0 4px',
+            lineHeight: 1,
+          }}
+        >
+          🎮
+        </button>
+        <button
           onClick={(e) => { e.stopPropagation(); clearChat(); }}
           title="清除对话"
           style={{
