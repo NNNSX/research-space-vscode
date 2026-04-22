@@ -900,7 +900,7 @@ export function SettingsPanel() {
             key={settings.omlxBaseUrl}
             style={inputStyle}
             defaultValue={settings.omlxBaseUrl}
-            placeholder="http://localhost:8000/v1"
+            placeholder="http://localhost:11433/v1"
             onBlur={e => saveSetting('omlxBaseUrl', e.target.value)}
           />
         </Field>

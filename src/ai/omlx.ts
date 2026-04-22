@@ -51,7 +51,7 @@ export class OMLXProvider implements AIProvider {
   private get baseUrl(): string {
     return vscode.workspace
       .getConfiguration('researchSpace.ai')
-      .get<string>('omlxBaseUrl', 'http://localhost:8000/v1');
+      .get<string>('omlxBaseUrl', 'http://localhost:11433/v1');
   }
 
   private get apiKey(): string {

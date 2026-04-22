@@ -25,7 +25,7 @@ describe('OMLXProvider', () => {
 
   beforeEach(() => {
     getConfiguration.mockReturnValue(createConfiguration({
-      omlxBaseUrl: 'http://localhost:8000/v1',
+      omlxBaseUrl: 'http://localhost:11433/v1',
       omlxApiKey: '',
       omlxModel: 'qwen3-0.6b',
     }));
@@ -61,7 +61,7 @@ describe('OMLXProvider', () => {
 
   it('throws when no model is configured', async () => {
     getConfiguration.mockReturnValue(createConfiguration({
-      omlxBaseUrl: 'http://localhost:8000/v1',
+      omlxBaseUrl: 'http://localhost:11433/v1',
       omlxApiKey: '',
       omlxModel: '',
     }));
@@ -95,7 +95,7 @@ describe('OMLXProvider', () => {
 
     expect(chunks).toEqual(['RS_', 'OK']);
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/v1/chat/completions',
+      'http://localhost:11433/v1/chat/completions',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({

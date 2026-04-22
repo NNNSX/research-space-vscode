@@ -1614,7 +1614,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       anthropicModel:           ai.get<string>('anthropicModel', 'claude-sonnet-4-6'),
       ollamaBaseUrl:            ai.get<string>('ollamaBaseUrl', 'http://localhost:11434'),
       ollamaModel:              ai.get<string>('ollamaModel', 'llama3.2'),
-      omlxBaseUrl:              ai.get<string>('omlxBaseUrl', 'http://localhost:8000/v1'),
+      omlxBaseUrl:              ai.get<string>('omlxBaseUrl', 'http://localhost:11433/v1'),
       omlxApiKey:               ai.get<string>('omlxApiKey', ''),
       omlxModel:                ai.get<string>('omlxModel', ''),
       maxOutputTokens:          ai.get<number>('maxOutputTokens', 0),

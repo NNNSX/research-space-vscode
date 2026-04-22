@@ -88,7 +88,7 @@
 - 图片输入需要多模态模型（如 qwen2-vl、llava、gemma3、llama3.2-vision）；非视觉模型会弹出警告提示
 
 **oMLX**（本地 OpenAI 兼容）
-- 需本地运行 [oMLX](https://github.com/jundot/omlx)，默认地址 `http://localhost:8000/v1`
+- 需本地运行 [oMLX](https://github.com/jundot/omlx)，默认地址 `http://localhost:11433/v1`
 - 可用模型列表自动从本地实例的 `/v1/models` 同步
 - 聊天推理通过 `/v1/chat/completions` 执行
 - 如本地未启用鉴权，API Key 可留空
@@ -198,7 +198,7 @@
 | `researchSpace.ai.anthropicModel` | `claude-sonnet-4-6` | Anthropic 全局模型 |
 | `researchSpace.ai.ollamaBaseUrl` | `http://localhost:11434` | Ollama 服务地址 |
 | `researchSpace.ai.ollamaModel` | `llama3.2` | Ollama 全局模型 |
-| `researchSpace.ai.omlxBaseUrl` | `http://localhost:8000/v1` | oMLX 服务地址 |
+| `researchSpace.ai.omlxBaseUrl` | `http://localhost:11433/v1` | oMLX 服务地址 |
 | `researchSpace.ai.omlxApiKey` | — | oMLX API Key（可选） |
 | `researchSpace.ai.omlxModel` | — | oMLX 全局模型 |
 | `researchSpace.ai.maxOutputTokens` | `0` | 聊天类功能节点的最大输出 tokens（0 = 自动取模型/Provider 可知最大值） |
