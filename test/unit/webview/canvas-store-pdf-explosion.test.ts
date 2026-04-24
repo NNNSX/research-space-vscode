@@ -42,7 +42,7 @@ describe('canvas-store pdf explosion', () => {
     const functionNode: CanvasNode = {
       id: 'fn-explode-1',
       node_type: 'function',
-      title: '文件爆炸',
+      title: '文件转换',
       position: { x: 460, y: 160 },
       size: { width: 280, height: 220 },
       meta: {

@@ -5,7 +5,7 @@ const DOC_EXTENSIONS = new Set(['.doc', '.docx']);
 const PPT_EXTENSIONS = new Set(['.ppt', '.pptx']);
 const SHEET_EXTENSIONS = new Set(['.xls', '.xlt', '.xlsx', '.xlsm', '.xltx', '.xltm']);
 
-export const MINERU_SUPPORTED_FILE_HINT = 'PDF / DOCX / PPTX / XLS / XLSX / 图片';
+export const MINERU_SUPPORTED_FILE_HINT = 'PDF / Word / PPT / XLS / XLSX / 图片';
 
 export function getExplosionSourceTypeFromPath(filePath?: string): ExplosionSourceFileType | null {
   if (!filePath) {
@@ -39,5 +39,5 @@ export function isMinerUSupportedFilePath(filePath?: string): boolean {
 }
 
 export function requiresMinerUTokenForSourceType(sourceType: ExplosionSourceFileType | null | undefined): boolean {
-  return !!sourceType;
+  return !!sourceType && sourceType !== 'xlsx';
 }

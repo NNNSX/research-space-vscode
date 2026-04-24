@@ -5,7 +5,7 @@ import type { CanvasNode } from '../core/canvas-model';
 import { DEFAULT_SIZES } from '../core/canvas-model';
 import { getExplosionSourceTypeFromPath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
 import { toRelPath } from '../core/storage';
-import { getPdfPageCount } from '../core/content-extractor';
+import { extractSpreadsheetSheets, getPdfPageCount } from '../core/content-extractor';
 import { normalizeMinerUManifest } from './mineru-normalizer';
 import { getMinerUConfig, MinerUError, parseDocumentViaMinerU, readMinerUResultManifest } from './mineru-adapter';
 import type { ExplosionResult, ExplosionSourceFileType } from './explosion-types';
@@ -23,6 +23,10 @@ async function resolveExplosionResult(
   workspaceRoot: string,
   sourceType: ExplosionSourceFileType,
 ): Promise<ExplosionResult> {
+  if (sourceType === 'xlsx') {
+    return resolveSpreadsheetExplosionResult(filePath, workspaceRoot);
+  }
+
   const response = await parseDocumentViaMinerU(filePath, workspaceRoot);
 
   if (response.manifestPath) {
@@ -46,8 +50,38 @@ async function resolveExplosionResult(
   return normalizeMinerUManifest(response.raw, { sourceType });
 }
 
+function buildLocalSpreadsheetOutputDir(filePath: string, workspaceRoot: string): string {
+  const sourceBase = sanitizePathSegment(path.basename(filePath, path.extname(filePath)));
+  const session = `${new Date().toISOString().replace(/[:.]/g, '-')}-${uuid().slice(0, 8)}`;
+  return path.resolve(workspaceRoot, getMinerUConfig().outputDir, sourceBase, session);
+}
+
+async function resolveSpreadsheetExplosionResult(filePath: string, workspaceRoot: string): Promise<ExplosionResult> {
+  const sheets = await extractSpreadsheetSheets(filePath);
+  const units: ExplosionUnit[] = sheets.map((sheet, index) => ({
+    id: `sheet-${sheet.index}-text`,
+    kind: 'text',
+    order: index,
+    title: sheet.title,
+    page: sheet.index,
+    text: sheet.text,
+    sourceType: 'sheet_text',
+  }));
+  const nodeDrafts: ExplosionNodeDraft[] = units.map(toNodeDraft);
+  return {
+    provider: 'mineru',
+    sourceType: 'xlsx',
+    status: units.length > 0 ? 'success' : 'failed',
+    outputDir: buildLocalSpreadsheetOutputDir(filePath, workspaceRoot),
+    units,
+    nodeDrafts,
+    warnings: units.length === 0 ? ['表格文件没有解析出可用文本。'] : [],
+    raw: { sheets },
+  };
+}
+
 function buildExplosionNodeTitle(sourceNode: CanvasNode): string {
-  return `${sourceNode.title || 'PDF'} · 拆解组`;
+  return `${sourceNode.title || '文件'} · 拆解组`;
 }
 
 function toNodeDraft(unit: ExplosionUnit): ExplosionNodeDraft {
@@ -385,7 +419,7 @@ export async function explodeDocumentNodeViaMinerU(
   warnings: string[];
 }> {
   if (!sourceNode.file_path) {
-    throw new Error('当前文件节点缺少文件路径，无法爆炸。');
+    throw new Error('当前文件节点缺少文件路径，无法转换。');
   }
 
   const absPath = path.isAbsolute(sourceNode.file_path)
@@ -393,7 +427,7 @@ export async function explodeDocumentNodeViaMinerU(
     : path.resolve(path.dirname(canvasUri.fsPath), sourceNode.file_path);
   const sourceType = getExplosionSourceTypeFromPath(absPath);
   if (!sourceType) {
-    throw new Error(`当前文件格式暂不支持爆炸，仅支持 ${MINERU_SUPPORTED_FILE_HINT}。`);
+    throw new Error(`当前文件格式暂不支持转换，仅支持 ${MINERU_SUPPORTED_FILE_HINT}。`);
   }
 
   if (sourceType === 'pdf') {
@@ -406,10 +440,13 @@ export async function explodeDocumentNodeViaMinerU(
       onStage: message => opts?.onProgress?.(message),
     });
   }
-  opts?.onProgress?.('正在调用 MinerU 拆解文档…');
+  opts?.onProgress?.(sourceType === 'xlsx' ? '正在本地拆解表格…' : '正在调用 MinerU 拆解文档…');
   let result = await resolveExplosionResult(absPath, path.dirname(canvasUri.fsPath), sourceType);
   result = await applyPptxSlidePreviewFallback(result, renderedSlideImages);
   if (result.units.length === 0) {
+    if (sourceType === 'xlsx') {
+      throw new Error('表格文件没有解析出可用文本。');
+    }
     throw new Error('MinerU 未返回可用的文本或图片结果。');
   }
   opts?.onProgress?.('正在整理拆解结果…');

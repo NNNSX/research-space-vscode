@@ -1,20 +1,35 @@
 {
   "id": "explode-document",
-  "name": "文件爆炸",
-  "description": "拆解 PDF / DOCX / PPTX / XLS / XLSX / 图片，生成可供后续 AI 阅读的文本 + 图片节点组",
+  "name": "文件转换",
+  "description": "将 PDF / Word / PPT 转为 PNG 或拆解为文字 + 图片；将 XLS / XLSX 转为 Markdown 或 TeX",
   "icon": "layers",
   "supportsImages": false,
   "outputNodeType": "ai_output",
   "apiType": "explosion",
-  "params": [],
+  "params": [
+    {
+      "name": "document_conversion_mode",
+      "type": "select",
+      "label": "文档模式",
+      "options": ["text_images", "png"],
+      "default": "text_images"
+    },
+    {
+      "name": "spreadsheet_format",
+      "type": "select",
+      "label": "表格格式",
+      "options": ["md", "tex"],
+      "default": "md"
+    }
+  ],
   "paramMaps": {},
   "systemPromptTemplate": "",
   "postProcessType": null,
   "slots": [
     {
       "name": "primary",
-      "label": "文档文件",
-      "description": "需要拆解的文件节点。当前支持单个 PDF / DOCX / PPTX / XLS / XLSX / 图片输入。",
+      "label": "输入文件",
+      "description": "需要转换的文件节点。当前支持单个 PDF / Word / PPT / XLS / XLSX / 图片输入。",
       "required": true,
       "multiple": false
     }

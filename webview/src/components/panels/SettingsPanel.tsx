@@ -1088,9 +1088,9 @@ export function SettingsPanel() {
   );
 
   const renderExplosionDetails = () => (
-    <Section title="MinerU 文档拆解">
+    <Section title="MinerU 文档转换">
       <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
-        文件爆炸默认优先走 MinerU 官方在线精准解析；当前主线已接通 PDF / DOCX / PPTX / XLS / XLSX / 图片输入，其中表格文件优先走本地结构化拆解；Token 仅保存到你本机的 VS Code 设置，不进入源码或发布物。
+        文件转换支持 PDF / Word / PPT / XLS / XLSX / 图片输入：表格文件可在本地转 Markdown / TeX；PDF / Word / PPT 可转 PNG 或继续走 MinerU 拆解为文字 + 图片。Token 仅保存到你本机的 VS Code 设置，不进入源码或发布物。
       </div>
       <Field label="API 模式">
         <SearchableSelect
@@ -1214,8 +1214,8 @@ export function SettingsPanel() {
           onOpen={() => setDetailView('multimodal')}
         />
         <SettingsEntryCard
-          title="文档拆解（MinerU）"
-          description="文件爆炸所需的 MinerU 在线 / 本地 fallback 配置与 Token。"
+          title="文档转换（MinerU）"
+          description="文件转换中“文字 + 图片拆解”所需的 MinerU 在线 / 本地 fallback 配置与 Token。"
           summary={settings.mineruApiToken ? `模式：${settings.mineruApiMode} · 已配置 Token` : `模式：${settings.mineruApiMode} · 尚未配置 Token`}
           accent="var(--vscode-terminal-ansiYellow)"
           onOpen={() => setDetailView('explosion')}
@@ -1258,7 +1258,7 @@ export function SettingsPanel() {
         </SettingsSubModal>
       )}
       {detailView === 'explosion' && (
-        <SettingsSubModal title="文档拆解设置" onClose={() => setDetailView(null)}>
+        <SettingsSubModal title="文档转换设置" onClose={() => setDetailView(null)}>
           {renderExplosionDetails()}
         </SettingsSubModal>
       )}

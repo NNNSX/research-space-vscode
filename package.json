@@ -257,7 +257,7 @@
             "local"
           ],
           "default": "precise",
-          "description": "MinerU API mode for file explosion"
+          "description": "MinerU API mode for file conversion text+image extraction"
         },
         "researchSpace.explosion.mineru.apiBaseUrl": {
           "type": "string",
@@ -297,7 +297,7 @@
             "path"
           ],
           "default": "auto",
-          "description": "Local MinerU fallback request mode for PDF explosion"
+          "description": "Local MinerU fallback request mode for file conversion text+image extraction"
         },
         "researchSpace.explosion.mineru.apiUrl": {
           "type": "string",

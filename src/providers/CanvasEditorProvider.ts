@@ -870,7 +870,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         if (!nodeId) { break; }
         const sourceNode = document.data.nodes.find(node => node.id === nodeId);
         if (!sourceNode) {
-          webview.postMessage({ type: 'toastError', message: '找不到要爆炸的 PDF 节点。' });
+          webview.postMessage({ type: 'toastError', message: '找不到要转换的文件节点。' });
           break;
         }
         if (!isMinerUSupportedFilePath(sourceNode.file_path)) {
@@ -895,11 +895,11 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
             warnings: result.warnings,
           });
           if (result.warnings.length > 0) {
-            vscode.window.showWarningMessage(`MinerU 爆炸已完成，但有 ${result.warnings.length} 条提示：${result.warnings[0]}`);
+            vscode.window.showWarningMessage(`文件转换已完成，但有 ${result.warnings.length} 条提示：${result.warnings[0]}`);
           }
         } catch (e) {
           const message = formatMinerUErrorForDisplay(e);
-          webview.postMessage({ type: 'toastError', message: `文件爆炸失败: ${message}` });
+          webview.postMessage({ type: 'toastError', message: `文件转换失败: ${message}` });
           if (e instanceof MinerUError && (e.code === 'config_missing_token' || e.code === 'api_auth_failed')) {
             const action = await vscode.window.showErrorMessage(
               message,

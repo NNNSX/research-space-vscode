@@ -23,6 +23,11 @@ node_modules/@napi-rs/*
 !node_modules/@napi-rs/canvas-win32-arm64-msvc/**
 !node_modules/@napi-rs/canvas-win32-x64-msvc/
 !node_modules/@napi-rs/canvas-win32-x64-msvc/**
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/__tests__/**
+node_modules/**/*.test.*
+node_modules/**/*.spec.*
 webview/node_modules/
 test/
 coverage/

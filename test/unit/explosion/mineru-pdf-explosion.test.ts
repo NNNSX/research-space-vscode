@@ -9,6 +9,7 @@ vi.mock('vscode', () => ({
   },
 }));
 vi.mock('../../../src/core/content-extractor', () => ({
+  extractSpreadsheetSheets: vi.fn(),
   getPdfPageCount: vi.fn(),
 }));
 vi.mock('../../../src/explosion/pptx-slide-renderer', () => ({
@@ -29,7 +30,7 @@ vi.mock('../../../src/explosion/mineru-adapter', () => ({
   readMinerUResultManifest: vi.fn(),
 }));
 
-import { getPdfPageCount } from '../../../src/core/content-extractor';
+import { extractSpreadsheetSheets, getPdfPageCount } from '../../../src/core/content-extractor';
 import { renderPptxSlidesToImages } from '../../../src/explosion/pptx-slide-renderer';
 import { MinerUError, parseDocumentViaMinerU, readMinerUResultManifest } from '../../../src/explosion/mineru-adapter';
 import { explodeDocumentNodeViaMinerU, explodePdfNodeViaMinerU } from '../../../src/explosion/mineru-pdf-explosion';
@@ -66,6 +67,7 @@ describe('explodePdfNodeViaMinerU', () => {
     });
     await fs.mkdir(path.join(outputDir, 'images'), { recursive: true });
     await fs.writeFile(path.join(outputDir, 'images', 'figure-1.png'), 'fake-image');
+    vi.mocked(extractSpreadsheetSheets).mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -306,8 +308,13 @@ describe('explodePdfNodeViaMinerU', () => {
     expect(result.nodes.find(node => node.title === '第 2 张幻灯片图片 1')?.file_path).toBe('../mineru-job/rs-slide-previews/sample-2.png');
   });
 
-  it('supports xlsx nodes through MinerU and writes sheet-style metadata', async () => {
+  it('supports xlsx nodes through local spreadsheet extraction and writes sheet-style metadata', async () => {
     await fs.writeFile(path.join(paperDir, 'sample.xlsx'), 'fake-xlsx');
+    vi.mocked(extractSpreadsheetSheets).mockResolvedValueOnce([{
+      index: 1,
+      title: '第 1 个工作表文本',
+      text: '姓名\t分数\n张三\t95',
+    }]);
 
     const sourceNode: CanvasNode = {
       id: 'xlsx-1',
@@ -325,7 +332,6 @@ describe('explodePdfNodeViaMinerU', () => {
     expect(result.nodes.map(node => node.title)).toEqual([
       '文档关系索引',
       '第 1 个工作表文本',
-      '第 1 个工作表图片 1',
     ]);
     expect(noteNode?.meta).toMatchObject({
       explode_source_type: 'xlsx',
@@ -333,6 +339,8 @@ describe('explodePdfNodeViaMinerU', () => {
       explode_kind: 'text',
     });
     expect(relationNode?.meta?.content_preview).toContain('第 1 个工作表');
-    expect(parseDocumentViaMinerU).toHaveBeenCalledWith(expect.stringContaining('sample.xlsx'), canvasDir);
+    expect(noteNode?.meta?.content_preview).toContain('张三\t95');
+    expect(parseDocumentViaMinerU).not.toHaveBeenCalled();
+    expect(extractSpreadsheetSheets).toHaveBeenCalledWith(expect.stringContaining('sample.xlsx'));
   });
 });

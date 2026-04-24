@@ -4,8 +4,11 @@ All notable changes to **Research Space** are documented here.
 
 ## [2.2.1-alpha.2] — 2026-04-24
 
-- **表格文件爆炸改走 MinerU 主链** — XLS / XLSX 等表格输入不再走本地工作表拆解分支，而是进入 MinerU 解析链路，和 PDF、DOCX、PPT/PPTX 保持统一的关系索引、文本节点、图片节点与节点组输出语义。
-- **新增 PDF 转 PNG 通用 AI 工具** — 在 AI Tools → 通用中新增“PDF 转 PNG”，连接 1 个 PDF 后可按页生成 PNG 图片节点组，并自动写出页面图片关系索引，方便直接把 PDF 页面视觉结果交给后续 AI 工具使用。
+- **“文件爆炸”改为“文件转换”** — UI 文案统一改为文件转换，内部继续兼容旧 `explode-document` 工具 ID；旧画布和旧蓝图不需要迁移。
+- **移除单独的 PDF 转 PNG 工具入口** — PDF 转 PNG 已并入“文件转换”的转换模式，AI Tools 不再保留重复的独立工具。
+- **表格文件改为本地格式转换** — XLS / XLSX 不再进入 MinerU，可在功能节点上选择转换为 Markdown 表格或 TeX `tabular` 片段，并生成单个结果文件节点。
+- **文档转换模式可选** — PDF / Word / PPT 可选择“仅转 PNG”或“拆解为文字 + 图片”；其中 PDF 直接逐页转 PNG，PPT 走 PPT → PDF → PNG，Word 走 Word → PDF → PNG。Word 转 PDF 现在优先使用本机 Microsoft Word，失败或缺失时回退 LibreOffice / soffice。
+- **转换结果继续保留旧版本** — 同一文件重复转换时不覆盖旧结果，会新增一组转换结果，避免用户产出被自动替换。
 
 ## [2.2.1-alpha.1] — 2026-04-24
 

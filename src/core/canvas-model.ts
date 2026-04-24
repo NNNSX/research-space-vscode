@@ -266,8 +266,8 @@ export interface JsonToolDef {
   postProcessType: string | null;
   /** UI rendering mode. 'chat' enables the rich prompt editor with file @references. */
   uiMode?: 'default' | 'chat';
-  /** API type for multimodal / system tools. 'chat' (default) uses the LLM streaming path. */
-  apiType?: 'chat' | 'image_generation' | 'image_edit' | 'tts' | 'stt' | 'video_generation' | 'explosion' | 'pdf-to-png';
+  /** API type for multimodal / system tools. 'chat' (default) uses the LLM streaming path. 'explosion' is the legacy id for the built-in file conversion path. */
+  apiType?: 'chat' | 'image_generation' | 'image_edit' | 'tts' | 'stt' | 'video_generation' | 'explosion';
   /** Named input slots. When defined, connecting a data node triggers a role picker dialog. */
   slots?: SlotDef[];
   /** Tool category for panel grouping. */

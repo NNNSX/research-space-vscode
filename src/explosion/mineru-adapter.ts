@@ -838,7 +838,7 @@ export async function parseDocumentViaMinerU(filePath: string, workspaceRoot: st
   ensureSupportedSource(filePath);
   const config = getMinerUConfig();
   if (config.apiMode === 'agent') {
-    throw createMinerUError('mode_unsupported', 'MinerU Agent 轻量 API 暂未接入 Research Space 的多模态爆炸主链，请先将 apiMode 设为 precise。');
+    throw createMinerUError('mode_unsupported', 'MinerU Agent 轻量 API 暂未接入 Research Space 的多模态转换主链，请先将 apiMode 设为 precise。');
   }
   if (config.apiMode === 'local') {
     if (isHttpUrl(filePath)) {

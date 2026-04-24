@@ -118,13 +118,13 @@
 | **🧪 实验** | 新建实验记录草稿到**暂存架** |
 | **✅ 任务** | 新建任务清单草稿到**暂存架** |
 | **⚡ AI Tools** | 展开 / 收起左侧 AI 工具箱；工具可拖拽到画布，也可通过「+ 新建节点」创建 |
-| **⚙ Settings** | 打开设置面板，配置 AI Provider、模型和文档拆解参数 |
+| **⚙ Settings** | 打开设置面板，配置 AI Provider、模型和文档转换参数 |
 
 **暂存架**：新增节点会先进入右下角暂存架，再由用户拖到画布。移除外部文件节点不会删除源文件；笔记、实验、任务草稿只有放到画布后才会落盘。
 
 **MiniMap**：右下角小地图支持拖动和缩放，用于快速定位画布区域。
 
-**设置面板**：按 Provider 分组配置 API Key、Base URL、默认模型、常用模型和文档拆解参数，配置会保存到本机 VS Code 设置。
+**设置面板**：按 Provider 分组配置 API Key、Base URL、默认模型、常用模型和文档转换参数，配置会保存到本机 VS Code 设置。
 
 **宠物空间小游戏**：宠物窗口右上角 `🎮` 可进入小游戏面板，支持贪吃蛇、2048、数独和像素鸟。游戏支持键盘操作、难度选择、分数记录，并会给宠物增加少量经验。
 
@@ -151,15 +151,14 @@
 
 **节点组（Node Group）**：选中 2 个及以上数据节点后，可在浮动工具栏创建节点组。节点组用于把一批节点作为整体输入 / 输出，支持折叠、展开、重命名和整组拖拽。删除节点组时可选择“仅删除组”或“删除组及内容”。
 
-**文件爆炸（MinerU）**：在 **AI Tools → 通用 → 文件爆炸** 中添加工具节点，连接 1 个受支持文件后运行。当前支持 PDF、DOCX、PPT/PPTX、XLS/XLSX 和图片；文档与表格会走 MinerU 解析。结果会生成文本节点、图片节点和文档关系索引，并作为节点组输出给后续 AI 工具使用。
-
-**PDF 转 PNG**：在 **AI Tools → 通用 → PDF 转 PNG** 中连接 1 个 PDF 后运行，会按页生成 PNG 图片节点组，并附带页面图片关系索引。
+**文件转换**：在 **AI Tools → 通用 → 文件转换** 中添加工具节点，连接 1 个受支持文件后运行。XLS/XLSX 表格可选择转为 Markdown 表格或 TeX `tabular` 片段；PDF、Word、PPT 可选择仅转 PNG，或拆解为文字 + 图片节点组。拆解模式使用 MinerU，表格转换和 PNG 转换不调用 MinerU。
 
 使用限制：
-- MinerU 在线解析需要在设置面板中配置 Token
+- “文字 + 图片拆解”需要在设置面板中配置 MinerU Token
 - PDF 会在本地先检查 200MB / 200 页限制
-- PPT/PPTX 整页预览依赖本机 PowerPoint、LibreOffice 或系统预览能力；缺失时会提示或回退到可用结果
-- 同一文件重复拆解时会保留旧结果，并新增一组新的拆解节点
+- PDF 转 PNG 直接逐页转换；PPT 转 PNG 走 PPT → PDF → PNG；Word 转 PNG 走 Word → PDF → PNG
+- PPT 转 PDF 优先使用本机 PowerPoint，回退 LibreOffice / soffice；Word 转 PDF 优先使用本机 Microsoft Word，回退 LibreOffice / soffice；缺失时会给出明确提示
+- 同一文件重复转换时会保留旧结果，并新增一组新的转换结果
 
 **蓝图创建**：选中一段包含功能节点的工作流后，可在多选工具栏点击「🔧 创建蓝图」。创建对话框支持设置名称、颜色、描述和槽位属性，并会展示输入 / 输出占位与内部保留节点。若选区依赖未选中的上游节点，或直接包含 `group_hub`，系统会提示并阻止创建。
 
@@ -213,7 +212,7 @@
 | `researchSpace.ai.omlxBaseUrl` | `http://localhost:11433/v1` | oMLX 服务地址 |
 | `researchSpace.ai.omlxApiKey` | — | oMLX API Key（可选） |
 | `researchSpace.ai.omlxModel` | — | oMLX 全局模型 |
-| `researchSpace.explosion.provider` | `mineru` | 文件爆炸 Provider |
+| `researchSpace.explosion.provider` | `mineru` | 文件转换拆解 Provider |
 | `researchSpace.explosion.mineru.apiMode` | `precise` | MinerU API 模式（precise / agent / local） |
 | `researchSpace.explosion.mineru.apiBaseUrl` | `https://mineru.net` | MinerU 在线 API 地址 |
 | `researchSpace.explosion.mineru.apiToken` | — | MinerU 在线 API Token |
@@ -222,10 +221,10 @@
 | `researchSpace.explosion.mineru.pollTimeoutMs` | `300000` | MinerU 在线任务轮询超时（毫秒） |
 | `researchSpace.explosion.mineru.mode` | `auto` | 本地 MinerU fallback 请求方式（auto / upload / path） |
 | `researchSpace.explosion.mineru.apiUrl` | `http://localhost:8000` | 本地 MinerU fallback 服务地址 |
-| `researchSpace.explosion.maxUnits` | `200` | 单次爆炸最多保留的文本/图片单元数（0 = 不限制） |
-| `researchSpace.explosion.attachOriginalFileNode` | `true` | 爆炸后是否保留原始文件节点 |
-| `researchSpace.explosion.consumeAsGroup` | `true` | 后续是否优先按语义节点组消费爆炸结果 |
-| `researchSpace.explosion.outputDir` | `.research-space/explosions` | 爆炸结果与 manifest 的工作区相对输出目录 |
+| `researchSpace.explosion.maxUnits` | `200` | 单次拆解最多保留的文本/图片单元数（0 = 不限制） |
+| `researchSpace.explosion.attachOriginalFileNode` | `true` | 转换后是否保留原始文件节点 |
+| `researchSpace.explosion.consumeAsGroup` | `true` | 后续是否优先按语义节点组消费转换结果 |
+| `researchSpace.explosion.outputDir` | `.research-space/explosions` | 转换结果与 manifest 的工作区相对输出目录 |
 | `researchSpace.ai.maxOutputTokens` | `0` | 聊天类功能节点的最大输出 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.maxContextTokens` | `0` | 聊天类功能节点的最大上下文 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.favoriteModels` | `{}` | 每个 provider 的常用模型列表；功能节点模型下拉优先只显示这里勾选的模型 |
