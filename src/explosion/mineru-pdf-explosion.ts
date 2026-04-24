@@ -5,7 +5,7 @@ import type { CanvasNode } from '../core/canvas-model';
 import { DEFAULT_SIZES } from '../core/canvas-model';
 import { getExplosionSourceTypeFromPath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
 import { toRelPath } from '../core/storage';
-import { extractSpreadsheetSheets, getPdfPageCount } from '../core/content-extractor';
+import { getPdfPageCount } from '../core/content-extractor';
 import { normalizeMinerUManifest } from './mineru-normalizer';
 import { getMinerUConfig, MinerUError, parseDocumentViaMinerU, readMinerUResultManifest } from './mineru-adapter';
 import type { ExplosionResult, ExplosionSourceFileType } from './explosion-types';
@@ -23,28 +23,6 @@ async function resolveExplosionResult(
   workspaceRoot: string,
   sourceType: ExplosionSourceFileType,
 ): Promise<ExplosionResult> {
-  if (sourceType === 'xlsx') {
-    const sheets = await extractSpreadsheetSheets(filePath);
-    const units: ExplosionUnit[] = sheets.map((sheet, index) => ({
-      id: `sheet-${sheet.index}`,
-      kind: 'text',
-      order: index,
-      title: sheet.title,
-      page: sheet.index,
-      text: sheet.text,
-      sourceType: 'sheet_text',
-    }));
-    return {
-      provider: 'mineru',
-      sourceType,
-      status: units.length > 0 ? 'success' : 'failed',
-      outputDir: path.resolve(workspaceRoot, getMinerUConfig().outputDir),
-      units,
-      nodeDrafts: units.map(toNodeDraft),
-      warnings: units.length > 0 ? [] : ['Spreadsheet explosion produced no usable sheet text units.'],
-    };
-  }
-
   const response = await parseDocumentViaMinerU(filePath, workspaceRoot);
 
   if (response.manifestPath) {

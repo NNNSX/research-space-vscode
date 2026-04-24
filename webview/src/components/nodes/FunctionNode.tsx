@@ -57,6 +57,7 @@ const TOOL_ICONS: Record<string, string> = {
   rag:             '🔎',
   chat:            '💬',
   'explode-document': '🧨',
+  'pdf-to-png': '🖼️',
   // 多模态工具
   'image-gen':     '🖼',
   'image-edit':    '✏️',
@@ -80,6 +81,7 @@ const TOOL_DEFAULT_PROMPTS: Record<string, string> = {
   'outline-gen':      '你是一位学术写作教练。请基于所提供的笔记和草稿，生成指定层级的论文大纲。每个章节标题应具体明确，并附一句话描述。',
   'action-items':     '你是一位会议行动项提取专家。请从所提供的会议记录中提取所有行动项，标注负责人、具体内容、截止日期和优先级。',
   'explode-document': '这是一个系统级文件拆解工具，不走文本生成模型。连接一个受支持的文件后，运行时会直接调用 MinerU，把文档拆成文本与图片节点组。',
+  'pdf-to-png': '这是一个系统级 PDF 转图片工具，不走文本生成模型。连接一个 PDF 文件后，会把每页转换为 PNG 图片节点组，并生成关系索引。',
 };
 
 // Provider label map (no 'auto' — nodes always have an explicit provider)
@@ -310,6 +312,22 @@ function buildToolWarnings(args: {
     const source = upstreamNodes[0];
     if (!isMinerUSupportedFilePath(source.file_path)) {
       warnings.push(`📄 当前爆炸工具仅支持 ${MINERU_SUPPORTED_FILE_HINT} 文件节点`);
+    }
+    return warnings;
+  }
+
+  if (toolId === 'pdf-to-png') {
+    if (upstreamNodes.length === 0) {
+      warnings.push('📄 需连接 1 个 PDF 文件节点');
+      return warnings;
+    }
+    if (upstreamNodes.length > 1) {
+      warnings.push('📄 PDF 转 PNG 一次只支持 1 个 PDF 文件');
+      return warnings;
+    }
+    const source = upstreamNodes[0];
+    if (!source.file_path || !source.file_path.toLowerCase().endsWith('.pdf')) {
+      warnings.push('📄 PDF 转 PNG 只支持 PDF 文件节点');
     }
     return warnings;
   }

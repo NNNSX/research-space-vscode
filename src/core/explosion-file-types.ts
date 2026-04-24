@@ -39,5 +39,5 @@ export function isMinerUSupportedFilePath(filePath?: string): boolean {
 }
 
 export function requiresMinerUTokenForSourceType(sourceType: ExplosionSourceFileType | null | undefined): boolean {
-  return !!sourceType && sourceType !== 'xlsx';
+  return !!sourceType;
 }

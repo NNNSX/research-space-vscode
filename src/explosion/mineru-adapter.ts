@@ -253,7 +253,7 @@ function getSourceDisplayName(source: string): string {
 function ensureSupportedSource(source: string): void {
   const displayName = getSourceDisplayName(source);
   if (!getExplosionSourceTypeFromPath(displayName)) {
-    throw createMinerUError('unsupported_file', `MinerU 当前仅支持 PDF / DOCX / PPTX / 图片文件: ${source}`);
+    throw createMinerUError('unsupported_file', `MinerU 当前仅支持 PDF / DOCX / PPTX / XLS / XLSX / 图片文件: ${source}`);
   }
 }
 
@@ -344,25 +344,25 @@ async function buildUploadBody(filePath: string): Promise<FormData> {
   const buffer = await fs.readFile(filePath);
   const form = new FormData();
   const ext = path.extname(filePath).toLowerCase();
-  const mimeType = ext === '.pdf'
-    ? 'application/pdf'
-    : ext === '.doc'
-      ? 'application/msword'
-      : ext === '.docx'
-        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        : ext === '.ppt'
-          ? 'application/vnd.ms-powerpoint'
-          : ext === '.pptx'
-            ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-            : ext === '.png'
-              ? 'image/png'
-              : ext === '.jpg' || ext === '.jpeg'
-                ? 'image/jpeg'
-                : ext === '.webp'
-                  ? 'image/webp'
-                  : ext === '.bmp'
-                    ? 'image/bmp'
-                    : 'application/octet-stream';
+  const mimeByExt: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlt': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xltx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    '.xltm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+  };
+  const mimeType = mimeByExt[ext] ?? 'application/octet-stream';
   form.append('file', new Blob([buffer], { type: mimeType }), path.basename(filePath));
   return form;
 }

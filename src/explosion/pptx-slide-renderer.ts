@@ -453,7 +453,15 @@ function resolvePdfWorkerSrc(): string {
   }
 }
 
-async function rasterizePdfToImages(pdfPath: string, outputDir: string, onStage?: RenderStageReporter): Promise<string[]> {
+export async function renderPdfPagesToPngImages(
+  pdfPath: string,
+  outputDir: string,
+  opts?: {
+    onStage?: RenderStageReporter;
+    filenamePrefix?: string;
+    scale?: number;
+  },
+): Promise<string[]> {
   const canvasModule = loadNodeCanvasModule();
   ensurePdfRuntimeGlobals(canvasModule);
   const ownerDocument = createPdfOwnerDocument(canvasModule);
@@ -476,10 +484,13 @@ async function rasterizePdfToImages(pdfPath: string, outputDir: string, onStage?
     FilterFactory: PdfFilterFactory,
   }).promise;
   const images: string[] = [];
-  onStage?.(`正在逐页生成 PNG… 共 ${document.numPages} 页`);
+  opts?.onStage?.(`正在逐页生成 PNG… 共 ${document.numPages} 页`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const filenamePrefix = opts?.filenamePrefix ?? 'slide';
+  const scale = opts?.scale ?? 3;
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 3 });
+    const viewport = page.getViewport({ scale });
     const canvas = canvasModule.createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
     const canvasContext = canvas.getContext('2d');
     await page.render({
@@ -488,7 +499,7 @@ async function rasterizePdfToImages(pdfPath: string, outputDir: string, onStage?
       viewport,
     } as any).promise;
     const imageBuffer = canvas.toBuffer('image/png');
-    const imagePath = path.join(outputDir, `slide-${pageNumber}.png`);
+    const imagePath = path.join(outputDir, `${filenamePrefix}-${pageNumber}.png`);
     await fs.writeFile(imagePath, imageBuffer);
     images.push(imagePath);
   }
@@ -605,7 +616,7 @@ export async function renderPptxSlidesToImages(
           ? await exportPdfWithPowerPointWindows(candidate.binaryPath, pptPath, outputDir)
           : await exportPdfWithSoffice(candidate.binaryPath, pptPath, outputDir);
 
-      const images = await rasterizePdfToImages(pdfPath, outputDir, opts?.onStage);
+      const images = await renderPdfPagesToPngImages(pdfPath, outputDir, { onStage: opts?.onStage, filenamePrefix: 'slide' });
       if (expectedSlideCount && images.length > 0 && images.length < expectedSlideCount) {
         incompleteErrors.push(buildIncompleteRenderError(candidate.backend.id, images.length, expectedSlideCount));
         continue;

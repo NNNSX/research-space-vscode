@@ -31,6 +31,7 @@ function iconDisplay(codicon: string): string {
     graph:                '📊',
     search:               '🔎',
     image:                '🖼',
+    'file-media':         '🖼',
     mic:                  '🎵',
     unmute:               '🔊',
     'play-circle':        '🎬',

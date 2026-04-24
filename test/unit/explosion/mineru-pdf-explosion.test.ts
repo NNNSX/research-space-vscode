@@ -10,10 +10,10 @@ vi.mock('vscode', () => ({
 }));
 vi.mock('../../../src/core/content-extractor', () => ({
   getPdfPageCount: vi.fn(),
-  extractSpreadsheetSheets: vi.fn(),
 }));
 vi.mock('../../../src/explosion/pptx-slide-renderer', () => ({
   renderPptxSlidesToImages: vi.fn(),
+  renderPdfPagesToPngImages: vi.fn(),
 }));
 vi.mock('../../../src/explosion/mineru-adapter', () => ({
   MinerUError: class MinerUError extends Error {
@@ -29,7 +29,7 @@ vi.mock('../../../src/explosion/mineru-adapter', () => ({
   readMinerUResultManifest: vi.fn(),
 }));
 
-import { extractSpreadsheetSheets, getPdfPageCount } from '../../../src/core/content-extractor';
+import { getPdfPageCount } from '../../../src/core/content-extractor';
 import { renderPptxSlidesToImages } from '../../../src/explosion/pptx-slide-renderer';
 import { MinerUError, parseDocumentViaMinerU, readMinerUResultManifest } from '../../../src/explosion/mineru-adapter';
 import { explodeDocumentNodeViaMinerU, explodePdfNodeViaMinerU } from '../../../src/explosion/mineru-pdf-explosion';
@@ -47,7 +47,6 @@ describe('explodePdfNodeViaMinerU', () => {
     await fs.mkdir(paperDir, { recursive: true });
     await fs.writeFile(path.join(paperDir, 'sample.pdf'), '%PDF-1.4\n');
     vi.mocked(getPdfPageCount).mockResolvedValue(12);
-    vi.mocked(extractSpreadsheetSheets).mockResolvedValue([]);
     vi.mocked(parseDocumentViaMinerU).mockResolvedValue({
       requestMode: 'precise-batch-upload',
       endpoint: 'https://mineru.net/api/v4/file-urls/batch',
@@ -307,15 +306,8 @@ describe('explodePdfNodeViaMinerU', () => {
     expect(result.nodes.find(node => node.title === '第 2 张幻灯片图片 1')?.file_path).toBe('../mineru-job/rs-slide-previews/sample-2.png');
   });
 
-  it('supports xlsx nodes via the local spreadsheet explosion path and writes sheet-style metadata', async () => {
+  it('supports xlsx nodes through MinerU and writes sheet-style metadata', async () => {
     await fs.writeFile(path.join(paperDir, 'sample.xlsx'), 'fake-xlsx');
-    vi.mocked(extractSpreadsheetSheets).mockResolvedValueOnce([
-      {
-        index: 1,
-        title: '第 1 个工作表文本',
-        text: 'A\tB\n1\t2',
-      },
-    ]);
 
     const sourceNode: CanvasNode = {
       id: 'xlsx-1',
@@ -330,14 +322,17 @@ describe('explodePdfNodeViaMinerU', () => {
     const relationNode = result.nodes.find(node => node.title === '文档关系索引');
     const noteNode = result.nodes.find(node => node.node_type === 'note' && node.title !== '文档关系索引');
 
-    expect(result.nodes.map(node => node.title)).toEqual(['文档关系索引', '第 1 个工作表文本']);
+    expect(result.nodes.map(node => node.title)).toEqual([
+      '文档关系索引',
+      '第 1 个工作表文本',
+      '第 1 个工作表图片 1',
+    ]);
     expect(noteNode?.meta).toMatchObject({
       explode_source_type: 'xlsx',
       explode_unit_type: 'sheet',
       explode_kind: 'text',
     });
     expect(relationNode?.meta?.content_preview).toContain('第 1 个工作表');
-    expect(extractSpreadsheetSheets).toHaveBeenCalledWith(expect.stringContaining('sample.xlsx'));
-    expect(parseDocumentViaMinerU).not.toHaveBeenCalledWith(expect.stringContaining('sample.xlsx'), expect.anything());
+    expect(parseDocumentViaMinerU).toHaveBeenCalledWith(expect.stringContaining('sample.xlsx'), canvasDir);
   });
 });
