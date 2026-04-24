@@ -46,6 +46,7 @@ tsconfig.json
 !resources/
 dist/**/*.map
 .gitignore
+CODEX.md
 GITHUB_RELEASE_NOTE.md
 eslint.config.cjs
 webview/package.json
