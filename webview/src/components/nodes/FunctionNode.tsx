@@ -370,6 +370,8 @@ function FullFunctionNode({
   const settings = useCanvasStore(s => s.settings);
   const toolDefs = useCanvasStore(s => s.toolDefs);
   const canvasFile = useCanvasStore(s => s.canvasFile);
+  const canvasDetailLevel = useCanvasStore(s => s.canvasDetailLevel);
+  const shouldRenderFunctionDetails = canvasDetailLevel === 'full';
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
@@ -439,7 +441,7 @@ function FullFunctionNode({
     : '';
 
   // Upstream nodes (ordered)
-  const upstreamNodes = getUpstreamNodes(data.id);
+  const upstreamNodes = canvasDetailLevel === 'minimal' ? [] : getUpstreamNodes(data.id);
   const supportedExplosionInputs = upstreamNodes.filter(node => isMinerUSupportedFilePath(node.file_path));
   const supportedExplosionInputCount = supportedExplosionInputs.length;
   const hasSingleSupportedExplosionInput = upstreamNodes.length === 1 && supportedExplosionInputCount === 1;
@@ -788,6 +790,10 @@ function FullFunctionNode({
   }, [data.size?.height]);
 
   const scheduleNodeHeightSync = useCallback(() => {
+    if (!shouldRenderFunctionDetails) {
+      updateNodeInternals(id);
+      return;
+    }
     const el = contentRef.current;
     if (!el) { return; }
     if (heightSyncOuterRafRef.current !== null) {
@@ -829,7 +835,7 @@ function FullFunctionNode({
       }
       });
     });
-  }, [data.size?.height, data.size?.width, id, updateNodeInternals, updateNodeSize]);
+  }, [data.size?.height, data.size?.width, id, shouldRenderFunctionDetails, updateNodeInternals, updateNodeSize]);
 
   useEffect(() => {
     updateNodeInternals(id);
@@ -952,8 +958,24 @@ function FullFunctionNode({
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: NODE_HEADER_ICON_SIZE + 1, lineHeight: 1 }}>{icon}</span>
-        <span style={{ ...NODE_HEADER_TITLE_STYLE, flex: 1 }}>
+        <span style={{
+          fontSize: shouldRenderFunctionDetails
+            ? NODE_HEADER_ICON_SIZE + 1
+            : canvasDetailLevel === 'minimal' ? 40 : 26,
+          lineHeight: 1,
+        }}>{icon}</span>
+        <span style={{
+          ...NODE_HEADER_TITLE_STYLE,
+          fontSize: shouldRenderFunctionDetails
+            ? NODE_HEADER_TITLE_STYLE.fontSize
+            : canvasDetailLevel === 'minimal' ? 42 : 26,
+          lineHeight: shouldRenderFunctionDetails ? NODE_HEADER_TITLE_STYLE.lineHeight : 1.12,
+          flex: 1,
+          whiteSpace: shouldRenderFunctionDetails ? NODE_HEADER_TITLE_STYLE.whiteSpace : 'normal',
+          display: shouldRenderFunctionDetails ? undefined : '-webkit-box',
+          WebkitLineClamp: canvasDetailLevel === 'minimal' ? 2 : 1,
+          WebkitBoxOrient: shouldRenderFunctionDetails ? undefined : 'vertical',
+        }}>
           {data.title || '功能节点'}
         </span>
         <StatusBadge color={badgeConfig.color} label={badgeConfig.label} />
@@ -1009,6 +1031,23 @@ function FullFunctionNode({
         </div>
       )}
 
+      {!shouldRenderFunctionDetails && (
+        <CompactFunctionPreview
+          accentColor={effectiveStatusColor}
+          toolName={toolDef?.name ?? tool}
+          toolId={tool}
+          statusLabel={badgeConfig.label}
+          inputSummary={canvasDetailLevel === 'minimal'
+            ? '输入详情已折叠'
+            : upstreamNodes.length > 0
+              ? `${upstreamNodes.length} 个输入`
+              : '未连接输入'}
+          level={canvasDetailLevel}
+        />
+      )}
+
+      {shouldRenderFunctionDetails && (
+      <>
       {/* Divider */}
       <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
 
@@ -1517,6 +1556,8 @@ function FullFunctionNode({
           </>
         )}
       </div>
+      </>
+      )}
       </div>
       </div>
 
@@ -1662,6 +1703,98 @@ function StatusBadge({ color, label }: { color: string; label: string }) {
     }}>
       {label}
     </span>
+  );
+}
+
+function CompactFunctionPreview({
+  accentColor,
+  toolName,
+  toolId,
+  statusLabel,
+  inputSummary,
+  level,
+}: {
+  accentColor: string;
+  toolName: string;
+  toolId: string;
+  statusLabel: string;
+  inputSummary: string;
+  level: 'compact' | 'minimal' | 'full';
+}) {
+  const typography = level === 'minimal'
+    ? {
+        gap: 7,
+        toolSize: 20,
+        metaSize: 16,
+        summarySize: 20,
+        barHeight: 8,
+      }
+    : {
+        gap: 8,
+        toolSize: 16,
+        metaSize: 13,
+        summarySize: 16,
+        barHeight: 7,
+      };
+  const viewLabel = level === 'minimal' ? '地图视图' : '阅读视图';
+  const bar = (width: string, opacity: number) => (
+    <div
+      style={{
+        height: typography.barHeight,
+        width,
+        borderRadius: 999,
+        background: withAlpha(accentColor, opacity, 'var(--vscode-panel-border)'),
+      }}
+    />
+  );
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: typography.gap,
+      minHeight: 0,
+      overflow: 'hidden',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <span style={{
+          fontSize: typography.toolSize,
+          fontWeight: 700,
+          color: accentColor,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {toolName}
+        </span>
+        <span style={{
+          fontSize: typography.metaSize,
+          color: 'var(--vscode-descriptionForeground)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}>
+          {statusLabel} · {inputSummary}
+        </span>
+      </div>
+      <div style={{
+        fontSize: typography.summarySize,
+        lineHeight: level === 'minimal' ? 1.2 : 1.35,
+        fontWeight: level === 'minimal' ? 650 : 500,
+        color: 'var(--vscode-descriptionForeground)',
+        overflow: 'hidden',
+        display: '-webkit-box',
+        WebkitLineClamp: level === 'minimal' ? 2 : 1,
+        WebkitBoxOrient: 'vertical',
+      }}>
+        {viewLabel} · {toolId}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {bar('88%', 0.2)}
+        {level !== 'minimal' && bar('58%', 0.12)}
+      </div>
+    </div>
   );
 }
 

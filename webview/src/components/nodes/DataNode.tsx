@@ -78,10 +78,126 @@ function describeBlueprintAcceptType(type: CanvasNode['node_type']): string {
   return BLUEPRINT_ACCEPT_TYPE_LABELS[type] ?? type;
 }
 
+function CompactDataPreview({
+  accentColor,
+  icon,
+  title,
+  typeLabel,
+  text,
+  filePath,
+  level,
+}: {
+  accentColor: string;
+  icon: string;
+  title: string;
+  typeLabel: string;
+  text: string;
+  filePath?: string;
+  level: 'compact' | 'minimal' | 'full';
+}) {
+  const typography = level === 'minimal'
+    ? {
+        gap: 7,
+        iconSize: 24,
+        typeSize: 18,
+        titleSize: 18,
+        textSize: 20,
+        pathSize: 10,
+        lineClamp: 2,
+        barHeight: 8,
+      }
+    : {
+        gap: 8,
+        iconSize: 20,
+        typeSize: 16,
+        titleSize: 14,
+        textSize: 16,
+        pathSize: 12,
+        lineClamp: 3,
+        barHeight: 7,
+      };
+  const bar = (width: string, opacity: number) => (
+    <div
+      style={{
+        height: typography.barHeight,
+        width,
+        borderRadius: 999,
+        background: withAlpha(accentColor, opacity, 'var(--vscode-panel-border)'),
+      }}
+    />
+  );
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: typography.gap,
+      paddingTop: 7,
+      minHeight: 0,
+      overflow: 'hidden',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <span style={{ fontSize: typography.iconSize, lineHeight: 1, flexShrink: 0 }}>{icon}</span>
+        <span style={{
+          fontSize: typography.typeSize,
+          fontWeight: 700,
+          color: accentColor,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {typeLabel}
+        </span>
+        {level !== 'minimal' && (
+        <span style={{
+          fontSize: typography.titleSize,
+          color: 'var(--vscode-descriptionForeground)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}>
+          {title}
+        </span>
+        )}
+      </div>
+      <div style={{
+        fontSize: typography.textSize,
+        lineHeight: level === 'minimal' ? 1.22 : 1.35,
+        fontWeight: level === 'minimal' ? 650 : 500,
+        color: 'var(--vscode-descriptionForeground)',
+        overflow: 'hidden',
+        display: '-webkit-box',
+        WebkitLineClamp: typography.lineClamp,
+        WebkitBoxOrient: 'vertical',
+      }}>
+        {text}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {bar('92%', 0.18)}
+        {level !== 'minimal' && bar('68%', 0.12)}
+      </div>
+      {level !== 'minimal' && filePath && (
+        <div style={{
+          fontSize: typography.pathSize,
+          color: 'var(--vscode-descriptionForeground)',
+          opacity: 0.65,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {filePath}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Node types that support the preview button (opens in VSCode native viewer)
 const PREVIEWABLE = new Set(['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'data']);
 const CARD_HYDRATABLE_NODE_TYPES = new Set<CanvasNode['node_type']>(['note', 'ai_output', 'code', 'data']);
 const PLACEHOLDER_AUTO_HEIGHT_PADDING = 18;
+const EMPTY_IMAGE_URI_MAP: Record<string, string> = {};
 
 function resolveCardContentMode(node: CanvasNode, width?: number, height?: number): 'preview' | 'full' | undefined {
   if (!CARD_HYDRATABLE_NODE_TYPES.has(node.node_type)) { return undefined; }
@@ -101,7 +217,15 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const canvasNodes = useCanvasStore(s => s.canvasFile?.nodes ?? []);
   const edges = useCanvasStore(s => s.edges);
   const settings = useCanvasStore(s => s.settings);
-  const imageUriMap = useCanvasStore(s => s.imageUriMap);
+  const canvasDetailLevel = useCanvasStore(s => s.canvasDetailLevel);
+  const shouldRenderRichContent = canvasDetailLevel === 'full';
+  const shouldUseMediaUris = shouldRenderRichContent && (
+    data.node_type === 'image' ||
+    data.node_type === 'paper' ||
+    data.node_type === 'audio' ||
+    data.node_type === 'video'
+  );
+  const imageUriMap = useCanvasStore(s => shouldUseMediaUris ? s.imageUriMap : EMPTY_IMAGE_URI_MAP);
   const nodeDefs = useCanvasStore(s => s.nodeDefs);
   const previewNodeSize = useCanvasStore(s => s.previewNodeSize);
   const updateNodeSize = useCanvasStore(s => s.updateNodeSize);
@@ -140,6 +264,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   const canPreview = PREVIEWABLE.has(data.node_type) && !isMissing && !!data.file_path;
   const desiredCardContentMode = data.meta?.card_content_mode ?? resolveCardContentMode(data);
   const shouldHydrateCardContent =
+    shouldRenderRichContent &&
     desiredCardContentMode === 'full' &&
     !!data.file_path &&
     !isMissing &&
@@ -550,6 +675,19 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
       ? (fullContent ?? data.meta?.content_preview)
       : data.meta?.content_preview
   ));
+  const compactPreviewText = (() => {
+    if (isMissing) { return '文件缺失'; }
+    if (data.node_type === 'image') { return '图像节点'; }
+    if (data.node_type === 'paper') { return 'PDF / 文档节点'; }
+    if (data.node_type === 'audio') { return '音频节点'; }
+    if (data.node_type === 'video') { return '视频节点'; }
+    const text = typeof displayContent === 'string' ? displayContent.trim().replace(/\s+/g, ' ') : '';
+    if (text) { return text.slice(0, 96); }
+    return data.file_path ?? data.node_type;
+  })();
+  const compactTypeLabel = isBlueprintPlaceholder
+    ? placeholderKindLabel
+    : nodeDef?.label ?? describeBlueprintAcceptType(data.node_type);
 
   // ── Context menu state ──
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -666,11 +804,24 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
               : 'var(--vscode-editor-background)',
             padding: `9px ${NODE_CONTENT_GUTTER}px 7px`,
           }}>
-            <span style={{ fontSize: NODE_HEADER_ICON_SIZE, lineHeight: 1 }}>{nodeIcon}</span>
+            <span style={{
+              fontSize: shouldRenderRichContent
+                ? NODE_HEADER_ICON_SIZE
+                : canvasDetailLevel === 'minimal' ? 40 : 26,
+              lineHeight: 1,
+            }}>{nodeIcon}</span>
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span style={{
                 ...NODE_HEADER_TITLE_STYLE,
+                fontSize: shouldRenderRichContent
+                  ? NODE_HEADER_TITLE_STYLE.fontSize
+                  : canvasDetailLevel === 'minimal' ? 42 : 26,
+                lineHeight: shouldRenderRichContent ? NODE_HEADER_TITLE_STYLE.lineHeight : 1.12,
                 flex: 1,
+                whiteSpace: shouldRenderRichContent ? NODE_HEADER_TITLE_STYLE.whiteSpace : 'normal',
+                display: shouldRenderRichContent ? undefined : '-webkit-box',
+                WebkitLineClamp: canvasDetailLevel === 'minimal' ? 2 : 1,
+                WebkitBoxOrient: shouldRenderRichContent ? undefined : 'vertical',
               }}>
                 {displayTitle}
               </span>
@@ -756,7 +907,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           </div>
 
           {/* Body — the only scrollable area inside the node */}
-          <div style={{
+          <div className="rs-data-node-body" style={{
             flex: isBlueprintPlaceholder ? '0 0 auto' : 1,
             minHeight: isBlueprintPlaceholder ? 'auto' : 0,
             minWidth: 0,
@@ -768,14 +919,26 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           }}>
 
           {/* Experiment log UI */}
-          {data.node_type === 'experiment_log' && (
+          {!shouldRenderRichContent && !isBlueprintPlaceholder && (
+            <CompactDataPreview
+              accentColor={accentColor}
+              icon={nodeIcon}
+              title={displayTitle}
+              typeLabel={compactTypeLabel}
+              text={compactPreviewText}
+              filePath={data.file_path}
+              level={canvasDetailLevel}
+            />
+          )}
+
+          {shouldRenderRichContent && data.node_type === 'experiment_log' && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <ExperimentLogBody node={data} />
             </div>
           )}
 
           {/* Task list UI */}
-          {data.node_type === 'task' && (
+          {shouldRenderRichContent && data.node_type === 'task' && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <TaskBody node={data} />
             </div>
@@ -846,40 +1009,40 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
           )}
 
           {/* Image preview */}
-            {data.node_type === 'image' && (
+            {shouldRenderRichContent && data.node_type === 'image' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <ImagePreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Paper/PDF first page preview */}
-            {data.node_type === 'paper' && (
+            {shouldRenderRichContent && data.node_type === 'paper' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <PdfPreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Audio preview — waveform + click to play */}
-            {data.node_type === 'audio' && (
+            {shouldRenderRichContent && data.node_type === 'audio' && (
             <AudioPreview node={data} imageUriMap={imageUriMap} />
           )}
 
           {/* Video preview — thumbnail + modal */}
-            {data.node_type === 'video' && (
+            {shouldRenderRichContent && data.node_type === 'video' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <VideoPreview node={data} imageUriMap={imageUriMap} />
             </div>
           )}
 
           {/* Data/CSV table preview */}
-            {data.node_type === 'data' && displayContent && (
+            {shouldRenderRichContent && data.node_type === 'data' && displayContent && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <TablePreview source={displayContent as string} />
             </div>
           )}
 
           {/* Text preview — skip node types that have dedicated body renderers or media previews */}
-            {data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
+            {shouldRenderRichContent && data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
             <div style={{
               fontSize: 11,
               color: 'var(--vscode-descriptionForeground)',
@@ -907,7 +1070,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
 
         {/* Footer — fixed metadata area, never shrinks with the content body */}
         {!shouldCompactInputPlaceholder && (
-        <div style={{
+        <div className="rs-data-node-footer" style={{
           flexShrink: 0,
           minWidth: 0,
           display: 'flex',

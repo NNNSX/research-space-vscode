@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { ViewportPortal, useReactFlow } from '@xyflow/react';
+import { ViewportPortal, useOnViewportChange, useReactFlow } from '@xyflow/react';
 import type { Board } from '../../../../src/core/canvas-model';
-import { useCanvasStore, startBoardDrag, endBoardDrag } from '../../stores/canvas-store';
+import { useCanvasStore, startBoardDrag, endBoardDrag, type CanvasDetailLevel } from '../../stores/canvas-store';
 import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
 
 // ── Color presets (shared with BoardDropdown) ────────────────────────────────
@@ -21,20 +21,25 @@ export const BOARD_COLOR_PRESETS = [
 
 type HandlePos = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
-const HANDLE_SIZE = 8;
+const HANDLE_SCREEN_SIZE = 12;
 
-function getHandleStyle(pos: HandlePos, bounds: Board['bounds']): React.CSSProperties {
+function getHandleStyle(pos: HandlePos, bounds: Board['bounds'], zoom: number): React.CSSProperties {
+  const safeZoom = Math.max(0.05, zoom);
+  const handleSize = HANDLE_SCREEN_SIZE / safeZoom;
+  const borderWidth = 1.5 / safeZoom;
+  const borderRadius = 3 / safeZoom;
   const base: React.CSSProperties = {
     position: 'absolute',
-    width: HANDLE_SIZE,
-    height: HANDLE_SIZE,
+    width: handleSize,
+    height: handleSize,
     background: '#fff',
-    border: '1.5px solid var(--vscode-focusBorder, #007fd4)',
-    borderRadius: 2,
+    border: `${borderWidth}px solid var(--vscode-focusBorder, #007fd4)`,
+    borderRadius,
     pointerEvents: 'auto',
     zIndex: 2,
+    boxShadow: `0 0 0 ${1 / safeZoom}px rgba(0,0,0,0.20), 0 ${2 / safeZoom}px ${8 / safeZoom}px rgba(0,0,0,0.22)`,
   };
-  const half = HANDLE_SIZE / 2;
+  const half = handleSize / 2;
   const w = bounds.width;
   const h = bounds.height;
 
@@ -54,9 +59,10 @@ function getHandleStyle(pos: HandlePos, bounds: Board['bounds']): React.CSSPrope
 
 interface BoardOverlayProps {
   board: Board;
+  zoom: number;
 }
 
-function BoardOverlay({ board }: BoardOverlayProps) {
+function BoardOverlay({ board, zoom }: BoardOverlayProps) {
   const deleteBoard = useCanvasStore(s => s.deleteBoard);
   const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const moveBoard = useCanvasStore(s => s.moveBoard);
@@ -263,7 +269,7 @@ function BoardOverlay({ board }: BoardOverlayProps) {
             <div
               key={pos}
               onMouseDown={(e) => handleResizeStart(e, pos)}
-              style={getHandleStyle(pos, bounds)}
+              style={getHandleStyle(pos, bounds, zoom)}
             />
           ))}
         </div>
@@ -293,6 +299,52 @@ function BoardOverlay({ board }: BoardOverlayProps) {
         />
       )}
     </>
+  );
+}
+
+function BoardCenterTitleOverlay({ board, detailLevel }: { board: Board; detailLevel: CanvasDetailLevel }) {
+  const { bounds, name, borderColor } = board;
+  const textColor = contrastTextColor(borderColor);
+  const textShadow = contrastTextShadow(borderColor);
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: bounds.x,
+        top: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        pointerEvents: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: Math.max(120, bounds.width * 0.82),
+          padding: detailLevel === 'minimal' ? '18px 28px' : '14px 24px',
+          borderRadius: 18,
+          background: `linear-gradient(135deg, ${hexToRgbaLocal(borderColor, 0.88)}, ${hexToRgbaLocal(borderColor, 0.68)})`,
+          color: textColor,
+          border: `2px solid ${hexToRgbaLocal('#ffffff', 0.58)}`,
+          boxShadow: '0 18px 46px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.14) inset',
+          backdropFilter: 'blur(4px)',
+          textAlign: 'center',
+          fontSize: detailLevel === 'minimal' ? 58 : 44,
+          lineHeight: 1.08,
+          fontWeight: 900,
+          letterSpacing: 1,
+          textShadow,
+          overflow: 'hidden',
+          display: '-webkit-box',
+          WebkitLineClamp: detailLevel === 'minimal' ? 3 : 2,
+          WebkitBoxOrient: 'vertical',
+        }}
+      >
+        {name}
+      </div>
+    </div>
   );
 }
 
@@ -465,12 +517,29 @@ function contrastTextShadow(hex: string): string {
 
 export function BoardOverlays() {
   const boards = useCanvasStore(s => s.boards);
+  const detailLevel = useCanvasStore(s => s.canvasDetailLevel);
+  const { getViewport } = useReactFlow();
+  const [zoom, setZoom] = useState(() => getViewport().zoom);
+  useOnViewportChange({
+    onChange: viewport => {
+      setZoom(current => Math.abs(current - viewport.zoom) < 0.01 ? current : viewport.zoom);
+    },
+  });
   if (boards.length === 0) return null;
   return (
-    <ViewportPortal>
-      <div style={{ position: 'absolute', inset: 0, zIndex: -1 }}>
-        {boards.map(b => <BoardOverlay key={b.id} board={b} />)}
-      </div>
-    </ViewportPortal>
+    <>
+      <ViewportPortal>
+        <div style={{ position: 'absolute', inset: 0, zIndex: -1 }}>
+          {boards.map(b => <BoardOverlay key={b.id} board={b} zoom={zoom} />)}
+        </div>
+      </ViewportPortal>
+      {detailLevel !== 'full' && (
+        <ViewportPortal>
+          <div style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}>
+            {boards.map(b => <BoardCenterTitleOverlay key={b.id} board={b} detailLevel={detailLevel} />)}
+          </div>
+        </ViewportPortal>
+      )}
+    </>
   );
 }

@@ -15,7 +15,7 @@ import {
   type IsValidConnection,
   type Viewport,
 } from '@xyflow/react';
-import { useCanvasStore } from '../../stores/canvas-store';
+import { useCanvasStore, type CanvasDetailLevel } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { wouldCreateCycle } from '../../utils/graph-utils';
 import { DataNode } from '../nodes/DataNode';
@@ -194,6 +194,12 @@ function getEventClientPoint(event: MouseEvent | TouchEvent | React.MouseEvent |
   return null;
 }
 
+function resolveCanvasDetailLevel(zoom: number): CanvasDetailLevel {
+  if (zoom < 0.14) { return 'minimal'; }
+  if (zoom < 0.30) { return 'compact'; }
+  return 'full';
+}
+
 export function Canvas() {
   const nodes = useCanvasStore(s => s.nodes);
   const edges = useCanvasStore(s => s.edges);
@@ -228,12 +234,15 @@ export function Canvas() {
   const updateViewport = useCanvasStore(s => s.updateViewport);
   const saveNow = useCanvasStore(s => s.saveNow);
   const setError = useCanvasStore(s => s.setError);
+  const canvasDetailLevel = useCanvasStore(s => s.canvasDetailLevel);
+  const setCanvasDetailLevel = useCanvasStore(s => s.setCanvasDetailLevel);
   const initialCanvasLoadActive = useCanvasStore(s => s.initialCanvasLoadActive);
   const initialCanvasLoadSessionId = useCanvasStore(s => s.currentInitialCanvasLoadStats?.sessionId ?? null);
   const { screenToFlowPosition, fitView, setViewport, getViewport } = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const initialCanvasFrameLoggedRef = useRef<number | null>(null);
   const lastAppliedViewportRef = useRef<string | null>(null);
+  const canvasDetailLevelRef = useRef<CanvasDetailLevel>(canvasDetailLevel);
 
   const persistedViewport = canvasFile?.viewport ?? { x: 0, y: 0, zoom: 1 };
   const hasPersistedViewport = Math.abs(persistedViewport.x) > 0.5 || Math.abs(persistedViewport.y) > 0.5 || Math.abs(persistedViewport.zoom - 1) > 0.001;
@@ -473,6 +482,24 @@ export function Canvas() {
     updateViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
   }, [updateViewport]);
 
+  const handleMove = useCallback((_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+    const nextLevel = resolveCanvasDetailLevel(viewport.zoom);
+    if (canvasDetailLevelRef.current === nextLevel) { return; }
+    canvasDetailLevelRef.current = nextLevel;
+    setCanvasDetailLevel(nextLevel);
+  }, [setCanvasDetailLevel]);
+
+  useEffect(() => {
+    canvasDetailLevelRef.current = canvasDetailLevel;
+  }, [canvasDetailLevel]);
+
+  useEffect(() => {
+    const nextLevel = resolveCanvasDetailLevel(persistedViewport.zoom);
+    if (canvasDetailLevelRef.current === nextLevel) { return; }
+    canvasDetailLevelRef.current = nextLevel;
+    setCanvasDetailLevel(nextLevel);
+  }, [persistedViewport.zoom, setCanvasDetailLevel]);
+
   const requestEdgeDeleteConfirm = useCallback((edgeIds: string[]) => {
     const normalizedIds = edgeIds.filter(id => !id.startsWith('syn-'));
     if (normalizedIds.length === 0) { return; }
@@ -499,7 +526,11 @@ export function Canvas() {
       Math.abs(live.y - target.y) < 0.5 &&
       Math.abs(live.zoom - target.zoom) < 0.001;
 
-    if (alreadyAtTarget && lastAppliedViewportRef.current === signature) {
+    if (lastAppliedViewportRef.current === signature) {
+      return;
+    }
+    if (alreadyAtTarget) {
+      lastAppliedViewportRef.current = signature;
       return;
     }
 
@@ -745,7 +776,12 @@ export function Canvas() {
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Toolbar />
-      <div style={{ flex: 1, position: 'relative' }} ref={reactFlowWrapper} onDragLeave={handleDragLeave}>
+      <div
+        className={`rs-canvas rs-canvas-lod-${canvasDetailLevel}`}
+        style={{ flex: 1, position: 'relative' }}
+        ref={reactFlowWrapper}
+        onDragLeave={handleDragLeave}
+      >
         <ReactFlow
           nodes={displayNodes}
           edges={allEdges}
@@ -774,6 +810,8 @@ export function Canvas() {
           minZoom={0.05}
           maxZoom={4}
           fitView={!hasPersistedViewport}
+          onlyRenderVisibleElements
+          onMove={handleMove}
           onMoveEnd={handleMoveEnd}
           deleteKeyCode={null}
           style={{ background: 'var(--vscode-editor-background)' }}
@@ -784,15 +822,17 @@ export function Canvas() {
             size={1.5}
             gap={20}
           />
-          <MiniMap
-            pannable
-            zoomable
-            style={{
-              background: 'var(--vscode-sideBar-background)',
-              border: '1px solid var(--vscode-panel-border)',
-            }}
-            nodeColor="var(--vscode-badge-background)"
-          />
+          {canvasDetailLevel === 'full' && (
+            <MiniMap
+              pannable
+              zoomable
+              style={{
+                background: 'var(--vscode-sideBar-background)',
+                border: '1px solid var(--vscode-panel-border)',
+              }}
+              nodeColor="var(--vscode-badge-background)"
+            />
+          )}
           <BoardOverlays />
           <BlueprintOverlays />
           {edgeContextMenu && (

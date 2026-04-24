@@ -114,6 +114,7 @@ export interface PipelineState {
 }
 
 export type CanvasSaveState = 'saved' | 'pending' | 'saving' | 'error';
+export type CanvasDetailLevel = 'full' | 'compact' | 'minimal';
 
 export interface InitialCanvasLoadStats {
   sessionId: number;
@@ -266,6 +267,7 @@ interface CanvasState {
   blueprintIndex: BlueprintRegistryEntry[];
   pipelineState: PipelineState | null;
   saveState: CanvasSaveState;
+  canvasDetailLevel: CanvasDetailLevel;
   saveDueAt: number | null;
   lastSavedAt: number | null;
   saveError: string | null;
@@ -399,6 +401,7 @@ interface CanvasState {
   runAutosaveCheck(): void;
   markSaveSuccess(savedAt?: number, requestId?: number): void;
   markSaveError(message: string, requestId?: number): void;
+  setCanvasDetailLevel(level: CanvasDetailLevel): void;
 }
 
 // ── Save scheduling ─────────────────────────────────────────────────────────
@@ -3801,6 +3804,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   blueprintIndex: [],
   pipelineState: null,
   saveState: 'saved',
+  canvasDetailLevel: 'full',
   saveDueAt: null,
   lastSavedAt: Date.now(),
   saveError: null,
@@ -4175,18 +4179,37 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
       const activeHubIds = new Set(nodeGroups.map(group => group.hubNodeId));
       const prunedNodes = markedManualPositionNodes.filter(node => !isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id));
-      let prunedEdges = state.edges.filter(edge => {
-        if (isHubEdgeType(edge.data?.edge_type)) {
-          return activeHubIds.has(edge.target);
-        }
-        const sourceExists = prunedNodes.some(node => node.id === edge.source);
-        const targetExists = prunedNodes.some(node => node.id === edge.target);
-        return sourceExists && targetExists;
-      });
+      const prunedNodeIds = new Set(prunedNodes.map(node => node.id));
+      const prunedEdges = removedIds.size > 0
+        ? state.edges.filter(edge => {
+            if (isHubEdgeType(edge.data?.edge_type)) {
+              return activeHubIds.has(edge.target);
+            }
+            return prunedNodeIds.has(edge.source) && prunedNodeIds.has(edge.target);
+          })
+        : state.edges;
       let finalNodes = prunedNodes;
       let syncedNodes = syncGroupHubNodes(finalNodes, nodeGroups);
       if (changedBlueprintInstanceIds.size > 0) {
         syncedNodes = recalcBlueprintContainersForInstanceIds(syncedNodes, changedBlueprintInstanceIds);
+      }
+
+      const hasPersistentChange = expandedChanges.some(change => {
+        if (change.type === 'remove' || change.type === 'add' || change.type === 'replace') {
+          return true;
+        }
+        if (change.type === 'position') {
+          return (change as { dragging?: boolean }).dragging !== true;
+        }
+        return false;
+      });
+
+      if (!hasPersistentChange) {
+        return {
+          nodes: syncedNodes,
+          edges: prunedEdges,
+          nodeGroups,
+        };
       }
 
       // Clean up fullContentCache for deleted nodes
@@ -6129,6 +6152,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       saveDueAt: null,
       saveError: message,
     });
+  },
+
+  setCanvasDetailLevel(level) {
+    set(state => state.canvasDetailLevel === level ? {} : { canvasDetailLevel: level });
   },
 
   // ── Undo / Redo ────────────────────────────────────────────────────────────
