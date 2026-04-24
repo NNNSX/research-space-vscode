@@ -58,6 +58,7 @@ interface BoardOverlayProps {
 
 function BoardOverlay({ board }: BoardOverlayProps) {
   const deleteBoard = useCanvasStore(s => s.deleteBoard);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const moveBoard = useCanvasStore(s => s.moveBoard);
   const resizeBoard = useCanvasStore(s => s.resizeBoard);
   const updateBoard = useCanvasStore(s => s.updateBoard);
@@ -167,8 +168,13 @@ function BoardOverlay({ board }: BoardOverlayProps) {
 
   const handleDelete = useCallback(() => {
     setCtxMenu(null);
-    deleteBoard(id);
-  }, [id, deleteBoard]);
+    requestDeleteConfirm({
+      title: '确认删除画板',
+      message: `确认删除画板“${name}”？画板内节点会保留在原位置，不会被一起删除。`,
+      confirmLabel: '删除画板',
+      onConfirm: () => deleteBoard(id),
+    });
+  }, [id, name, deleteBoard, requestDeleteConfirm]);
 
   const handleEditStart = useCallback(() => {
     setCtxMenu(null);

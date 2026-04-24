@@ -2,6 +2,11 @@
 
 All notable changes to **Research Space** are documented here.
 
+## [2.2.1-alpha.1] — 2026-04-24
+
+- **发布汇总版本：文件爆炸与删除确认主线收口** — 将 `v2.1.1-alpha` 后续开发成果汇总为新的发布节点：文件爆炸从 PDF 扩展到 DOCX、PPT/PPTX、图片、XLS/XLSX 等多格式主链，MinerU 在线解析、PPT 整页渲染、关系索引、AI 消费顺序、重复拆解结果保留与节点排布继续收口；同时画布、节点组、暂存架、任务项、设置项和宠物对话等删除 / 清空入口统一补齐确认层，降低误删风险。
+- **发布仓库同步准备** — 版本号、README、CHANGELOG 与 GitHub Release Note 统一切到 `v2.2.1-alpha.1`，用于同步到 `research-space-release/` 后构建 VSIX 并作为 GitHub Release 资产发布。
+
 ## [2.1.1-alpha.12] — 2026-04-21
 
 - **补上“外部改回旧 `.rsws` 后重开”的迁移集成测试** — 新增 `external-migration-reload.test.js`，覆盖“画布已打开时外部把 `.rsws` 改回旧结构 → 关闭并重开 → 旧 `summaryGroups`、残留 `group_hub` 与脏边自动迁移写回 → 再次重开仍稳定”的整条自定义编辑器链路，继续收口旧结构迁移不只要在 store 层通过、也要在 VS Code 宿主层真正成立

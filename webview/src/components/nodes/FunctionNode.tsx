@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
 import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react';
 import type { CanvasNode, FnStatus, ParamDef, RunIssueKind } from '../../../../src/core/canvas-model';
+import {
+  getExplosionSourceTypeFromPath,
+  isMinerUSupportedFilePath,
+  MINERU_SUPPORTED_FILE_HINT,
+  requiresMinerUTokenForSourceType,
+} from '../../../../src/core/explosion-file-types';
 import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getFavoriteModelsForProvider, getProviderDisplayName, orderModelsByIds } from '../../utils/model-labels';
@@ -50,6 +56,7 @@ const TOOL_ICONS: Record<string, string> = {
   draw:            '📊',
   rag:             '🔎',
   chat:            '💬',
+  'explode-document': '🧨',
   // 多模态工具
   'image-gen':     '🖼',
   'image-edit':    '✏️',
@@ -72,6 +79,7 @@ const TOOL_DEFAULT_PROMPTS: Record<string, string> = {
   'literature-review':'你是一位学术文献综合分析专家。请基于所提供的论文，按指定输出格式与语言撰写文献综述。每个要点需注明来源论文。',
   'outline-gen':      '你是一位学术写作教练。请基于所提供的笔记和草稿，生成指定层级的论文大纲。每个章节标题应具体明确，并附一句话描述。',
   'action-items':     '你是一位会议行动项提取专家。请从所提供的会议记录中提取所有行动项，标注负责人、具体内容、截止日期和优先级。',
+  'explode-document': '这是一个系统级文件拆解工具，不走文本生成模型。连接一个受支持的文件后，运行时会直接调用 MinerU，把文档拆成文本与图片节点组。',
 };
 
 // Provider label map (no 'auto' — nodes always have an explicit provider)
@@ -290,6 +298,22 @@ function buildToolWarnings(args: {
     return warnings;
   }
 
+  if (toolId === 'explode-document') {
+    if (upstreamNodes.length === 0) {
+      warnings.push(`📄 需连接 1 个受支持的文件节点（${MINERU_SUPPORTED_FILE_HINT}）`);
+      return warnings;
+    }
+    if (upstreamNodes.length > 1) {
+      warnings.push(`📄 当前爆炸工具一次只支持 1 个受支持的文件（${MINERU_SUPPORTED_FILE_HINT}）`);
+      return warnings;
+    }
+    const source = upstreamNodes[0];
+    if (!isMinerUSupportedFilePath(source.file_path)) {
+      warnings.push(`📄 当前爆炸工具仅支持 ${MINERU_SUPPORTED_FILE_HINT} 文件节点`);
+    }
+    return warnings;
+  }
+
   if (toolDef?.apiType === 'tts') {
     if (textCount === 0) {
       warnings.push('📝 需连接文本节点（笔记 / AI 输出）');
@@ -337,6 +361,7 @@ function FullFunctionNode({
   const updateInputOrder = useCanvasStore(s => s.updateInputOrder);
   const getUpstreamNodes = useCanvasStore(s => s.getUpstreamNodes);
   const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
+  const openSettingsDetailView = useCanvasStore(s => s.openSettingsDetailView);
   const modelCache = useCanvasStore(s => s.modelCache);
   const settings = useCanvasStore(s => s.settings);
   const toolDefs = useCanvasStore(s => s.toolDefs);
@@ -389,7 +414,9 @@ function FullFunctionNode({
   // Resolve tool definition to check uiMode and apiType
   const toolDef = toolDefs.find(t => t.id === tool);
   const isChatMode = toolDef?.uiMode === 'chat';
-  const isMultimodal = !!(toolDef?.apiType && toolDef.apiType !== 'chat');
+  const isMultimodal = !!(toolDef?.apiType && ['image_generation', 'image_edit', 'tts', 'stt', 'video_generation'].includes(toolDef.apiType));
+  const isExplosionTool = toolDef?.apiType === 'explosion';
+  const hasMinerUToken = !!settings?.mineruApiToken?.trim();
   // For multimodal tools, resolve the global default model from settings
   const MULTIMODAL_SETTINGS_KEY: Record<string, keyof typeof settings> = {
     'image-gen':      'aiHubMixImageGenModel',
@@ -408,6 +435,31 @@ function FullFunctionNode({
 
   // Upstream nodes (ordered)
   const upstreamNodes = getUpstreamNodes(data.id);
+  const supportedExplosionInputs = upstreamNodes.filter(node => isMinerUSupportedFilePath(node.file_path));
+  const supportedExplosionInputCount = supportedExplosionInputs.length;
+  const hasSingleSupportedExplosionInput = upstreamNodes.length === 1 && supportedExplosionInputCount === 1;
+  const singleExplosionSourceType = getExplosionSourceTypeFromPath(supportedExplosionInputs[0]?.file_path);
+  const singleExplosionInputType = (() => {
+    if (singleExplosionSourceType === 'pdf') { return 'PDF'; }
+    if (singleExplosionSourceType === 'docx') { return 'DOCX'; }
+    if (singleExplosionSourceType === 'pptx') { return 'PPTX'; }
+    if (singleExplosionSourceType === 'xlsx') { return 'XLS / XLSX'; }
+    if (singleExplosionSourceType === 'image') { return '图片'; }
+    return null;
+  })();
+  const explosionNeedsToken = requiresMinerUTokenForSourceType(singleExplosionSourceType);
+  const explosionReady = isExplosionTool && hasSingleSupportedExplosionInput && (!explosionNeedsToken || hasMinerUToken);
+  const explosionStatusColors = explosionReady
+    ? {
+        fg: 'var(--vscode-inputValidation-infoForeground, #75beff)',
+        border: 'var(--vscode-inputValidation-infoBorder, #75beff60)',
+        chipBg: 'rgba(117,190,255,0.12)',
+      }
+    : {
+        fg: 'var(--vscode-inputValidation-warningForeground, #ffcc00)',
+        border: 'var(--vscode-inputValidation-warningBorder, #ffcc0060)',
+        chipBg: 'rgba(255,204,0,0.12)',
+      };
 
   // When store value changes externally (e.g. undo/redo), sync drafts
   useEffect(() => {
@@ -946,7 +998,129 @@ function FullFunctionNode({
       <div style={{ height: 1, background: 'var(--vscode-panel-border)', margin: `0 -${FUNCTION_NODE_PADDING}px` }} />
 
       {/* Provider / Model — only for LLM (text) tools */}
-      {isMultimodal ? (
+      {isExplosionTool ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{
+            fontSize: 10,
+            color: 'var(--vscode-descriptionForeground)',
+            padding: '4px 6px',
+            background: 'var(--vscode-input-background)',
+            borderRadius: 4,
+            border: '1px solid var(--vscode-panel-border)',
+          }}>
+            🧨 系统工具 · 连接 1 个受支持文件后直接调用 MinerU 拆解
+          </div>
+          <div style={{
+            fontSize: 10,
+            color: 'var(--vscode-foreground)',
+            background: 'var(--vscode-editor-background)',
+            border: '1px solid var(--vscode-panel-border)',
+            borderRadius: 4,
+            padding: '6px 8px',
+            lineHeight: 1.5,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '4px 6px',
+              borderRadius: 4,
+              background: explosionStatusColors.chipBg,
+              border: `1px solid ${explosionStatusColors.border}`,
+            }}>
+              <div style={{
+                fontWeight: 700,
+                color: explosionStatusColors.fg,
+              }}>
+                {explosionReady
+                  ? '✅ 已就绪，可直接运行'
+                  : explosionNeedsToken && !hasMinerUToken
+                    ? '⚠ 还不能运行：缺少 MinerU Token'
+                    : !hasSingleSupportedExplosionInput
+                      ? '⚠ 还不能运行：需要 1 个受支持文件输入'
+                      : '⚠ 当前输入状态仍需检查'}
+              </div>
+              <span style={{
+                flexShrink: 0,
+                fontSize: 9,
+                padding: '2px 6px',
+                borderRadius: 999,
+                background: explosionStatusColors.chipBg,
+                color: explosionStatusColors.fg,
+                border: `1px solid ${explosionStatusColors.border}`,
+              }}>
+                {explosionReady ? 'Ready' : 'Setup Required'}
+              </span>
+            </div>
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              color: 'var(--vscode-descriptionForeground)',
+            }}>
+              <div>输出文本 / 图片节点组，供后续 AI 继续读取。</div>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}>
+                  <span>{!explosionNeedsToken || hasMinerUToken ? '✅' : '◻'}</span>
+                  <span>{explosionNeedsToken ? '已配置 MinerU Token' : '当前输入类型无需 MinerU Token'}</span>
+                </div>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}>
+                  <span>{hasSingleSupportedExplosionInput ? '✅' : '◻'}</span>
+                  <span>
+                    已连接 1 个受支持文件
+                    {upstreamNodes.length > 0
+                      ? `（当前类型：${singleExplosionInputType ?? '未识别'}）`
+                      : ''}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}>
+              <div style={{
+                fontSize: 9,
+                color: 'var(--vscode-descriptionForeground)',
+              }}>
+                {singleExplosionInputType === 'PPTX'
+                  ? 'PPT 会先请求整页预览授权，再继续 MinerU 拆解。'
+                  : explosionNeedsToken
+                    ? (hasMinerUToken ? '已配置，可直接运行。' : '首次使用请先完成密钥配置。')
+                    : '当前输入类型无需额外密钥。'}
+              </div>
+              <button
+                onClick={() => openSettingsDetailView('explosion')}
+                style={{
+                  background: 'none',
+                  border: '1px solid var(--vscode-panel-border)',
+                  borderRadius: 4,
+                  color: 'var(--vscode-foreground)',
+                  fontSize: 10,
+                  padding: '3px 8px',
+                  cursor: 'pointer',
+                }}
+              >
+                打开文档拆解设置
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : isMultimodal ? (
         <div style={{
           fontSize: 10,
           color: 'var(--vscode-descriptionForeground)',
@@ -1100,6 +1274,8 @@ function FullFunctionNode({
               hint = '📝 需连接文本节点（笔记 / AI 输出）作为输入';
             } else if (toolDef?.apiType === 'video_generation') {
               hint = '📝 可连接文本节点提供描述，或直接在参数中填写';
+            } else if (toolDef?.apiType === 'explosion') {
+              hint = `🧨 需连接 1 个受支持的文件节点（${MINERU_SUPPORTED_FILE_HINT}）；运行后会在原文件右侧生成拆解节点组`;
             } else if (toolDef?.slots && toolDef.slots.length > 0) {
               const required = toolDef.slots.filter(s => s.required);
               if (required.length > 0) {
@@ -1142,7 +1318,7 @@ function FullFunctionNode({
           )}
 
           {/* System Prompt editor toggle — only for LLM tools */}
-          {!isMultimodal && (
+          {!isMultimodal && !isExplosionTool && (
             <>
               <button
                 onClick={() => setPromptOpen(o => !o)}

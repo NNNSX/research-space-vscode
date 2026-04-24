@@ -93,9 +93,11 @@ export async function extractContent(
       };
     }
     const base64 = Buffer.from(bytes).toString('base64');
+    const imageContextText = node.meta?.content_preview?.trim();
     return {
       type: 'image',
       title,
+      contextText: imageContextText ? `图像上下文：${imageContextText}` : undefined,
       localPath: absPath,
       base64,
       mediaType: mediaTypeMap[ext] ?? 'image/png',
@@ -448,6 +450,61 @@ async function extractXlsxPreview(filePath: string): Promise<{ text: string; pre
     rows: rowCount,
     cols: maxCols,
   };
+}
+
+export interface SpreadsheetSheetContent {
+  index: number;
+  title: string;
+  text: string;
+}
+
+export async function extractSpreadsheetSheets(filePath: string, ext?: string): Promise<SpreadsheetSheetContent[]> {
+  const normalizedExt = (ext ?? path.extname(filePath).slice(1)).toLowerCase();
+  switch (normalizedExt) {
+    case 'xlsx':
+    case 'xlsm':
+    case 'xltx':
+    case 'xltm': {
+      const entries = await unzipList(filePath);
+      const sharedStringsEntry = entries.find(entry => entry === 'xl/sharedStrings.xml');
+      const sharedStrings = sharedStringsEntry ? parseSharedStrings(await unzipEntry(filePath, sharedStringsEntry)) : [];
+      const sheetEntries = entries
+        .filter(entry => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const sheets: SpreadsheetSheetContent[] = [];
+      let sheetIndex = 1;
+      for (const entry of sheetEntries) {
+        const parsed = parseWorksheet(await unzipEntry(filePath, entry), sharedStrings);
+        const text = parsed.rows
+          .map(row => row.filter(Boolean).join('\t').trim())
+          .filter(Boolean)
+          .join('\n')
+          .trim();
+        if (text) {
+          sheets.push({
+            index: sheetIndex,
+            title: `第 ${sheetIndex} 个工作表文本`,
+            text,
+          });
+        }
+        sheetIndex += 1;
+      }
+      return sheets;
+    }
+    case 'xls':
+    case 'xlt': {
+      const text = await extractLegacyBinaryText(filePath);
+      return text
+        ? [{
+            index: 1,
+            title: '第 1 个工作表文本',
+            text,
+          }]
+        : [];
+    }
+    default:
+      return [];
+  }
 }
 
 

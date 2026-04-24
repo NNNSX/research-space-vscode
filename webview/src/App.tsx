@@ -277,6 +277,7 @@ export function App() {
   const updateNodeFilePath = useCanvasStore(s => s.updateNodeFilePath);
   const updateNodePreviews = useCanvasStore(s => s.updateNodePreviews);
   const addToStaging = useCanvasStore(s => s.addToStaging);
+  const applyPdfExplosion = useCanvasStore(s => s.applyPdfExplosion);
   const resolveStagingMaterialization = useCanvasStore(s => s.resolveStagingMaterialization);
   const failStagingMaterialization = useCanvasStore(s => s.failStagingMaterialization);
   const setFullContents = useCanvasStore(s => s.setFullContents);
@@ -639,6 +640,16 @@ export function App() {
         case 'imageUri':
           if (msg.filePath && msg.uri) {
             enqueueImageUri(msg.filePath, msg.uri);
+          }
+          break;
+        case 'pdfExploded':
+          if (msg.sourceNodeId && msg.groupName && Array.isArray(msg.nodes) && msg.nodes.length > 0) {
+            applyPdfExplosion(
+              msg.sourceNodeId as string,
+              typeof msg.producerNodeId === 'string' ? msg.producerNodeId : undefined,
+              msg.groupName as string,
+              msg.nodes as import('../../src/core/canvas-model').CanvasNode[],
+            );
           }
           break;
         case 'stageNodes':

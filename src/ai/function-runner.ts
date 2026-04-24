@@ -10,6 +10,9 @@ import { getProvider } from './provider';
 import { ToolRegistry } from './tool-registry';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
 import { parsePositiveLimit, resolveEffectiveLimit } from './model-capabilities';
+import { explodeDocumentNodeViaMinerU } from '../explosion/mineru-pdf-explosion';
+import { isMinerUSupportedFilePath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
+import { MinerUError, formatMinerUErrorForDisplay } from '../explosion/mineru-adapter';
 
 // ── Shared registry singleton ──────────────────────────────────────────────
 let _registry: ToolRegistry | null = null;
@@ -107,6 +110,84 @@ function reportNodeIssue(
   const kind = issueKind ?? inferRunIssueKind(message);
   webview.postMessage({ type: 'aiError', runId, nodeId, message, issueKind: kind });
   webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'error', issueKind: kind, issueMessage: message });
+}
+
+async function runExplosionTool(
+  nodeId: string,
+  runId: string,
+  upstreamNodes: CanvasNode[],
+  canvasUri: vscode.Uri,
+  webview: vscode.Webview,
+): Promise<FunctionRunResult> {
+  if (upstreamNodes.length === 0) {
+    const msg = `文件爆炸需要连接 1 个受支持的文件节点（${MINERU_SUPPORTED_FILE_HINT}）。`;
+    reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
+    return { success: false, runId, errorMessage: msg };
+  }
+
+  if (upstreamNodes.length > 1) {
+    const msg = `当前文件爆炸工具一次只支持 1 个受支持的文件节点（${MINERU_SUPPORTED_FILE_HINT}）。`;
+    reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
+    return { success: false, runId, errorMessage: msg };
+  }
+
+  const sourceNode = upstreamNodes[0];
+  if (!isMinerUSupportedFilePath(sourceNode.file_path)) {
+    const msg = `当前文件爆炸工具仅支持 ${MINERU_SUPPORTED_FILE_HINT} 文件节点。`;
+    reportNodeIssue(webview, nodeId, runId, msg, 'missing_input');
+    return { success: false, runId, errorMessage: msg };
+  }
+
+  webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: '文档拆解中…' });
+
+  try {
+    const result = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Research Space：正在拆解 ${sourceNode.title || '文件'}`,
+      cancellable: false,
+    }, async progress => explodeDocumentNodeViaMinerU(sourceNode, canvasUri, {
+      onProgress: message => {
+        progress.report({ message });
+        webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'running', progressText: message });
+      },
+    }));
+
+    webview.postMessage({
+      type: 'pdfExploded',
+      sourceNodeId: result.sourceNodeId,
+      producerNodeId: nodeId,
+      groupName: result.groupName,
+      nodes: result.nodes,
+      warnings: result.warnings,
+    });
+
+    if (result.warnings.length > 0) {
+      vscode.window.showWarningMessage(`MinerU 爆炸已完成，但有 ${result.warnings.length} 条提示：${result.warnings[0]}`);
+    }
+
+    webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'done', progressText: `已拆解为 ${result.nodes.length} 个节点` });
+    setTimeout(() => webview.postMessage({ type: 'fnStatusUpdate', nodeId, status: 'idle' }), 3000);
+    return { success: true, runId };
+  } catch (e) {
+    const message = formatMinerUErrorForDisplay(e);
+    const fullMessage = `文件爆炸失败: ${message}`;
+    reportNodeIssue(
+      webview,
+      nodeId,
+      runId,
+      fullMessage,
+      e instanceof MinerUError && (e.code === 'config_missing_token' || e.code === 'api_auth_failed')
+        ? 'missing_config'
+        : 'run_failed',
+    );
+    if (e instanceof MinerUError && (e.code === 'config_missing_token' || e.code === 'api_auth_failed')) {
+      const action = await vscode.window.showErrorMessage(message, '打开 MinerU 设置');
+      if (action === '打开 MinerU 设置') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'researchSpace.explosion.mineru');
+      }
+    }
+    return { success: false, runId, errorMessage: fullMessage };
+  }
 }
 
 const AIHUBMIX_EXTRACTION_CHARS_PER_TOKEN = 4;
@@ -540,6 +621,10 @@ async function _runFunctionNodeInner(
   }
   const upstreamNodes = executionPlan.upstreamNodes;
   const nodeRoleMap = executionPlan.nodeRoleMap;
+
+  if (aiType === 'explosion') {
+    return runExplosionTool(nodeId, runId, upstreamNodes, canvasUri, webview);
+  }
 
   if (upstreamNodes.length === 0 && toolId !== 'rag' && toolId !== 'chat' && aiType === 'chat') {
     reportNodeIssue(webview, nodeId, runId, '未连接任何输入数据节点（数据流边）。', 'missing_input');

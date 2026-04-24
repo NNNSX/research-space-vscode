@@ -34,6 +34,7 @@ export function NodeContextMenu({
   const onEdgesChange = useCanvasStore(s => s.onEdgesChange);
   const edges = useCanvasStore(s => s.edges);
   const duplicateNode = useCanvasStore(s => s.duplicateNode);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const [renaming, setRenaming] = React.useState(false);
   const [draft, setDraft] = React.useState(nodeTitle);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -52,11 +53,20 @@ export function NodeContextMenu({
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     onClose();
-    const dangling = edges
-      .filter(edge => edge.source === nodeId || edge.target === nodeId)
-      .map(edge => ({ type: 'remove' as const, id: edge.id }));
-    if (dangling.length > 0) { onEdgesChange(dangling); }
-    onNodesChange([{ type: 'remove', id: nodeId }]);
+    requestDeleteConfirm({
+      title: '确认删除节点',
+      message: filePath
+        ? `确认从画布删除“${nodeTitle}”？原文件不会被删除。`
+        : `确认从画布删除“${nodeTitle}”？`,
+      confirmLabel: '删除',
+      onConfirm: () => {
+        const dangling = edges
+          .filter(edge => edge.source === nodeId || edge.target === nodeId)
+          .map(edge => ({ type: 'remove' as const, id: edge.id }));
+        if (dangling.length > 0) { onEdgesChange(dangling); }
+        onNodesChange([{ type: 'remove', id: nodeId }]);
+      },
+    });
   };
 
   const handleRenameClick = (e: React.MouseEvent) => {

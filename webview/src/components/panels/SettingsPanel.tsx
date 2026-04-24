@@ -379,6 +379,7 @@ function FavoriteModelsModal({
 }) {
   const modelCache = useCanvasStore(s => s.modelCache);
   const requestModelCache = useCanvasStore(s => s.requestModelCache);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const { saveSetting } = useSettingsPersistence();
   const providerName = getProviderDisplayName(providerId, settings);
   const models = modelCache[providerId] ?? [];
@@ -486,7 +487,18 @@ function FavoriteModelsModal({
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => moveFavorite(model.id, -1)} style={smallBtnStyle} title="上移">↑</button>
                     <button onClick={() => moveFavorite(model.id, 1)} style={smallBtnStyle} title="下移">↓</button>
-                    <button onClick={() => toggleFavorite(model.id)} style={smallBtnStyle} title="移除">✕</button>
+                    <button
+                      onClick={() => requestDeleteConfirm({
+                        title: '确认移除常用模型',
+                        message: `确认将“${model.id}”从常用模型中移除？`,
+                        confirmLabel: '移除',
+                        onConfirm: () => toggleFavorite(model.id),
+                      })}
+                      style={smallBtnStyle}
+                      title="移除"
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
               ))}
@@ -507,7 +519,12 @@ function FavoriteModelsModal({
             全选当前列表
           </button>
           <button
-            onClick={() => saveFavoriteIds([])}
+            onClick={() => requestDeleteConfirm({
+              title: '确认清空常用模型',
+              message: `确认清空“${providerName}”的常用模型列表？`,
+              confirmLabel: '清空',
+              onConfirm: () => saveFavoriteIds([]),
+            })}
             style={smallBtnStyle}
           >
             清空
@@ -665,12 +682,15 @@ export function SettingsPanel() {
   const settings = useCanvasStore(s => s.settings);
   const settingsPanelOpen = useCanvasStore(s => s.settingsPanelOpen);
   const setSettingsPanelOpen = useCanvasStore(s => s.setSettingsPanelOpen);
+  const settingsPanelDetailView = useCanvasStore(s => s.settingsPanelDetailView);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const requestModelCache = useCanvasStore(s => s.requestModelCache);
   const petEnabled = usePetStore(s => s.enabled);
   const petType = usePetStore(s => s.pet.petType);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const [showOmlxKey, setShowOmlxKey] = useState(false);
-  const [detailView, setDetailView] = useState<'llm' | 'multimodal' | 'canvas' | 'pet' | null>(null);
+  const [showMineruToken, setShowMineruToken] = useState(false);
+  const [detailView, setDetailView] = useState<'llm' | 'multimodal' | 'explosion' | 'canvas' | 'pet' | null>(null);
   const [favoriteProviderId, setFavoriteProviderId] = useState<string | null>(null);
   const [llmTab, setLlmTab] = useState<'overview' | 'builtin' | 'custom'>('overview');
   const [settingsPersistStatus, setSettingsPersistStatus] = useState<SettingsPersistStatus>('saved');
@@ -729,6 +749,11 @@ export function SettingsPanel() {
       firstSettingsSnapshotRef.current = true;
     }
   }, [settingsPanelOpen]);
+
+  useEffect(() => {
+    if (!settingsPanelOpen || !settingsPanelDetailView) { return; }
+    setDetailView(settingsPanelDetailView);
+  }, [settingsPanelOpen, settingsPanelDetailView]);
 
   const customProviders = settings?.customProviders ?? [];
   const providerOptions = buildProviderOptions(customProviders);
@@ -946,7 +971,12 @@ export function SettingsPanel() {
             cp={cp}
             allProviders={customProviders}
             onChange={saveCustomProviders}
-            onDelete={() => saveCustomProviders(customProviders.filter(p => p.id !== cp.id))}
+            onDelete={() => requestDeleteConfirm({
+              title: '确认删除自定义服务商',
+              message: `确认删除自定义服务商“${cp.name}”？这会移除它的地址、密钥和默认模型配置。`,
+              confirmLabel: '删除服务商',
+              onConfirm: () => saveCustomProviders(customProviders.filter(p => p.id !== cp.id)),
+            })}
             onManageFavorites={() => setFavoriteProviderId(cp.id)}
           />
         ))}
@@ -1057,6 +1087,93 @@ export function SettingsPanel() {
     </Section>
   );
 
+  const renderExplosionDetails = () => (
+    <Section title="MinerU 文档拆解">
+      <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+        文件爆炸默认优先走 MinerU 官方在线精准解析；当前主线已接通 PDF / DOCX / PPTX / XLS / XLSX / 图片输入，其中表格文件优先走本地结构化拆解；Token 仅保存到你本机的 VS Code 设置，不进入源码或发布物。
+      </div>
+      <Field label="API 模式">
+        <SearchableSelect
+          style={selectStyle}
+          value={settings.mineruApiMode}
+          options={[
+            { value: 'precise', label: 'precise（在线精准解析）', keywords: ['precise', 'online', '精准'] },
+            { value: 'agent', label: 'agent（轻量接口，待接入）', keywords: ['agent', 'light', '轻量'] },
+            { value: 'local', label: 'local（本地 fallback）', keywords: ['local', 'fallback', '本地'] },
+          ]}
+          onChange={v => saveSetting('mineruApiMode', v)}
+          placeholder="选择 MinerU 模式..."
+        />
+      </Field>
+      <Field label="在线 API Base URL">
+        <input
+          key={settings.mineruApiBaseUrl}
+          style={inputStyle}
+          defaultValue={settings.mineruApiBaseUrl}
+          placeholder="https://mineru.net"
+          onBlur={e => saveSetting('mineruApiBaseUrl', e.target.value.trim())}
+        />
+      </Field>
+      <Field label="在线 API Token">
+        <div style={{ display: 'flex', gap: 4 }}>
+          <input
+            key={settings.mineruApiToken}
+            style={{ ...inputStyle, flex: 1 }}
+            type={showMineruToken ? 'text' : 'password'}
+            defaultValue={settings.mineruApiToken}
+            placeholder="Bearer Token"
+            onChange={e => queueSetting('mineruApiToken', e.target.value)}
+          />
+          <button onClick={() => setShowMineruToken(v => !v)} style={smallBtnStyle}>
+            {showMineruToken ? '👁' : '🔒'}
+          </button>
+        </div>
+      </Field>
+      <Field label="模型版本">
+        <SearchableSelect
+          style={selectStyle}
+          value={settings.mineruModelVersion}
+          options={[
+            { value: 'pipeline', label: 'pipeline', keywords: ['pipeline'] },
+            { value: 'vlm', label: 'vlm', keywords: ['vlm'] },
+            { value: 'MinerU-HTML', label: 'MinerU-HTML', keywords: ['html', 'mineru-html'] },
+          ]}
+          onChange={v => saveSetting('mineruModelVersion', v)}
+          placeholder="选择模型版本..."
+        />
+      </Field>
+      <Field label="轮询间隔（毫秒）">
+        <input
+          key={`mineru-poll-interval-${settings.mineruPollIntervalMs}`}
+          style={inputStyle}
+          type="number"
+          min={500}
+          defaultValue={settings.mineruPollIntervalMs}
+          onBlur={e => saveSetting('mineruPollIntervalMs', Math.max(500, Number(e.target.value) || 2500))}
+        />
+      </Field>
+      <Field label="轮询超时（毫秒）">
+        <input
+          key={`mineru-poll-timeout-${settings.mineruPollTimeoutMs}`}
+          style={inputStyle}
+          type="number"
+          min={5000}
+          defaultValue={settings.mineruPollTimeoutMs}
+          onBlur={e => saveSetting('mineruPollTimeoutMs', Math.max(5000, Number(e.target.value) || 300000))}
+        />
+      </Field>
+      <Field label="本地 fallback URL">
+        <input
+          key={settings.mineruLocalApiUrl}
+          style={inputStyle}
+          defaultValue={settings.mineruLocalApiUrl}
+          placeholder="http://localhost:8000"
+          onBlur={e => saveSetting('mineruLocalApiUrl', e.target.value.trim())}
+        />
+      </Field>
+    </Section>
+  );
+
   const renderCanvasDetails = () => (
     <Section title="画布">
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}>
@@ -1097,6 +1214,13 @@ export function SettingsPanel() {
           onOpen={() => setDetailView('multimodal')}
         />
         <SettingsEntryCard
+          title="文档拆解（MinerU）"
+          description="文件爆炸所需的 MinerU 在线 / 本地 fallback 配置与 Token。"
+          summary={settings.mineruApiToken ? `模式：${settings.mineruApiMode} · 已配置 Token` : `模式：${settings.mineruApiMode} · 尚未配置 Token`}
+          accent="var(--vscode-terminal-ansiYellow)"
+          onOpen={() => setDetailView('explosion')}
+        />
+        <SettingsEntryCard
           title="画布"
           description="自动保存等工作区编辑行为。"
           summary={settings.autoSave ? '自动保存：开启' : '自动保存：关闭'}
@@ -1131,6 +1255,11 @@ export function SettingsPanel() {
       {detailView === 'multimodal' && (
         <SettingsSubModal title="多模态工具设置" onClose={() => setDetailView(null)}>
           {renderMultimodalDetails()}
+        </SettingsSubModal>
+      )}
+      {detailView === 'explosion' && (
+        <SettingsSubModal title="文档拆解设置" onClose={() => setDetailView(null)}>
+          {renderExplosionDetails()}
         </SettingsSubModal>
       )}
       {detailView === 'canvas' && (

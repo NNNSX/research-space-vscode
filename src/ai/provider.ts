@@ -9,6 +9,7 @@ export interface AIContent {
   title: string;
   // Text
   text?: string;
+  contextText?: string;
   // Image
   localPath?: string;   // For Copilot: vscode.Uri.file(localPath)
   base64?: string;      // For Anthropic: base64 encoded

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePetStore } from '../../stores/pet-store';
+import { useCanvasStore } from '../../stores/canvas-store';
 import { getPetType } from '../../pet/pet-types';
 import { PetCharacter } from './PetCharacter';
 import { getPetLevelProgress } from '../../../../src/core/pet-state';
@@ -20,6 +21,7 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
     pet, setMode, chatMessages, chatLoading,
     sendChatMessage, clearChat, sessionStartTime,
   } = usePetStore();
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const typeDef = getPetType(pet.petType);
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -134,7 +136,15 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
           🎮
         </button>
         <button
-          onClick={(e) => { e.stopPropagation(); clearChat(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            requestDeleteConfirm({
+              title: '确认清除宠物对话',
+              message: '确认清除当前宠物对话记录？',
+              confirmLabel: '清除对话',
+              onConfirm: () => clearChat(),
+            });
+          }}
           title="清除对话"
           style={{
             background: 'transparent',

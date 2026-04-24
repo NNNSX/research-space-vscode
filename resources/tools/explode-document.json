@@ -1,0 +1,23 @@
+{
+  "id": "explode-document",
+  "name": "文件爆炸",
+  "description": "拆解 PDF / DOCX / PPTX / XLS / XLSX / 图片，生成可供后续 AI 阅读的文本 + 图片节点组",
+  "icon": "layers",
+  "supportsImages": false,
+  "outputNodeType": "ai_output",
+  "apiType": "explosion",
+  "params": [],
+  "paramMaps": {},
+  "systemPromptTemplate": "",
+  "postProcessType": null,
+  "slots": [
+    {
+      "name": "primary",
+      "label": "文档文件",
+      "description": "需要拆解的文件节点。当前支持单个 PDF / DOCX / PPTX / XLS / XLSX / 图片输入。",
+      "required": true,
+      "multiple": false
+    }
+  ],
+  "category": "general"
+}

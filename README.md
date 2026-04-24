@@ -131,6 +131,7 @@
 **输入警告提示**：AI 功能节点会在运行前直接在节点内显示黄色警告条，尽量提前提示缺失输入，例如：Chat 缺少 Prompt、RAG 缺少问题、图像编辑缺少参考图或文本提示词、TTS/STT 缺少正确输入类型、多图融合缺少第二张图等。
 
 **节点输入框编辑体验**：已补上功能节点 Chat / RAG / 自定义 Prompt / 参数输入框的鼠标拖拽选区保护，支持直接用鼠标框选大段文本后复制、删除或改写；同时同步检查并补齐任务节点、实验记录节点、节点重命名菜单/弹窗里的输入框保护，避免再次被画布拖拽抢走选区。
+**任务清单完成标记**：任务节点里已完成项现在会继续保留勾选标记；节点内会显示 `✓` 前缀，写回 `.md` 文件时也会明确输出 `- [x]` / `- [ ]` checklist 标记，避免完成状态只剩下删除线而不够明确。
 
 **模型标签统一**：所有 AI 输出节点（文本 / 图像 / 音频 / 视频 / 转录）现在都会在节点头部显示服务商与模型标签，方便回看产物来源。
 
@@ -147,7 +148,31 @@
 
 **画布搜索**：输入关键词后，匹配节点高亮，非匹配节点自动变淡；按 Enter / Shift+Enter 在匹配项间跳转，ESC 关闭并恢复。
 
-**节点组（Node Group）**：选中 2 个及以上数据节点后可在浮动工具栏点击「📦 创建节点组」。节点组现在以原生 `group_hub` 节点实现：组框支持折叠/展开、重命名、删除和整组拖拽，左右双箭头通道与普通节点一致；默认保持透明底，只保留标题栏、轮廓线、选中反馈与通道，避免误看成另一张文件卡片；组内成员会通过隐藏的 `hub_member` 边汇聚到 hub，因此对外只需要一根可见连线，就能稳定表示“这一批节点作为一个整体输入/输出”。
+**节点组（Node Group）**：选中 2 个及以上数据节点后可在浮动工具栏点击「📦 创建节点组」。节点组现在以原生 `group_hub` 节点实现：组框支持折叠/展开、重命名、删除和整组拖拽，左右双箭头通道与普通节点一致；默认保持透明底，只保留标题栏、轮廓线、选中反馈与通道，避免误看成另一张文件卡片；组内成员会通过隐藏的 `hub_member` 边汇聚到 hub，因此对外只需要一根可见连线，就能稳定表示“这一批节点作为一个整体输入/输出”。右键删除现在也已拆成**“仅删除组”**与**“删除组及内容”**两个显式选项，避免系统替用户偷偷做不可逆删除；同时画布里的节点、连接线、节点组、画板、暂存架移除、任务项删除、宠物对话清空、自定义服务商删除、常用模型移除/清空，以及 Delete / Backspace 删除，都已统一补上确认层。
+
+**文件爆炸（MinerU）**：文件爆炸现在已经从节点右键入口收口为正式 AI 工具。使用方式是：打开左侧 **「⚡ AI 工具」→「通用」→「文件爆炸」**，把它拖到画布后连接 1 个受支持的文件节点并运行。当前已接通的输入类型是 **PDF / DOCX / PPTX / XLS / XLSX / 图片**，其中 PDF 仍是最完整的一条链。当前主线已开始切到 **MinerU 官方在线精准解析 API**：插件会优先走在线任务提交 / 本地文件签名上传 / 结果 Zip 下载；如果后续接到公网 PDF URL，也已经支持直接走官方单任务接口 `POST /api/v4/extract/task`。在真正调用在线 API 前，插件也会先检查本地 PDF 是否超过官方 200MB / 200 页限制，避免白跑一轮上传与轮询。解析结果会按当前 MinerU manifest 聚合为文本节点 + 图片节点的结构，直接落成一个语义节点组；本地 `mineru-api` 仅保留为兼容 fallback。对于 **XLS / XLSX**，当前优先走插件内置的本地结构化拆解：会按工作表输出文本节点与关系索引，不依赖 MinerU Token。文本结果会同时物化成真实 `.md` 文件，不再只停留在内存态 note 节点，因此打开、保存、重载和后续 AI 消费更稳定。爆炸出来的成员节点与组 hub 也开始携带统一的 `explode_*` 元数据，方便后续继续做 stale 检测、来源追溯和 AI 展开消费。
+其中 PPTX 这条链路现在开始按“**图片优先、文本辅助**”收口：同一张幻灯片如果同时解析出图片与文本，输出顺序会优先放幻灯片图片，再放该页文本；标题与关系索引也会从“页”切到“张幻灯片”，便于后续继续往更符合演示文稿语义的 slide 级爆炸推进。
+在支持环境中，PPT / PPTX 现在会优先走**整页幻灯片图片**这条主链，而不再把 MinerU 的零散图片切片当成主图：当前主线已经改成 **PowerPoint / LibreOffice 先导出 PDF，再逐页转成 PNG**；其中 Windows / macOS 优先尝试 PowerPoint，本机没有 PowerPoint 时再回退到 LibreOffice / soffice。文本仍继续走原始文档 → MinerU 提取，因此当前 PPT 拆解已经变成“**整页图片 + 文本提取**”的双路汇聚结构，更接近真实演示文稿语义。与此同时，PPT 整页渲染这条链也开始做**后端完整性校验**：如果检测到原始 PPTX 明明是多页，但某个后端导出的 PDF 最终只成功转出了 1 张或少量页面 PNG，就会明确报错，提示优先安装 / 使用 PowerPoint，其次是 LibreOffice，而不会再把不完整结果静默当成成功输出。
+这一轮又补了 PowerPoint 导出 PDF 的**真实落盘校验**：macOS / Windows 在调用 PowerPoint 导出后，不再只看命令有没有返回，而是会继续确认目标 PDF 是否真的被写出且是有效 PDF 头；如果 PowerPoint 表面成功、实际只留下空文件或根本没落盘，现在会直接报出“PDF 没有真正写出”的具体错误，而不再被误包装成“缺少渲染后端”。
+同时，PDF → PNG 这一段也不再继续依赖会在 VSCode 打包环境里丢失 `DOMMatrix` 的旧链路，而是改成显式加载 `@napi-rs/canvas` 运行时后再调用 pdf.js 渲染；这样在插件安装态里也能稳定拿到 `DOMMatrix / ImageData / Path2D`，避免再次出现 `DOMMatrix is not defined` 这类打包后才暴露的错误。
+并且这条运行时初始化现在也会主动补齐 `navigator.language / platform / userAgent`，避免 pdf.js 在 Node / VSCode Extension Host 环境里再因为 `navigator` 缺失或字段为空而报出 `Cannot destructure property 'platform' of 'navigator'` 这类错误。
+同时这块也不再直接对 `globalThis.navigator = ...` 赋值，而是改成用 `defineProperty` 做更兼容的运行时补丁；这样即使宿主环境把 `navigator` 暴露成“只有 getter、不可直接赋值”的属性，也不会再报出 `Cannot set property navigator of #<Object> which has only a getter`。
+这一轮继续把 pdf.js 的 worker 入口显式收口为插件内可解析的 `file://` 路径：现在在开始 PDF → PNG 渲染前，会主动把 `pdf.worker.mjs` 配到 `GlobalWorkerOptions.workerSrc`，避免安装态下再次报出 `No "GlobalWorkerOptions.workerSrc" specified.`，并让整页渲染链稳定走到真正的逐页输出。
+同时又补了一层“非浏览器宿主”兜底：PPT 的 PDF→PNG 渲染现在会显式把 pdf.js 的 `disableFontFace / useSystemFonts / CanvasFactory / FilterFactory` 固定到插件内可控实现，并给它注入最小 `ownerDocument` stub，避免某些 VSCode / Electron 宿主把 pdf.js 误带到 DOM 分支后，再报出 `Cannot read properties of undefined (reading 'createElement')`。
+最新一轮又把 PPT / PPTX 的执行顺序重新收口：现在会**先做整页预览导出**，也就是优先请求 PowerPoint / LibreOffice 导出 PDF 并逐页转成 PNG；这样如果系统需要授权，用户会在一开始就看到，而不是等 MinerU 跑了一段时间后才突然被打断。同时文本侧也按你的反馈回到 **MinerU 主解析**，不再默认混入本地 XML 文本骨架，避免把过多图形描述符一并塞给 AI。为了减少“我现在到底进行到哪一步了”的困惑，文件爆炸运行中也开始补上更明确的阶段提示，例如“准备整页预览”“请求导出 PDF”“逐页生成 PNG”“调用 MinerU 拆解”“整理拆解结果”等。
+同时，“同源文件再次拆解会覆盖旧拆解组”的旧逻辑也已撤掉：现在每次运行“文件爆炸”都会新增一组新的拆解节点组，旧结果默认保留，不再偷偷替用户覆盖或删除。并且新组会自动排到旧拆解组下方，避免同源多次拆解时互相压在一起。
+这轮又继续把同源多次拆解的排布收口成更贴近当前显示态的**纵向堆叠列**：如果上一个拆解组还是展开的，新组就贴着展开后的组底部往下排；如果用户已经把旧组折叠，新组就会贴着折叠后的小框继续往下堆，不再按照旧的展开大框预留大片空白区域，减少用户再手动长距离拖动的负担。
+此外，MinerU 在线轮询这条链也补了超时边界收口：现在会接受 `done / success / completed / finished / succeeded` 等完成态；并且只要结果接口已经给出 `full_zip_url`，就会直接进入结果下载，不再被滞后的 `state` 卡成假超时；真正准备抛出超时前也会再补一次最终查询，进一步减少“任务其实已产出结果，但前端仍被误报超时”的情况。
+现在插件内设置面板也已新增 **“文档拆解（MinerU）”** 入口，用户可以像配置 AI 提供商一样，直接在插件设置中填写 MinerU 的模式、在线地址、Token、模型版本、轮询参数与本地 fallback URL；这些配置只写入本机 VS Code 设置，不会进入源码或发布物。
+针对爆炸结果，节点组里现在还会额外生成一份 **“文档关系索引”** note：除了图片文件索引，还会把每个文本 Markdown 文件的资源文件名、节点标题、页码与内容摘要一起串起来；图片节点自身也会带更完整的上下文预览。这样当拆解组连接到 AI 节点时，模型既能拿到文本文件、图片本体，也能直接读到页面关系说明，不再只能靠文件名和顺序去猜文档结构。
+当前同一个 PDF 再次爆炸时，不会再覆盖旧的同源爆炸组和其成员节点，而是默认保留旧结果并继续新增一组新拆解结果。
+现在通过“文件爆炸”工具生成节点组时，也会像普通功能节点输出一样，保留一条从功能节点指向爆炸节点组 hub 的正式输出连线，避免结果看起来像凭空出现，保证工作流语义和视觉逻辑一致。
+同时，“文件爆炸”节点本体现在会直接显示 MinerU Token 配置提示：未配置时会在节点内明确提醒“先去设置”，并提供“打开设置”按钮，减少用户在未配密钥时直接运行导致的误用。
+现在这个按钮也会直接把设置面板切到 **“文档拆解设置”** 子页；并且节点本体会明确说明该工具的作用——把受支持文件拆成可供后续 AI 阅读的文本节点与图片节点组，减少用户只看名字却不知道用途的理解成本。
+这块说明现在也改成了**状态化提示**：节点会直接显示“是否已配置 MinerU Token、是否已连接 1 个受支持文件、当前是否可直接运行”，不再只给静态说明文本。
+本轮又进一步把“文件爆炸”节点的提示区拆成了更清晰的多段结构：状态摘要、功能与目的、运行前检查清单、操作区分开显示，不再把所有说明挤成一团，阅读层级更明确。
+同时，状态摘要颜色也已对齐现有高风险工具的视觉规范：未就绪统一走 warning 黄系，已就绪统一走 info 蓝系，不再混用零散颜色。
+另外，这条 AI 消费链现在也补了更靠近真实运行的回归测试：会直接验证 AI 功能节点在连接爆炸节点组时，拿到的输入顺序确实是“文档关系索引 → 页级文本 → 页级图片”，避免后续回归时又退化成只拿到组壳或顺序错乱。
 
 **蓝图创建**：选中一段包含功能节点的工作流后，可在多选工具栏点击「🔧 创建蓝图」。当前会基于选区生成结构化蓝图草稿，并弹出创建对话框：除了修改蓝图名称、颜色、描述和槽位基础属性外，还会开始显示哪些节点将作为输入/输出占位，哪些数据节点会作为内部结构保留；如果选区仍依赖未选中的上游节点，或直接包含 `group_hub`，会明确提示并阻止创建，避免把隐藏依赖静默带进蓝图定义。
 
@@ -201,6 +226,19 @@
 | `researchSpace.ai.omlxBaseUrl` | `http://localhost:11433/v1` | oMLX 服务地址 |
 | `researchSpace.ai.omlxApiKey` | — | oMLX API Key（可选） |
 | `researchSpace.ai.omlxModel` | — | oMLX 全局模型 |
+| `researchSpace.explosion.provider` | `mineru` | 文件爆炸 Provider（当前首轮只接 MinerU） |
+| `researchSpace.explosion.mineru.apiMode` | `precise` | MinerU API 模式（precise / agent / local） |
+| `researchSpace.explosion.mineru.apiBaseUrl` | `https://mineru.net` | MinerU 在线 API 地址 |
+| `researchSpace.explosion.mineru.apiToken` | — | MinerU 在线 API Token |
+| `researchSpace.explosion.mineru.modelVersion` | `pipeline` | MinerU 精准解析模型版本 |
+| `researchSpace.explosion.mineru.pollIntervalMs` | `2500` | MinerU 在线任务轮询间隔（毫秒） |
+| `researchSpace.explosion.mineru.pollTimeoutMs` | `300000` | MinerU 在线任务轮询超时（毫秒） |
+| `researchSpace.explosion.mineru.mode` | `auto` | 本地 MinerU fallback 请求方式（auto / upload / path） |
+| `researchSpace.explosion.mineru.apiUrl` | `http://localhost:8000` | 本地 MinerU fallback 服务地址 |
+| `researchSpace.explosion.maxUnits` | `200` | 单次爆炸最多保留的文本/图片单元数（0 = 不限制） |
+| `researchSpace.explosion.attachOriginalFileNode` | `true` | 爆炸后是否保留原始文件节点 |
+| `researchSpace.explosion.consumeAsGroup` | `true` | 后续是否优先按语义节点组消费爆炸结果 |
+| `researchSpace.explosion.outputDir` | `.research-space/explosions` | 爆炸结果与 manifest 的工作区相对输出目录 |
 | `researchSpace.ai.maxOutputTokens` | `0` | 聊天类功能节点的最大输出 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.maxContextTokens` | `0` | 聊天类功能节点的最大上下文 tokens（0 = 自动取模型/Provider 可知最大值） |
 | `researchSpace.ai.favoriteModels` | `{}` | 每个 provider 的常用模型列表；功能节点模型下拉优先只显示这里勾选的模型 |
@@ -269,7 +307,7 @@ my-workspace/
 
 ## 版本历史
 
-当前版本：**v2.1.1-alpha.66**（2026-04-22）
+当前版本：**v2.2.1-alpha.1**（2026-04-24）
 
 完整版本历史请查看 [CHANGELOG](CHANGELOG.md)。
 

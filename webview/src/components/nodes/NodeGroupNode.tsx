@@ -37,6 +37,7 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
   );
   const nodes = useCanvasStore(s => s.nodes);
   const deleteNodeGroup = useCanvasStore(s => s.deleteNodeGroup);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const toggleNodeGroupCollapse = useCanvasStore(s => s.toggleNodeGroupCollapse);
   const renameNodeGroup = useCanvasStore(s => s.renameNodeGroup);
   const selectExclusiveNode = useCanvasStore(s => s.selectExclusiveNode);
@@ -210,10 +211,15 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    deleteNodeGroup(group.id);
+                    requestDeleteConfirm({
+                      title: '确认仅删除节点组',
+                      message: `确认仅删除节点组“${group.name}”？组内内容会保留在画布上。`,
+                      confirmLabel: '仅删除组',
+                      onConfirm: () => deleteNodeGroup(group.id, 'group-only'),
+                    });
                   }}
                   style={iconBtnStyle}
-                  title="删除"
+                  title="仅删除组"
                 >
                   x
                 </button>
@@ -274,8 +280,22 @@ export function NodeGroupNode({ id, data, selected }: NodeProps) {
             toggleNodeGroupCollapse(group.id);
             setCtxMenu(null);
           }}
-          onDelete={() => {
-            deleteNodeGroup(group.id);
+          onDeleteGroupOnly={() => {
+            requestDeleteConfirm({
+              title: '确认仅删除节点组',
+              message: `确认仅删除节点组“${group.name}”？组内内容会保留在画布上。`,
+              confirmLabel: '仅删除组',
+              onConfirm: () => deleteNodeGroup(group.id, 'group-only'),
+            });
+            setCtxMenu(null);
+          }}
+          onDeleteGroupAndContent={() => {
+            requestDeleteConfirm({
+              title: '确认删除节点组及内容',
+              message: `确认删除节点组“${group.name}”以及组内全部内容？此操作会一并删除成员节点与相关连线。`,
+              confirmLabel: '删除组及内容',
+              onConfirm: () => deleteNodeGroup(group.id, 'group-and-content'),
+            });
             setCtxMenu(null);
           }}
           onClose={() => setCtxMenu(null)}
@@ -307,12 +327,13 @@ const iconBtnStyle: React.CSSProperties = {
   padding: 0,
 };
 
-function GroupMenu({ x, y, onRename, onToggle, onDelete, onClose }: {
+function GroupMenu({ x, y, onRename, onToggle, onDeleteGroupOnly, onDeleteGroupAndContent, onClose }: {
   x: number;
   y: number;
   onRename: () => void;
   onToggle: () => void;
-  onDelete: () => void;
+  onDeleteGroupOnly: () => void;
+  onDeleteGroupAndContent: () => void;
   onClose: () => void;
 }) {
   const menuRef = React.useRef<HTMLDivElement>(null);
@@ -334,7 +355,8 @@ function GroupMenu({ x, y, onRename, onToggle, onDelete, onClose }: {
     }}>
       <MenuItem label="重命名" onClick={onRename} />
       <MenuItem label="折叠/展开" onClick={onToggle} />
-      <MenuItem label="删除组" onClick={onDelete} danger />
+      <MenuItem label="仅删除组" onClick={onDeleteGroupOnly} danger />
+      <MenuItem label="删除组及内容" onClick={onDeleteGroupAndContent} danger />
     </div>
   );
 }

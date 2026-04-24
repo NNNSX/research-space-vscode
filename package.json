@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.1.1-alpha.67",
+  "version": "2.2.1-alpha.1",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -241,6 +241,89 @@
           "default": 0,
           "description": "Global max context tokens for text-generation providers (0 = auto: use model/provider maximum when known)"
         },
+        "researchSpace.explosion.provider": {
+          "type": "string",
+          "enum": [
+            "mineru"
+          ],
+          "default": "mineru",
+          "description": "Document explosion provider for multimodal file decomposition"
+        },
+        "researchSpace.explosion.mineru.apiMode": {
+          "type": "string",
+          "enum": [
+            "precise",
+            "agent",
+            "local"
+          ],
+          "default": "precise",
+          "description": "MinerU API mode for file explosion"
+        },
+        "researchSpace.explosion.mineru.apiBaseUrl": {
+          "type": "string",
+          "default": "https://mineru.net",
+          "description": "MinerU online API base URL"
+        },
+        "researchSpace.explosion.mineru.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "MinerU online API bearer token"
+        },
+        "researchSpace.explosion.mineru.modelVersion": {
+          "type": "string",
+          "enum": [
+            "pipeline",
+            "vlm",
+            "MinerU-HTML"
+          ],
+          "default": "pipeline",
+          "description": "MinerU model version for precise online extraction"
+        },
+        "researchSpace.explosion.mineru.pollIntervalMs": {
+          "type": "number",
+          "default": 2500,
+          "description": "Polling interval for MinerU online extraction tasks in milliseconds"
+        },
+        "researchSpace.explosion.mineru.pollTimeoutMs": {
+          "type": "number",
+          "default": 300000,
+          "description": "Polling timeout for MinerU online extraction tasks in milliseconds"
+        },
+        "researchSpace.explosion.mineru.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "upload",
+            "path"
+          ],
+          "default": "auto",
+          "description": "Local MinerU fallback request mode for PDF explosion"
+        },
+        "researchSpace.explosion.mineru.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Local MinerU fallback API base URL"
+        },
+        "researchSpace.explosion.maxUnits": {
+          "type": "number",
+          "default": 200,
+          "description": "Maximum number of normalized text/image units kept from one explosion (0 = unlimited)"
+        },
+        "researchSpace.explosion.attachOriginalFileNode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep the original file node alongside exploded outputs"
+        },
+        "researchSpace.explosion.consumeAsGroup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefer consuming explosion outputs as a semantic group_hub input"
+        },
+        "researchSpace.explosion.outputDir": {
+          "type": "string",
+          "default": ".research-space/explosions",
+          "description": "Relative workspace directory for explosion artifacts and manifests"
+        },
         "researchSpace.canvas.autoSave": {
           "type": "boolean",
           "default": true,
@@ -401,7 +484,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@napi-rs/canvas": "^0.1.99",
     "pdf-parse": "^1.1.1",
+    "pdf-to-img": "^6.0.0",
     "uuid": "^11.0.0",
     "yauzl": "^2.10.0"
   }

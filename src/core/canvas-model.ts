@@ -43,6 +43,13 @@ export interface SettingsSnapshot {
   aiHubMixTtsModel?: string;        // Default model for TTS (v0.6.2)
   aiHubMixSttModel?: string;        // Default model for STT (v0.6.2)
   aiHubMixVideoGenModel?: string;   // Default model for video generation (v0.6.2)
+  mineruApiMode: 'precise' | 'agent' | 'local';
+  mineruApiBaseUrl: string;
+  mineruApiToken: string;
+  mineruModelVersion: 'pipeline' | 'vlm' | 'MinerU-HTML';
+  mineruPollIntervalMs: number;
+  mineruPollTimeoutMs: number;
+  mineruLocalApiUrl: string;
   petAiProvider?: string;            // Pet AI provider override: 'auto' | provider id (v0.10.7)
   petAiModel?: string;               // Pet AI model override (empty = provider default) (v0.10.7)
   testMode?: boolean;
@@ -116,6 +123,21 @@ export interface NodeMeta {
 
   // Group hub metadata
   hub_group_id?: string;             // visual node-group container id
+
+  // Explosion metadata
+  explode_session_id?: string;
+  explode_provider?: 'mineru';
+  explode_source_file_path?: string;
+  explode_source_node_id?: string;
+  explode_source_hash?: string;
+  explode_status?: 'running' | 'ready' | 'failed' | 'stale';
+  explode_source_type?: 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'image' | 'unknown';
+  exploded_from_node_id?: string;
+  explode_unit_type?: 'page' | 'slide' | 'sheet' | 'section';
+  explode_unit_index?: number;
+  explode_kind?: 'text' | 'image' | 'table' | 'chart' | 'equation';
+  explode_order?: number;
+  explode_bbox?: [number, number, number, number];
 
   // Blueprint instance metadata
   blueprint_def_id?: string;
@@ -244,8 +266,8 @@ export interface JsonToolDef {
   postProcessType: string | null;
   /** UI rendering mode. 'chat' enables the rich prompt editor with file @references. */
   uiMode?: 'default' | 'chat';
-  /** API type for multimodal tools. 'chat' (default) uses the LLM streaming path. */
-  apiType?: 'chat' | 'image_generation' | 'image_edit' | 'tts' | 'stt' | 'video_generation';
+  /** API type for multimodal / system tools. 'chat' (default) uses the LLM streaming path. */
+  apiType?: 'chat' | 'image_generation' | 'image_edit' | 'tts' | 'stt' | 'video_generation' | 'explosion';
   /** Named input slots. When defined, connecting a data node triggers a role picker dialog. */
   slots?: SlotDef[];
   /** Tool category for panel grouping. */
@@ -499,6 +521,7 @@ export type WebviewMessage =
   | { type: 'restoreOutputVersion'; filePath: string }
   | { type: 'requestFileContent'; filePath: string; requestId: string }
   | { type: 'previewFile'; filePath: string }
+  | { type: 'explodePdfNode'; nodeId: string }
   | { type: 'runPipeline'; triggerNodeId: string; canvas?: CanvasFile }
   | { type: 'runBlueprint'; nodeId: string; canvas?: CanvasFile; resumeFromFailure?: boolean }
   | { type: 'createBlueprintDraft'; selectedNodeIds: string[]; canvas?: CanvasFile }
@@ -549,6 +572,7 @@ export type ExtensionMessage =
   | { type: 'aiDone'; runId: string; node: CanvasNode; edge: CanvasEdge }
   | { type: 'aiError'; runId: string; nodeId?: string; message: string; issueKind?: RunIssueKind }
   | { type: 'imageUri'; filePath: string; uri: string }
+  | { type: 'pdfExploded'; sourceNodeId: string; producerNodeId?: string; groupName: string; nodes: CanvasNode[]; warnings?: string[] }
   | { type: 'modelList'; provider: string; models: ModelInfo[] }
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
   | ({ type: 'pipelineStarted' } & PipelineStartPayload)

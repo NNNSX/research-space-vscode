@@ -12,6 +12,9 @@ import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory'
 import { extractPreviewWithMeta } from '../core/content-extractor';
 import { deleteBlueprintDefinition, listBlueprintDefinitions, readBlueprintDefinition, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
 import { runBlueprintInstance } from '../blueprint/blueprint-runner';
+import { explodeDocumentNodeViaMinerU } from '../explosion/mineru-pdf-explosion';
+import { isMinerUSupportedFilePath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
+import { MinerUError, formatMinerUErrorForDisplay } from '../explosion/mineru-adapter';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -728,6 +731,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'deleteNote': {
         const relPath = msg['filePath'] as string;
         if (!relPath) { break; }
+        // Guardrail: no current webview UI should call deleteNote directly.
+        // If a future UI re-exposes this action to users, it must provide at
+        // least one explicit confirmation layer in the webview or host.
         const { toAbsPath } = await import('../core/storage');
         const absPath = toAbsPath(relPath, document.uri);
         const fileUri = vscode.Uri.file(absPath);
@@ -856,6 +862,54 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           : path.join(path.dirname(document.uri.fsPath), filePath);
         const uri = webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
         webview.postMessage({ type: 'imageUri', filePath, uri });
+        break;
+      }
+
+      case 'explodePdfNode': {
+        const nodeId = msg['nodeId'] as string;
+        if (!nodeId) { break; }
+        const sourceNode = document.data.nodes.find(node => node.id === nodeId);
+        if (!sourceNode) {
+          webview.postMessage({ type: 'toastError', message: '找不到要爆炸的 PDF 节点。' });
+          break;
+        }
+        if (!isMinerUSupportedFilePath(sourceNode.file_path)) {
+          webview.postMessage({ type: 'toastError', message: `当前节点不是受支持的文件，MinerU 当前仅支持 ${MINERU_SUPPORTED_FILE_HINT}。` });
+          break;
+        }
+        try {
+          const result = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Research Space：正在拆解 ${sourceNode.title || '文件'}`,
+            cancellable: false,
+          }, async progress => explodeDocumentNodeViaMinerU(sourceNode, document.uri, {
+            onProgress: message => {
+              progress.report({ message });
+            },
+          }));
+          webview.postMessage({
+            type: 'pdfExploded',
+            sourceNodeId: result.sourceNodeId,
+            groupName: result.groupName,
+            nodes: result.nodes,
+            warnings: result.warnings,
+          });
+          if (result.warnings.length > 0) {
+            vscode.window.showWarningMessage(`MinerU 爆炸已完成，但有 ${result.warnings.length} 条提示：${result.warnings[0]}`);
+          }
+        } catch (e) {
+          const message = formatMinerUErrorForDisplay(e);
+          webview.postMessage({ type: 'toastError', message: `文件爆炸失败: ${message}` });
+          if (e instanceof MinerUError && (e.code === 'config_missing_token' || e.code === 'api_auth_failed')) {
+            const action = await vscode.window.showErrorMessage(
+              message,
+              '打开 MinerU 设置',
+            );
+            if (action === '打开 MinerU 设置') {
+              await vscode.commands.executeCommand('workbench.action.openSettings', 'researchSpace.explosion.mineru');
+            }
+          }
+        }
         break;
       }
 
@@ -1607,6 +1661,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     const ai = vscode.workspace.getConfiguration('researchSpace.ai');
     const canvas = vscode.workspace.getConfiguration('researchSpace.canvas');
     const pet = vscode.workspace.getConfiguration('researchSpace.pet');
+    const explosion = vscode.workspace.getConfiguration('researchSpace.explosion');
     return {
       globalProvider:           ai.get<string>('provider', 'copilot'),
       copilotModel:             ai.get<string>('copilotModel', 'gpt-4.1') || 'gpt-4.1',
@@ -1630,6 +1685,13 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       aiHubMixTtsModel:         ai.get<string>('aiHubMixTtsModel', ''),
       aiHubMixSttModel:         ai.get<string>('aiHubMixSttModel', ''),
       aiHubMixVideoGenModel:    ai.get<string>('aiHubMixVideoGenModel', ''),
+      mineruApiMode:            explosion.get<'precise' | 'agent' | 'local'>('mineru.apiMode', 'precise'),
+      mineruApiBaseUrl:         explosion.get<string>('mineru.apiBaseUrl', 'https://mineru.net'),
+      mineruApiToken:           explosion.get<string>('mineru.apiToken', ''),
+      mineruModelVersion:       explosion.get<'pipeline' | 'vlm' | 'MinerU-HTML'>('mineru.modelVersion', 'pipeline'),
+      mineruPollIntervalMs:     explosion.get<number>('mineru.pollIntervalMs', 2500),
+      mineruPollTimeoutMs:      explosion.get<number>('mineru.pollTimeoutMs', 300000),
+      mineruLocalApiUrl:        explosion.get<string>('mineru.apiUrl', 'http://localhost:8000'),
       petAiProvider:            pet.get<string>('aiProvider', 'auto'),
       petAiModel:               pet.get<string>('aiModel', ''),
       testMode:                 process.env.RESEARCH_SPACE_TEST_MODE === '1',
@@ -1640,6 +1702,7 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
     const target = vscode.ConfigurationTarget.Global;
     const ai = vscode.workspace.getConfiguration('researchSpace.ai');
     const canvasCfg = vscode.workspace.getConfiguration('researchSpace.canvas');
+    const explosionCfg = vscode.workspace.getConfiguration('researchSpace.explosion');
     switch (key) {
       case 'globalProvider':          await ai.update('provider', value, target);                break;
       case 'copilotModel':            await ai.update('copilotModel', value, target);            break;
@@ -1663,6 +1726,13 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'aiHubMixTtsModel':        await ai.update('aiHubMixTtsModel', value, target);        break;
       case 'aiHubMixSttModel':        await ai.update('aiHubMixSttModel', value, target);        break;
       case 'aiHubMixVideoGenModel':   await ai.update('aiHubMixVideoGenModel', value, target);   break;
+      case 'mineruApiMode':           await explosionCfg.update('mineru.apiMode', value, target); break;
+      case 'mineruApiBaseUrl':        await explosionCfg.update('mineru.apiBaseUrl', value, target); break;
+      case 'mineruApiToken':          await explosionCfg.update('mineru.apiToken', value, target); break;
+      case 'mineruModelVersion':      await explosionCfg.update('mineru.modelVersion', value, target); break;
+      case 'mineruPollIntervalMs':    await explosionCfg.update('mineru.pollIntervalMs', value, target); break;
+      case 'mineruPollTimeoutMs':     await explosionCfg.update('mineru.pollTimeoutMs', value, target); break;
+      case 'mineruLocalApiUrl':       await explosionCfg.update('mineru.apiUrl', value, target); break;
       case 'petAiProvider': {
         const petCfg = vscode.workspace.getConfiguration('researchSpace.pet');
         await petCfg.update('aiProvider', value, target);

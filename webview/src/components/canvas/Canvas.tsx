@@ -220,6 +220,9 @@ export function Canvas() {
   const selectionMode = useCanvasStore(s => s.selectionMode);
   const undo = useCanvasStore(s => s.undo);
   const redo = useCanvasStore(s => s.redo);
+  const deleteConfirm = useCanvasStore(s => s.deleteConfirm);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
+  const clearDeleteConfirm = useCanvasStore(s => s.clearDeleteConfirm);
   const selectExclusiveEdge = useCanvasStore(s => s.selectExclusiveEdge);
   const clearSelection = useCanvasStore(s => s.clearSelection);
   const updateViewport = useCanvasStore(s => s.updateViewport);
@@ -470,6 +473,22 @@ export function Canvas() {
     updateViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
   }, [updateViewport]);
 
+  const requestEdgeDeleteConfirm = useCallback((edgeIds: string[]) => {
+    const normalizedIds = edgeIds.filter(id => !id.startsWith('syn-'));
+    if (normalizedIds.length === 0) { return; }
+    requestDeleteConfirm({
+      title: normalizedIds.length > 1 ? '确认删除连接线' : '确认删除连接线',
+      message: normalizedIds.length > 1
+        ? `确认删除这 ${normalizedIds.length} 条连接线？`
+        : `确认删除连接线“${normalizedIds[0]}”？`,
+      confirmLabel: normalizedIds.length > 1 ? '删除连接线' : '删除连接线',
+      onConfirm: () => {
+        onEdgesChange(normalizedIds.map(id => ({ type: 'remove' as const, id })));
+        setEdgeContextMenu(null);
+      },
+    });
+  }, [onEdgesChange, requestDeleteConfirm]);
+
   useEffect(() => {
     if (!canvasFile) { return; }
     const target = canvasFile.viewport ?? { x: 0, y: 0, zoom: 1 };
@@ -583,6 +602,57 @@ export function Canvas() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [nodes, selectedNodeIds, onNodesChange, setSelectedNodeIds, duplicateNode, fitView, setSearchOpen, saveNow]);
+
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) { return false; }
+      const tag = target.tagName.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || target.isContentEditable;
+    };
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) { return; }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') { return; }
+      if (isEditableTarget(e.target)) { return; }
+      if (deleteConfirm) { return; }
+
+      const selectedEdgeIds = edges
+        .filter(edge => edge.selected && !edge.id.startsWith('syn-'))
+        .map(edge => edge.id);
+      const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
+      if (selectedCount === 0) { return; }
+
+      e.preventDefault();
+      const nodeIds = [...selectedNodeIds];
+      requestDeleteConfirm({
+        title: '确认删除所选内容',
+        message: selectedEdgeIds.length > 0 && nodeIds.length > 0
+          ? `确认删除已选中的 ${nodeIds.length} 个节点和 ${selectedEdgeIds.length} 条连接线？`
+          : nodeIds.length > 0
+            ? `确认删除已选中的 ${nodeIds.length} 个节点？`
+            : `确认删除已选中的 ${selectedEdgeIds.length} 条连接线？`,
+        confirmLabel: '删除所选内容',
+        onConfirm: () => {
+          if (selectedEdgeIds.length > 0) {
+            onEdgesChange(selectedEdgeIds.map(id => ({ type: 'remove' as const, id })));
+          }
+          if (nodeIds.length > 0) {
+            const dangling = edges
+              .filter(edge =>
+                !edge.id.startsWith('syn-') &&
+                (nodeIds.includes(edge.source) || nodeIds.includes(edge.target))
+              )
+              .map(edge => ({ type: 'remove' as const, id: edge.id }));
+            if (dangling.length > 0) { onEdgesChange(dangling); }
+            onNodesChange(nodeIds.map(id => ({ type: 'remove' as const, id })));
+          }
+        },
+      });
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [deleteConfirm, edges, onEdgesChange, onNodesChange, requestDeleteConfirm, selectedNodeIds]);
 
   // Search focus jump: fit to current match
   useEffect(() => {
@@ -705,7 +775,7 @@ export function Canvas() {
           maxZoom={4}
           fitView={!hasPersistedViewport}
           onMoveEnd={handleMoveEnd}
-          deleteKeyCode={['Delete', 'Backspace']}
+          deleteKeyCode={null}
           style={{ background: 'var(--vscode-editor-background)' }}
         >
           <Background
@@ -731,8 +801,7 @@ export function Canvas() {
               x={edgeContextMenu.x}
               y={edgeContextMenu.y}
               onDelete={() => {
-                onEdgesChange([{ type: 'remove', id: edgeContextMenu.edgeId }]);
-                setEdgeContextMenu(null);
+                requestEdgeDeleteConfirm([edgeContextMenu.edgeId]);
               }}
               onClose={() => setEdgeContextMenu(null)}
             />
@@ -754,6 +823,19 @@ export function Canvas() {
             slots={pendingConnection.targetToolDef.slots ?? []}
             onSelect={role => confirmConnection(role)}
             onCancel={cancelConnection}
+          />
+        )}
+        {deleteConfirm && (
+          <DeleteConfirmDialog
+            title={deleteConfirm.title}
+            message={deleteConfirm.message}
+            confirmLabel={deleteConfirm.confirmLabel}
+            onCancel={clearDeleteConfirm}
+            onConfirm={() => {
+              const action = deleteConfirm.onConfirm;
+              clearDeleteConfirm();
+              action();
+            }}
           />
         )}
         {/* Large drop-zone overlay when dragging external files (Shift held) */}
@@ -793,6 +875,99 @@ export function Canvas() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancel();
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        onConfirm();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onCancel, onConfirm]);
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 100120,
+        background: 'rgba(0,0,0,0.36)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={event => event.stopPropagation()}
+        style={{
+          width: 'min(420px, calc(100vw - 32px))',
+          borderRadius: 10,
+          border: '1px solid var(--vscode-panel-border)',
+          background: 'var(--vscode-editor-background)',
+          boxShadow: '0 18px 40px rgba(0,0,0,0.35)',
+          padding: 18,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--vscode-foreground)' }}>{title}</div>
+        <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--vscode-descriptionForeground, var(--vscode-foreground))' }}>
+          {message}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 6,
+              border: '1px solid var(--vscode-button-secondaryBorder, var(--vscode-panel-border))',
+              background: 'var(--vscode-button-secondaryBackground, transparent)',
+              color: 'var(--vscode-button-secondaryForeground, var(--vscode-foreground))',
+              cursor: 'pointer',
+            }}
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 6,
+              border: '1px solid transparent',
+              background: 'var(--vscode-button-background)',
+              color: 'var(--vscode-button-foreground)',
+              cursor: 'pointer',
+            }}
+          >
+            {confirmLabel ?? '确认删除'}
+          </button>
+        </div>
       </div>
     </div>
   );

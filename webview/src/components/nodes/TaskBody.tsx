@@ -6,8 +6,31 @@ import { postMessage } from '../../bridge';
 
 type TaskItem = { id: string; label: string; done: boolean };
 
+export function buildTaskPreview(items: TaskItem[]): string {
+  const done = items.filter(item => item.done).length;
+  const total = items.length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return [
+    `任务进度: ${done}/${total} (${pct}%)`,
+    ...items.map(item => `${item.done ? '[x]' : '[ ]'} ${item.label}`),
+  ].join('\n');
+}
+
+export function buildTaskMarkdown(title: string, items: TaskItem[]): string {
+  const done = items.filter(item => item.done).length;
+  return [
+    `# ${title}`,
+    '',
+    `进度: ${done}/${items.length}`,
+    '',
+    ...items.map(item => `- [${item.done ? 'x' : ' '}] ${item.label}`),
+    '',
+  ].join('\n');
+}
+
 export function TaskBody({ node }: { node: CanvasNode }) {
   const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const [newLabel, setNewLabel] = React.useState('');
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -17,23 +40,9 @@ export function TaskBody({ node }: { node: CanvasNode }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const saveItems = (next: TaskItem[]) => {
-    const preview = [
-      `任务进度: ${done}/${total} (${pct}%)`,
-      ...next.map(i => `${i.done ? '[x]' : '[ ]'} ${i.label}`),
-    ].join('\n');
-    updateNodeMeta(node.id, { task_items: next, content_preview: preview });
-    // Sync to disk file if node has a file_path
+    updateNodeMeta(node.id, { task_items: next, content_preview: buildTaskPreview(next) });
     if (node.file_path) {
-      const doneCount = next.filter(i => i.done).length;
-      const md = [
-        `# ${node.title}`,
-        '',
-        `进度: ${doneCount}/${next.length}`,
-        '',
-        ...next.map(i => `- [${i.done ? 'x' : ' '}] ${i.label}`),
-        '',
-      ].join('\n');
-      postMessage({ type: 'syncDataNodeFile', nodeId: node.id, content: md });
+      postMessage({ type: 'syncDataNodeFile', nodeId: node.id, content: buildTaskMarkdown(node.title, next) });
     }
   };
 
@@ -50,7 +59,14 @@ export function TaskBody({ node }: { node: CanvasNode }) {
   };
 
   const removeItem = (id: string) => {
-    saveItems(items.filter(i => i.id !== id));
+    const item = items.find(entry => entry.id === id);
+    if (!item) { return; }
+    requestDeleteConfirm({
+      title: '确认删除任务项',
+      message: `确认删除任务项“${item.label}”？`,
+      confirmLabel: '删除任务项',
+      onConfirm: () => saveItems(items.filter(i => i.id !== id)),
+    });
   };
 
   return (
@@ -59,7 +75,6 @@ export function TaskBody({ node }: { node: CanvasNode }) {
       style={{ display: 'flex', flexDirection: 'column', gap: 4, height: '100%' }}
       onMouseDown={e => e.stopPropagation()}
     >
-      {/* Progress bar */}
       {total > 0 && (
         <div style={{ flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -86,7 +101,6 @@ export function TaskBody({ node }: { node: CanvasNode }) {
         </div>
       )}
 
-      {/* Items — fills available space */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {items.map(item => (
           <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
@@ -104,7 +118,7 @@ export function TaskBody({ node }: { node: CanvasNode }) {
               textDecoration: item.done ? 'line-through' : 'none',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {item.label}
+              {item.done ? '✓ ' : ''}{item.label}
             </span>
             <button
               onClick={() => removeItem(item.id)}
@@ -121,7 +135,6 @@ export function TaskBody({ node }: { node: CanvasNode }) {
         ))}
       </div>
 
-      {/* Add new item */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
         <input
           className="nodrag"

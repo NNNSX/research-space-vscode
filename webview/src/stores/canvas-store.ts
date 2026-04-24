@@ -71,6 +71,15 @@ export interface FlowEdge {
   selected?: boolean;
 }
 
+export type NodeGroupDeleteMode = 'group-only' | 'group-and-content';
+
+export interface CanvasDeleteConfirmState {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  onConfirm: () => void;
+}
+
 // ── Store state ─────────────────────────────────────────────────────────────
 interface PendingConnection {
   connection: Connection;
@@ -232,6 +241,7 @@ interface CanvasState {
   pendingStagingMaterializations: Record<string, { position: { x: number; y: number } }>;
   settings: SettingsSnapshot | null;
   settingsPanelOpen: boolean;
+  settingsPanelDetailView: 'llm' | 'multimodal' | 'explosion' | 'canvas' | 'pet' | null;
   toolDefs: JsonToolDef[];
   nodeDefs: DataNodeDef[];
   pendingConnection: PendingConnection | null;
@@ -241,6 +251,7 @@ interface CanvasState {
   nodeGroups: NodeGroup[];
   activeBoardId: string | null;
   boardDropdownOpen: boolean;
+  deleteConfirm: CanvasDeleteConfirmState | null;
   selectedNodeIds: string[];
   selectionMode: boolean;
   searchOpen: boolean;
@@ -290,6 +301,7 @@ interface CanvasState {
   setFullContent(nodeId: string, content: string): void;
   setFullContents(entries: Array<{ nodeId: string; content: string }>): void;
   addToStaging(nodes: CanvasNode[]): void;
+  applyPdfExplosion(sourceNodeId: string, producerNodeId: string | undefined, groupName: string, nodes: CanvasNode[]): void;
   removeFromStaging(nodeId: string): void;
   commitStagingNode(nodeId: string, position: { x: number; y: number }): void;
   resolveStagingMaterialization(sourceNodeId: string, node: CanvasNode, position: { x: number; y: number }): void;
@@ -330,6 +342,7 @@ interface CanvasState {
   setModelCache(provider: string, models: ModelInfo[]): void;
   setSettings(s: SettingsSnapshot): void;
   setSettingsPanelOpen(open: boolean): void;
+  openSettingsDetailView(view: 'llm' | 'multimodal' | 'explosion' | 'canvas' | 'pet'): void;
   setToolDefs(defs: JsonToolDef[]): void;
   setNodeDefs(defs: DataNodeDef[]): void;
   setOutputHistory(data: import('../../../src/core/canvas-model').OutputHistoryPayload | null): void;
@@ -338,6 +351,8 @@ interface CanvasState {
   selectExclusiveEdge(edgeId: string): void;
   clearSelection(): void;
   setSelectionMode(on: boolean): void;
+  requestDeleteConfirm(confirm: CanvasDeleteConfirmState): void;
+  clearDeleteConfirm(): void;
   // ── Search methods ──
   setSearchOpen(open: boolean): void;
   setSearchQuery(query: string): void;
@@ -345,7 +360,7 @@ interface CanvasState {
   prevSearchMatch(): void;
   // ── Node Group methods ──
   createNodeGroup(name: string, nodeIds: string[], color?: { color: string; borderColor: string }): void;
-  deleteNodeGroup(groupId: string): void;
+  deleteNodeGroup(groupId: string, mode?: NodeGroupDeleteMode): void;
   renameNodeGroup(groupId: string, name: string): void;
   toggleNodeGroupCollapse(groupId: string): void;
   removeNodeFromGroup(groupId: string, nodeId: string): void;
@@ -1792,11 +1807,53 @@ export function endBlueprintDrag() {
   _blueprintDragMembers = new Set();
 }
 
+const PDF_EXPLOSION_COLUMN_GAP = 40;
+const PDF_EXPLOSION_ROW_GAP = 28;
+const PDF_EXPLOSION_COLUMN_WIDTH = 340;
+const PDF_EXPLOSION_ROW_HEIGHT = 228;
+const PDF_EXPLOSION_GROUP_GAP = 60;
+
 const GROUP_PADDING = 30;
 const GROUP_MIN_WIDTH = 220;
 const GROUP_MIN_HEIGHT = 140;
 const HUB_COLLAPSED_WIDTH = 220;
 const HUB_COLLAPSED_HEIGHT = 72;
+
+function buildFlowNodeFromCanvasNode(node: CanvasNode): FlowNode {
+  return {
+    id: node.id,
+    type: nodeTypeToFlowType(node.node_type),
+    position: node.position,
+    data: node,
+    width: node.size.width,
+    height: node.size.height,
+  };
+}
+
+function placePdfExplosionNodes(sourceNode: CanvasNode, nodes: CanvasNode[], existingGroups: NodeGroup[] = []): CanvasNode[] {
+  const sourceWidth = sourceNode.size?.width ?? DEFAULT_SIZES.paper.width;
+  const anchorGroup = existingGroups.reduce<NodeGroup | null>((lowest, group) => {
+    const currentBottom = group.bounds.y + (group.collapsed ? HUB_COLLAPSED_HEIGHT : group.bounds.height);
+    if (!lowest) {
+      return group;
+    }
+    const lowestBottom = lowest.bounds.y + (lowest.collapsed ? HUB_COLLAPSED_HEIGHT : lowest.bounds.height);
+    return currentBottom > lowestBottom ? group : lowest;
+  }, null);
+  const originX = anchorGroup
+    ? anchorGroup.bounds.x + GROUP_PADDING
+    : sourceNode.position.x + sourceWidth + 120;
+  const originY = anchorGroup
+    ? anchorGroup.bounds.y + (anchorGroup.collapsed ? HUB_COLLAPSED_HEIGHT : anchorGroup.bounds.height) + PDF_EXPLOSION_GROUP_GAP + GROUP_PADDING
+    : sourceNode.position.y;
+  return nodes.map((node, index) => ({
+    ...node,
+    position: {
+      x: originX + (index % 2) * (PDF_EXPLOSION_COLUMN_WIDTH + PDF_EXPLOSION_COLUMN_GAP),
+      y: originY + Math.floor(index / 2) * (PDF_EXPLOSION_ROW_HEIGHT + PDF_EXPLOSION_ROW_GAP),
+    },
+  }));
+}
 
 function getNodeSize(n: FlowNode): { width: number; height: number } {
   return {
@@ -1839,7 +1896,7 @@ function getHubDisplaySize(group: NodeGroup): { width: number; height: number } 
     : { width: group.bounds.width, height: group.bounds.height };
 }
 
-function buildHubCanvasNode(group: NodeGroup): CanvasNode {
+function buildHubCanvasNode(group: NodeGroup, metaPatch?: CanvasNode['meta']): CanvasNode {
   const { width, height } = getHubDisplaySize(group);
   return {
     id: group.hubNodeId,
@@ -1850,6 +1907,7 @@ function buildHubCanvasNode(group: NodeGroup): CanvasNode {
     meta: {
       hub_group_id: group.id,
       input_order: group.nodeIds,
+      ...(metaPatch ?? {}),
     },
   };
 }
@@ -3718,6 +3776,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   pendingStagingMaterializations: {},
   settings: null,
   settingsPanelOpen: false,
+  settingsPanelDetailView: null,
   toolDefs: [],
   nodeDefs: [],
   pendingConnection: null,
@@ -3727,6 +3786,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   nodeGroups: [],
   activeBoardId: null,
   boardDropdownOpen: false,
+  deleteConfirm: null,
   selectedNodeIds: [],
   selectionMode: false,
   searchOpen: false,
@@ -3926,6 +3986,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nodeGroups,
       activeBoardId: null,
       boardDropdownOpen: false,
+      deleteConfirm: null,
       selectedNodeIds: [],
       selectionMode: false,
       undoStack: [],
@@ -4659,6 +4720,95 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
+  applyPdfExplosion(sourceNodeId, producerNodeId, groupName, nodes) {
+    get().pushUndo();
+    set(state => {
+      if (!state.canvasFile || !Array.isArray(nodes) || nodes.length === 0) { return {}; }
+      const sourceFlowNode = state.nodes.find(node => node.id === sourceNodeId);
+      if (!sourceFlowNode) { return {}; }
+
+      const existingGroups = state.nodeGroups.filter(group => group.sourceNodeId === sourceNodeId);
+      const baseNodeGroups = state.nodeGroups;
+      const baseNodes = state.nodes;
+      const baseEdges = state.edges;
+
+      const placedNodes = placePdfExplosionNodes(sourceFlowNode.data, nodes, existingGroups);
+      const firstExplosionMeta = placedNodes[0]?.meta;
+      const groupMeta: CanvasNode['meta'] = {
+        explode_session_id: firstExplosionMeta?.explode_session_id,
+        explode_provider: firstExplosionMeta?.explode_provider,
+        explode_source_file_path: firstExplosionMeta?.explode_source_file_path ?? sourceFlowNode.data.file_path,
+        explode_source_node_id: sourceNodeId,
+        explode_status: firstExplosionMeta?.explode_status ?? 'ready',
+        explode_source_type: firstExplosionMeta?.explode_source_type ?? 'pdf',
+      };
+      const addedFlowNodes = placedNodes.map(buildFlowNodeFromCanvasNode);
+      const allNodes = [...baseNodes, ...addedFlowNodes];
+      const groupId = uuid();
+      const group: NodeGroup = {
+        id: groupId,
+        name: groupName.trim() || 'PDF · 拆解组',
+        hubNodeId: uuid(),
+        sourceNodeId,
+        nodeIds: placedNodes.map(node => node.id),
+        color: 'rgba(114, 137, 218, 0.12)',
+        borderColor: '#7289da',
+        bounds: calcGroupBounds(allNodes, placedNodes.map(node => node.id)),
+        collapsed: false,
+      };
+      const hubCanvasNode = buildHubCanvasNode(group, groupMeta);
+      const hubFlowNode = syncHubFlowNode({
+        id: hubCanvasNode.id,
+        type: 'nodeGroup',
+        position: hubCanvasNode.position,
+        data: hubCanvasNode,
+        width: hubCanvasNode.size.width,
+        height: hubCanvasNode.size.height,
+      }, group);
+
+      const memberEdges: FlowEdge[] = placedNodes.map(node => ({
+        id: uuid(),
+        source: node.id,
+        target: group.hubNodeId,
+        type: 'custom',
+        data: { edge_type: 'hub_member' },
+        hidden: true,
+      }));
+
+      const outputEdge = producerNodeId
+        ? {
+            id: uuid(),
+            source: producerNodeId,
+            target: group.hubNodeId,
+            type: 'custom' as const,
+            data: { edge_type: 'ai_generated' as const },
+            animated: true,
+          }
+        : null;
+
+      const nodeGroups = [...baseNodeGroups, group];
+      const updatedNodes = [...allNodes, hubFlowNode];
+      const updatedEdges = outputEdge ? [...baseEdges, outputEdge, ...memberEdges] : [...baseEdges, ...memberEdges];
+      const { nodes: canvasNodes, edges: canvasEdges } = flowToCanvas(updatedNodes, updatedEdges);
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: canvasNodes, edges: canvasEdges, nodeGroups };
+
+      for (const node of placedNodes) {
+        if (node.node_type === 'image' && node.file_path) {
+          postMessage({ type: 'requestImageUri', filePath: node.file_path });
+        }
+      }
+
+      debouncedSave(newFile, 'immediate');
+      return {
+        nodes: updatedNodes,
+        edges: updatedEdges,
+        nodeGroups,
+        canvasFile: newFile,
+        selectedNodeIds: state.selectedNodeIds,
+      };
+    });
+  },
+
   addToStaging(nodes) {
     set(state => {
       if (!state.canvasFile) { return {}; }
@@ -5253,7 +5403,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       markCanvasDirty();
     }
   },
-  setSettingsPanelOpen(open) { set({ settingsPanelOpen: open }); },
+  setSettingsPanelOpen(open) {
+    set(state => ({
+      settingsPanelOpen: open,
+      settingsPanelDetailView: open ? state.settingsPanelDetailView : null,
+    }));
+  },
+  openSettingsDetailView(view) {
+    set({ settingsPanelOpen: true, settingsPanelDetailView: view });
+  },
   setToolDefs(defs) {
     set(state => {
       if (!state.canvasFile) {
@@ -5321,6 +5479,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
   },
   setSelectionMode(on) { set({ selectionMode: on }); },
+  requestDeleteConfirm(confirm) {
+    set({ deleteConfirm: confirm });
+  },
+  clearDeleteConfirm() {
+    set({ deleteConfirm: null });
+  },
 
   setSearchOpen(open) {
     set(state => {
@@ -5412,19 +5576,51 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
-  deleteNodeGroup(groupId) {
+  deleteNodeGroup(groupId, mode = 'group-only') {
     get().pushUndo();
     set(state => {
       if (!state.canvasFile) { return {}; }
       const group = state.nodeGroups.find(g => g.id === groupId);
       if (!group) { return {}; }
-      const nodeGroups = state.nodeGroups.filter(g => g.id !== groupId);
-      const nodes = state.nodes.filter(node => node.id !== group.hubNodeId);
-      const edges = state.edges.filter(edge => edge.source !== group.hubNodeId && edge.target !== group.hubNodeId);
+      const removeMembers = mode === 'group-and-content';
+      const removedNodeIds = new Set<string>([
+        group.hubNodeId,
+        ...(removeMembers ? group.nodeIds : []),
+      ]);
+      const nodeGroups = state.nodeGroups
+        .filter(g => g.id !== groupId)
+        .map(g => {
+          if (!removeMembers) { return g; }
+          const nextIds = g.nodeIds.filter(nodeId => !removedNodeIds.has(nodeId));
+          if (nextIds.length === g.nodeIds.length) { return g; }
+          if (nextIds.length === 0) { return null; }
+          return {
+            ...g,
+            nodeIds: nextIds,
+            bounds: calcGroupBounds(state.nodes, nextIds, g.bounds),
+          };
+        })
+        .filter((g): g is NodeGroup => !!g);
+      const activeHubIds = new Set(nodeGroups.map(g => g.hubNodeId));
+      const nodes = syncGroupHubNodes(
+        state.nodes.filter(node =>
+          !removedNodeIds.has(node.id) &&
+          (!isGroupHubNodeType(node.data.node_type) || activeHubIds.has(node.id))
+        ),
+        nodeGroups,
+      );
+      const activeNodeIds = new Set(nodes.map(node => node.id));
+      const edges = state.edges.filter(edge => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target));
       const { nodes: canvasNodes, edges: canvasEdges } = flowToCanvas(nodes, edges);
       const newFile: CanvasFile = { ...state.canvasFile, nodes: canvasNodes, edges: canvasEdges, nodeGroups };
       debouncedSave(newFile);
-      return { nodeGroups, nodes, edges, canvasFile: newFile };
+      return {
+        nodeGroups,
+        nodes,
+        edges,
+        canvasFile: newFile,
+        selectedNodeIds: state.selectedNodeIds.filter(nodeId => activeNodeIds.has(nodeId)),
+      };
     });
   },
 

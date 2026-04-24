@@ -126,13 +126,23 @@ export function Toolbar() {
         borderBottom: '1px solid var(--vscode-panel-border)',
         minHeight: 40,
         flexShrink: 0,
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
+        overflow: 'hidden',
       }}>
-        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--vscode-titleBar-activeForeground)' }}>
-          Research Space
+        <span
+          title="Research Space"
+          style={{
+            fontWeight: 800,
+            fontSize: 13,
+            color: 'var(--vscode-titleBar-activeForeground)',
+            letterSpacing: '0.04em',
+            flexShrink: 0,
+          }}
+        >
+          RS
         </span>
 
-        <div style={{ width: 1, height: 18, background: 'var(--vscode-panel-border)', margin: '0 4px' }} />
+        <div style={{ width: 1, height: 18, background: 'var(--vscode-panel-border)', margin: '0 2px', flexShrink: 0 }} />
 
         <ToolbarButton onClick={undo} title="撤销 (Ctrl+Z)" disabled={undoStack.length === 0}>
           ↩
@@ -144,13 +154,14 @@ export function Toolbar() {
         <div
           title={saveTitle}
           style={{
-            marginLeft: 8,
+            marginLeft: 4,
+            flex: 1,
+            minWidth: 0,
             fontSize: 11,
             fontWeight: 600,
             color: saveState === 'error'
               ? 'var(--vscode-errorForeground, var(--vscode-titleBar-activeForeground))'
               : 'var(--vscode-titleBar-activeForeground)',
-            maxWidth: 320,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -159,7 +170,7 @@ export function Toolbar() {
           {saveLabel}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap', marginLeft: 8, flexShrink: 0 }}>
         <ToolbarButton
           onClick={saveNow}
           title={saveState === 'pending'
@@ -356,7 +367,7 @@ const STEPS: { icon: string; title: string; desc: string }[] = [
   {
     icon: '🖱',
     title: '12. 右键菜单与快捷键',
-    desc: '右键任意节点：删除、复制；笔记节点可重命名（同步文件）。选中节点后 Delete / Backspace 快速删除。数据节点标题栏「预览」按钮在 VSCode 原生查看器中打开文件。',
+    desc: '右键任意节点：删除、复制；笔记节点可重命名（同步文件）。选中节点后 Delete / Backspace 可快速发起删除，但现在会先弹二次确认，避免误删。数据节点标题栏「预览」按钮在 VSCode 原生查看器中打开文件。',
   },
   {
     icon: '⏳',
@@ -478,7 +489,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             <strong style={{ color: 'var(--vscode-foreground)' }}>提示：</strong>{' '}
             右下角 MiniMap 支持拖拽导航。暂存架悬浮在右下角，新增节点先汇聚于此，拖出即可精确放置。
             侧边栏 Research Space 面板以树形展示所有画布及节点，右键可操作。
-            CSV/TSV 文件以表格样式展示。工具栏按钮会根据窗口宽度自动换行。
+            CSV/TSV 文件以表格样式展示。顶栏会优先保持单行，保存状态文案会在空间不足时自动收窄显示。
           </div>
         </div>
 

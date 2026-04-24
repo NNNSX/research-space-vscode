@@ -115,7 +115,10 @@ export class AnthropicProvider implements AIProvider {
     // Build message content blocks
     const msgParts: Anthropic.MessageParam['content'] = [];
     for (const c of contents) {
-      msgParts.push({ type: 'text', text: `[${c.title}]\n` });
+      const textHeader = c.type === 'image' && c.contextText
+        ? `[${c.title}]\n${c.contextText}\n`
+        : `[${c.title}]\n`;
+      msgParts.push({ type: 'text', text: textHeader });
       if (c.type === 'text' && c.text) {
         msgParts.push({ type: 'text', text: c.text + '\n\n' });
       } else if (c.type === 'image' && c.base64 && c.mediaType) {

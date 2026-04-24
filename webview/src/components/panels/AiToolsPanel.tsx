@@ -261,7 +261,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
 |------|------|--------|------|
 | \`category\` | string | \`"general"\` | 工具分类，决定在面板中的分组。可选值：\`"text"\`（文本处理）、\`"research"\`（研究辅助）、\`"multimodal"\`（多模态创作）、\`"project"\`（项目管理）、\`"general"\`（通用） |
 | \`uiMode\` | string | \`"default"\` | UI 渲染模式。\`"default"\` 显示标准参数控件；\`"chat"\` 启用自由对话输入框，支持 \`@文件名\` 引用 |
-| \`apiType\` | string | \`"chat"\` | API 调用类型。\`"chat"\` 走 LLM 流式文本生成；\`"image_generation"\` 图像生成；\`"image_edit"\` 图像编辑；\`"tts"\` 文字转语音；\`"stt"\` 语音转文字；\`"video_generation"\` 视频生成 |
+| \`apiType\` | string | \`"chat"\` | API 调用类型。\`"chat"\` 走 LLM 流式文本生成；\`"image_generation"\` 图像生成；\`"image_edit"\` 图像编辑；\`"tts"\` 文字转语音；\`"stt"\` 语音转文字；\`"video_generation"\` 视频生成；\`"explosion"\` 走系统级文档拆解链路 |
 | \`slots\` | SlotDef[] | 无 | 输入槽定义。定义后，连接数据节点时会弹出角色选择对话框，用于区分不同输入的语义角色 |
 | \`paramMaps\` | object | \`{}\` | 参数值映射表。格式：\`{ "参数名": { "选项值": "映射文本" } }\`。在 systemPromptTemplate 中通过 \`{{参数名:map}}\` 引用 |
 

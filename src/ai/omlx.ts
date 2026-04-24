@@ -130,7 +130,7 @@ export class OMLXProvider implements AIProvider {
         if (c.type === 'text' && c.text) {
           parts.push({ type: 'text', text: `[${c.title}]\n${c.text}` });
         } else if (c.type === 'image' && c.base64 && c.mediaType) {
-          parts.push({ type: 'text', text: `[${c.title}]` });
+          parts.push({ type: 'text', text: c.contextText ? `[${c.title}]\n${c.contextText}` : `[${c.title}]` });
           parts.push({
             type: 'image_url',
             image_url: { url: `data:${c.mediaType};base64,${c.base64}` },

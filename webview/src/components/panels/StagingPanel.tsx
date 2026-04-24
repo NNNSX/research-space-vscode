@@ -64,6 +64,7 @@ export function StagingPanel() {
   const stagingNodes = useCanvasStore(s => s.stagingNodes);
   const pendingStagingMaterializations = useCanvasStore(s => s.pendingStagingMaterializations);
   const removeFromStaging = useCanvasStore(s => s.removeFromStaging);
+  const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
 
   // Only show data nodes + boards — function/blueprint nodes go directly to canvas
   const fileNodes = stagingNodes.filter(n =>
@@ -254,7 +255,12 @@ export function StagingPanel() {
               </span>
             )}
             <button
-              onClick={() => removeFromStaging(node.id)}
+              onClick={() => requestDeleteConfirm({
+                title: '确认从暂存架移除',
+                message: `确认将“${node.title}”从暂存架移除？`,
+                confirmLabel: '移除',
+                onConfirm: () => removeFromStaging(node.id),
+              })}
               disabled={!!pendingStagingMaterializations[node.id]}
               title="从暂存架移除"
               style={{

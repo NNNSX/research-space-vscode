@@ -154,7 +154,7 @@ export class OllamaProvider implements AIProvider {
       if (c.type === 'text' && c.text) {
         textParts.push(`[${c.title}]\n${c.text}`);
       } else if (c.type === 'image') {
-        textParts.push(`[${c.title}]`);
+        textParts.push(c.contextText ? `[${c.title}]\n${c.contextText}` : `[${c.title}]`);
         // Prefer pre-extracted base64 from content-extractor; fall back to reading the file.
         if (c.base64) {
           imageBase64List.push(c.base64);

@@ -554,6 +554,7 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
   // ── Context menu state ──
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
+
   // ── Resize handler — persist new size to canvas store ──
   const handleResize = useCallback((_event: unknown, params: { width: number; height: number }) => {
     previewNodeSize(data.id, params.width, params.height);

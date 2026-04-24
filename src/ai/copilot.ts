@@ -102,7 +102,10 @@ export class CopilotProvider implements AIProvider {
       parts.push(new vscode.LanguageModelTextPart(systemPrompt + '\n\n'));
     }
     for (const c of contents) {
-      parts.push(new vscode.LanguageModelTextPart(`[${c.title}]\n`));
+      const textHeader = c.type === 'image' && c.contextText
+        ? `[${c.title}]\n${c.contextText}\n`
+        : `[${c.title}]\n`;
+      parts.push(new vscode.LanguageModelTextPart(textHeader));
       if (c.type === 'text' && c.text) {
         parts.push(new vscode.LanguageModelTextPart(c.text + '\n\n'));
       } else if (c.type === 'image' && c.localPath) {
