@@ -2,13 +2,14 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { v4 as uuid } from 'uuid';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { usePetStore } from '../../stores/pet-store';
-import { postMessage } from '../../bridge';
-import type { CustomProviderConfig, SettingsSnapshot } from '../../../../src/core/canvas-model';
+import { onMessage, postMessage } from '../../bridge';
+import type { ConversionDiagnosticStatus, ConversionDiagnosticsReport, CustomProviderConfig, SettingsSnapshot } from '../../../../src/core/canvas-model';
 import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
 import { getAutoModelLabel, getConcreteProviderModelLabel, getFavoriteModelsForProvider, getProviderDisplayName, orderModelsByIds } from '../../utils/model-labels';
 import { PET_TYPES, getPetType, GROUND_THEMES } from '../../pet/pet-types';
 import type { PetTypeId, GroundThemeId } from '../../pet/pet-types';
 import { getPetLevelProgress } from '../../../../src/core/pet-state';
+import { buildCanvasHealthReport, type CanvasHealthReport, type CanvasHealthSeverity } from '../../utils/canvas-health';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,49 @@ const smallBtnStyle: React.CSSProperties = {
   border: '1px solid var(--vscode-button-border, transparent)',
   borderRadius: 3, padding: '3px 7px', fontSize: 11, cursor: 'pointer', flexShrink: 0,
 };
+
+function conversionStatusLabel(status: ConversionDiagnosticStatus): string {
+  switch (status) {
+    case 'ok': return '可用';
+    case 'warning': return '需注意';
+    case 'error': return '不可用';
+    case 'unknown': return '未检测';
+  }
+}
+
+function conversionStatusIcon(status: ConversionDiagnosticStatus): string {
+  switch (status) {
+    case 'ok': return '✓';
+    case 'warning': return '!';
+    case 'error': return '×';
+    case 'unknown': return '?';
+  }
+}
+
+function conversionStatusColor(status: ConversionDiagnosticStatus): string {
+  switch (status) {
+    case 'ok': return 'var(--vscode-terminal-ansiGreen)';
+    case 'warning': return 'var(--vscode-terminal-ansiYellow)';
+    case 'error': return 'var(--vscode-errorForeground, #f48771)';
+    case 'unknown': return 'var(--vscode-descriptionForeground)';
+  }
+}
+
+function canvasHealthSeverityLabel(severity: CanvasHealthSeverity): string {
+  switch (severity) {
+    case 'error': return '错误';
+    case 'warning': return '警告';
+    case 'info': return '提示';
+  }
+}
+
+function canvasHealthSeverityColor(severity: CanvasHealthSeverity): string {
+  switch (severity) {
+    case 'error': return 'var(--vscode-errorForeground, #f48771)';
+    case 'warning': return 'var(--vscode-terminal-ansiYellow)';
+    case 'info': return 'var(--vscode-descriptionForeground)';
+  }
+}
 
 // ── ModelSelect — unified model dropdown ─────────────────────────────────
 
@@ -680,11 +724,13 @@ function buildProviderOptions(customProviders: CustomProviderConfig[]): Searchab
 
 export function SettingsPanel() {
   const settings = useCanvasStore(s => s.settings);
+  const canvasFile = useCanvasStore(s => s.canvasFile);
   const settingsPanelOpen = useCanvasStore(s => s.settingsPanelOpen);
   const setSettingsPanelOpen = useCanvasStore(s => s.setSettingsPanelOpen);
   const settingsPanelDetailView = useCanvasStore(s => s.settingsPanelDetailView);
   const requestDeleteConfirm = useCanvasStore(s => s.requestDeleteConfirm);
   const requestModelCache = useCanvasStore(s => s.requestModelCache);
+  const applyLowRiskCanvasHealthRepairs = useCanvasStore(s => s.applyLowRiskCanvasHealthRepairs);
   const petEnabled = usePetStore(s => s.enabled);
   const petType = usePetStore(s => s.pet.petType);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
@@ -695,6 +741,10 @@ export function SettingsPanel() {
   const [llmTab, setLlmTab] = useState<'overview' | 'builtin' | 'custom'>('overview');
   const [settingsPersistStatus, setSettingsPersistStatus] = useState<SettingsPersistStatus>('saved');
   const [settingsSavedAt, setSettingsSavedAt] = useState<number | null>(null);
+  const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnosticsReport | null>(null);
+  const [conversionDiagnosticsLoading, setConversionDiagnosticsLoading] = useState(false);
+  const [conversionDiagnosticsError, setConversionDiagnosticsError] = useState<string | null>(null);
+  const [canvasHealthReport, setCanvasHealthReport] = useState<CanvasHealthReport | null>(null);
   const firstSettingsSnapshotRef = useRef(true);
 
   const saveSetting = useCallback((key: string, value: unknown) => {
@@ -713,6 +763,43 @@ export function SettingsPanel() {
       postMessage({ type: 'requestSettingsSnapshot' });
     }
   }, [debouncedSend]);
+
+  const requestConversionDiagnostics = useCallback(() => {
+    setConversionDiagnosticsLoading(true);
+    setConversionDiagnosticsError(null);
+    postMessage({ type: 'requestConversionDiagnostics' });
+  }, []);
+
+  const runCanvasHealthCheck = useCallback(() => {
+    setCanvasHealthReport(buildCanvasHealthReport(canvasFile));
+  }, [canvasFile]);
+
+  const confirmLowRiskCanvasHealthRepair = useCallback(() => {
+    if (!canvasHealthReport) { return; }
+    const lowRiskCount = canvasHealthReport.repairPlan.filter(plan => plan.risk === 'low').length;
+    if (lowRiskCount === 0) { return; }
+    requestDeleteConfirm({
+      title: '确认执行低风险修复',
+      message: `将执行 ${lowRiskCount} 项低风险画布结构修复：移除悬挂连线、移除节点组缺失成员引用、去重节点组成员。不会执行中风险修复，也不会删除普通数据节点。确认继续？`,
+      confirmLabel: '执行低风险修复',
+      onConfirm: () => {
+        applyLowRiskCanvasHealthRepairs();
+        const nextCanvas = useCanvasStore.getState().canvasFile;
+        setCanvasHealthReport(buildCanvasHealthReport(nextCanvas));
+      },
+    });
+  }, [applyLowRiskCanvasHealthRepairs, canvasHealthReport, requestDeleteConfirm]);
+
+  useEffect(() => onMessage(msg => {
+    if (msg.type === 'conversionDiagnostics') {
+      setConversionDiagnostics(msg.report);
+      setConversionDiagnosticsLoading(false);
+      setConversionDiagnosticsError(null);
+    } else if (msg.type === 'conversionDiagnosticsError') {
+      setConversionDiagnosticsLoading(false);
+      setConversionDiagnosticsError(msg.message || '诊断失败');
+    }
+  }), []);
 
   useEffect(() => {
     if (!settingsPanelOpen || !settings) { return; }
@@ -1092,6 +1179,102 @@ export function SettingsPanel() {
       <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
         文件转换支持 PDF / Word / PPT / XLS / XLSX / 图片输入：表格文件可在本地转 Markdown / TeX；PDF / Word / PPT 可转 PNG 或继续走 MinerU 拆解为文字 + 图片。Token 仅保存到你本机的 VS Code 设置，不进入源码或发布物。
       </div>
+      <div
+        style={{
+          border: '1px solid var(--vscode-panel-border)',
+          borderRadius: 8,
+          padding: 10,
+          background: 'color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-sideBar-background))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>转换环境诊断</div>
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+              检查 Word / PowerPoint / LibreOffice、PDF 渲染 runtime 和 MinerU 配置，帮助定位文件转换失败原因。
+            </div>
+          </div>
+          <button
+            onClick={requestConversionDiagnostics}
+            disabled={conversionDiagnosticsLoading}
+            style={{
+              ...smallBtnStyle,
+              padding: '5px 10px',
+              opacity: conversionDiagnosticsLoading ? 0.65 : 1,
+              cursor: conversionDiagnosticsLoading ? 'wait' : 'pointer',
+            }}
+          >
+            {conversionDiagnosticsLoading ? '检查中…' : '开始检查'}
+          </button>
+        </div>
+        {conversionDiagnosticsError && (
+          <div style={{ fontSize: 11, color: 'var(--vscode-errorForeground, #f48771)' }}>
+            诊断失败：{conversionDiagnosticsError}
+          </div>
+        )}
+        {conversionDiagnostics && (
+          <>
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
+              最近检查：{new Date(conversionDiagnostics.checkedAt).toLocaleString()} · 平台：{conversionDiagnostics.platform} ·
+              可用 {conversionDiagnostics.summary.ok} / 注意 {conversionDiagnostics.summary.warning} / 不可用 {conversionDiagnostics.summary.error}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {conversionDiagnostics.items.map(result => {
+                const color = conversionStatusColor(result.status);
+                return (
+                  <div
+                    key={result.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '20px 1fr',
+                      gap: 8,
+                      padding: '7px 8px',
+                      borderRadius: 6,
+                      border: '1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent)',
+                      background: 'color-mix(in srgb, var(--vscode-editor-background) 72%, transparent)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        border: `1px solid ${color}`,
+                        color,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 11,
+                        fontWeight: 800,
+                      }}
+                      title={conversionStatusLabel(result.status)}
+                    >
+                      {conversionStatusIcon(result.status)}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700 }}>{result.title}</span>
+                        <span style={{ fontSize: 10, color }}>{conversionStatusLabel(result.status)}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--vscode-foreground)', lineHeight: 1.45 }}>
+                        {result.summary}
+                      </div>
+                      {result.detail && (
+                        <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                          {result.detail}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
       <Field label="API 模式">
         <SearchableSelect
           style={selectStyle}
@@ -1185,6 +1368,152 @@ export function SettingsPanel() {
         />
         <span>自动保存（每 3 分钟）</span>
       </label>
+      <div
+        style={{
+          border: '1px solid var(--vscode-panel-border)',
+          borderRadius: 8,
+          padding: 10,
+          background: 'color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-sideBar-background))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>画布数据健康检查</div>
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+              只读检查当前画布结构，不会自动删除或修复任何节点、连线、画板、节点组或蓝图数据。
+            </div>
+          </div>
+          <button onClick={runCanvasHealthCheck} style={{ ...smallBtnStyle, padding: '5px 10px' }}>
+            开始检查
+          </button>
+        </div>
+        {canvasHealthReport && (
+          <>
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+              最近检查：{new Date(canvasHealthReport.checkedAt).toLocaleString()} ·
+              节点 {canvasHealthReport.stats.nodeCount} / 连线 {canvasHealthReport.stats.edgeCount} / 画板 {canvasHealthReport.stats.boardCount} / 节点组 {canvasHealthReport.stats.nodeGroupCount} / 蓝图 {canvasHealthReport.stats.blueprintNodeCount} / 暂存 {canvasHealthReport.stats.stagingNodeCount}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 10 }}>
+              {(['error', 'warning', 'info'] as CanvasHealthSeverity[]).map(severity => (
+                <span key={severity} style={{ color: canvasHealthSeverityColor(severity) }}>
+                  {canvasHealthSeverityLabel(severity)} {canvasHealthReport.summary[severity]}
+                </span>
+              ))}
+            </div>
+            {canvasHealthReport.issues.length === 0 ? (
+              <div style={{
+                padding: '8px 10px',
+                borderRadius: 6,
+                color: 'var(--vscode-terminal-ansiGreen)',
+                background: 'color-mix(in srgb, var(--vscode-terminal-ansiGreen) 10%, transparent)',
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}>
+                未发现结构问题。
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+                {canvasHealthReport.issues.slice(0, 80).map(entry => {
+                  const color = canvasHealthSeverityColor(entry.severity);
+                  return (
+                    <div
+                      key={entry.id}
+                      style={{
+                        padding: '7px 8px',
+                        borderRadius: 6,
+                        border: '1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent)',
+                        background: 'color-mix(in srgb, var(--vscode-editor-background) 72%, transparent)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700 }}>{entry.title}</span>
+                        <span style={{ fontSize: 10, color }}>{canvasHealthSeverityLabel(entry.severity)}</span>
+                        {entry.targetId && (
+                          <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>{entry.targetId}</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                        {entry.detail}
+                      </div>
+                    </div>
+                  );
+                })}
+                {canvasHealthReport.issues.length > 80 && (
+                  <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>
+                    仅显示前 80 条问题；当前共 {canvasHealthReport.issues.length} 条。
+                  </div>
+                )}
+              </div>
+            )}
+            {canvasHealthReport.repairPlan.length > 0 && (
+              <div
+                style={{
+                  borderTop: '1px solid var(--vscode-panel-border)',
+                  paddingTop: 8,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700 }}>可生成的修复计划（仅预览）</div>
+                <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+                  低风险项可在确认后执行；中风险项继续只展示，不会自动修复。
+                </div>
+                {canvasHealthReport.repairPlan.some(plan => plan.risk === 'low') && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                    <button
+                      onClick={confirmLowRiskCanvasHealthRepair}
+                      style={{
+                        ...smallBtnStyle,
+                        padding: '5px 10px',
+                        background: 'var(--vscode-button-background)',
+                        color: 'var(--vscode-button-foreground)',
+                      }}
+                    >
+                      执行低风险修复
+                    </button>
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 180, overflowY: 'auto' }}>
+                  {canvasHealthReport.repairPlan.slice(0, 50).map(plan => {
+                    const riskColor = plan.risk === 'low'
+                      ? 'var(--vscode-terminal-ansiGreen)'
+                      : plan.risk === 'medium'
+                        ? 'var(--vscode-terminal-ansiYellow)'
+                        : 'var(--vscode-errorForeground, #f48771)';
+                    const riskLabel = plan.risk === 'low' ? '低风险' : plan.risk === 'medium' ? '中风险' : '高风险';
+                    return (
+                      <div
+                        key={plan.issueId}
+                        style={{
+                          padding: '7px 8px',
+                          borderRadius: 6,
+                          border: '1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent)',
+                          background: 'color-mix(in srgb, var(--vscode-editor-background) 72%, transparent)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700 }}>{plan.title}</span>
+                          <span style={{ fontSize: 10, color: riskColor }}>{riskLabel}</span>
+                          {plan.targetId && (
+                            <span style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)' }}>{plan.targetId}</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                          {plan.action}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </Section>
   );
 

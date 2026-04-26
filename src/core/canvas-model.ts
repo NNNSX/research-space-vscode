@@ -55,6 +55,23 @@ export interface SettingsSnapshot {
   testMode?: boolean;
 }
 
+export type ConversionDiagnosticStatus = 'ok' | 'warning' | 'error' | 'unknown';
+
+export interface ConversionDiagnosticItem {
+  id: string;
+  title: string;
+  status: ConversionDiagnosticStatus;
+  summary: string;
+  detail?: string;
+}
+
+export interface ConversionDiagnosticsReport {
+  checkedAt: number;
+  platform: NodeJS.Platform | string;
+  items: ConversionDiagnosticItem[];
+  summary: Record<ConversionDiagnosticStatus, number>;
+}
+
 // ── Node types ─────────────────────────────────────────────────────────────
 export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data';
 export type NodeType = DataNodeType | 'function' | 'group_hub' | 'blueprint';
@@ -480,6 +497,7 @@ export function isHubEdgeType(edgeType: EdgeType | undefined | null): boolean {
 export type WebviewMessage =
   | { type: 'ready' }
   | { type: 'requestSettingsSnapshot' }
+  | { type: 'requestConversionDiagnostics' }
   | { type: 'canvasStateSync'; data: CanvasFile }
   | { type: 'canvasChanged'; data: CanvasFile; requestId?: number }
   | { type: 'saveCanvas'; data: CanvasFile; requestId?: number }
@@ -575,6 +593,8 @@ export type ExtensionMessage =
   | { type: 'pdfExploded'; sourceNodeId: string; producerNodeId?: string; groupName: string; nodes: CanvasNode[]; warnings?: string[] }
   | { type: 'modelList'; provider: string; models: ModelInfo[] }
   | { type: 'settingsSnapshot'; settings: SettingsSnapshot }
+  | { type: 'conversionDiagnostics'; report: ConversionDiagnosticsReport }
+  | { type: 'conversionDiagnosticsError'; message: string }
   | ({ type: 'pipelineStarted' } & PipelineStartPayload)
   | ({ type: 'outputHistory' } & OutputHistoryPayload)
   | { type: 'fileContent'; requestId: string; content: string; language?: string }
