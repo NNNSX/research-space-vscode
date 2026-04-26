@@ -51,7 +51,15 @@ tsconfig.json
 !resources/
 dist/**/*.map
 .gitignore
+AGENTS.md
+CLAUDE.md
 CODEX.md
+VSCode插件规划清单.md
+*规划*.md
+*清单*.md
+*审计*.md
+*开发文档*.md
+*实施记录*.md
 GITHUB_RELEASE_NOTE.md
 eslint.config.cjs
 webview/package.json
