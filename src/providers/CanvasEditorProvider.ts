@@ -15,6 +15,7 @@ import { runBlueprintInstance } from '../blueprint/blueprint-runner';
 import { explodeDocumentNodeViaMinerU } from '../explosion/mineru-pdf-explosion';
 import { isMinerUSupportedFilePath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
 import { MinerUError, formatMinerUErrorForDisplay } from '../explosion/mineru-adapter';
+import { runConversionDiagnostics } from '../explosion/conversion-diagnostics';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -480,6 +481,19 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       case 'requestSettingsSnapshot':
         webview.postMessage({ type: 'settingsSnapshot', settings: this._buildSettingsSnapshot() });
         break;
+
+      case 'requestConversionDiagnostics': {
+        try {
+          const report = await runConversionDiagnostics();
+          webview.postMessage({ type: 'conversionDiagnostics', report });
+        } catch (e) {
+          webview.postMessage({
+            type: 'conversionDiagnosticsError',
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+        break;
+      }
 
       case 'canvasStateSync': {
         const newData = msg['data'] as CanvasFile;

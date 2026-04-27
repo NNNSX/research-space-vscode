@@ -34,6 +34,7 @@ import { collectExpandedInputs, getGroupByHubNodeId } from '../../../src/core/hu
 import { postMessage } from '../bridge';
 import { wouldCreateCycle } from '../utils/graph-utils';
 import { normalizeNodePortId } from '../utils/node-port';
+import { applyLowRiskCanvasHealthRepairs as applyLowRiskCanvasHealthRepairsToFile } from '../utils/canvas-health';
 import { usePetStore } from './pet-store';
 import type { BlueprintDataNodeDef, BlueprintDefinition, BlueprintDraft, BlueprintSlotDef } from '../../../src/blueprint/blueprint-types';
 import type { BlueprintRegistryEntry } from '../../../src/blueprint/blueprint-registry';
@@ -398,6 +399,7 @@ interface CanvasState {
   setPipelineCancelRequested(requested: boolean): void;
   addPipelineWarning(nodeId: string, message: string): void;
   saveNow(): void;
+  applyLowRiskCanvasHealthRepairs(): { changed: boolean; appliedCount: number; actions: string[] };
   runAutosaveCheck(): void;
   markSaveSuccess(savedAt?: number, requestId?: number): void;
   markSaveError(message: string, requestId?: number): void;
@@ -6085,6 +6087,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   saveNow() {
     saveImmediately(get().canvasFile);
+  },
+
+  applyLowRiskCanvasHealthRepairs() {
+    const state = get();
+    if (!state.canvasFile) {
+      return { changed: false, appliedCount: 0, actions: [] };
+    }
+    const result = applyLowRiskCanvasHealthRepairsToFile(state.canvasFile);
+    if (!result.changed) {
+      return { changed: false, appliedCount: 0, actions: [] };
+    }
+
+    get().pushUndo();
+    const { flowNodes, flowEdges } = canvasToFlow(result.canvas.nodes, result.canvas.edges);
+    set({
+      canvasFile: result.canvas,
+      nodes: flowNodes,
+      edges: flowEdges,
+      nodeGroups: result.canvas.nodeGroups ?? [],
+      selectedNodeIds: [],
+      selectedEdgeId: null,
+    });
+    debouncedSave(result.canvas, 'immediate');
+    return {
+      changed: true,
+      appliedCount: result.appliedCount,
+      actions: result.actions,
+    };
   },
 
   runAutosaveCheck() {
