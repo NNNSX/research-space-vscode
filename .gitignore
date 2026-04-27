@@ -12,6 +12,7 @@ dist/
 .env
 .env.*
 
+
 # Internal AI-agent rules / planning docs; never publish or track
 AGENTS.md
 CLAUDE.md

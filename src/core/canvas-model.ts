@@ -104,6 +104,15 @@ export interface NodeMeta {
   // AI output metadata
   ai_provider?: string;      // provider id used to generate this output
   ai_model?: string;         // model name/id used to generate this output
+  ai_source_nodes?: Array<{
+    id: string;
+    label?: string;
+    title: string;
+    node_type: NodeType;
+    file_path?: string;
+  }>;                         // lightweight provenance for generated outputs
+  ai_source_summary?: string; // human-readable source summary
+  ai_citation_warning?: string; // warning if generated text did not include expected inline citations
   input_schema?: ParamDef[];
   param_values?: Record<string, unknown>;
   ai_tool?: string;               // bound tool id (function nodes)
@@ -501,6 +510,7 @@ export type WebviewMessage =
   | { type: 'canvasStateSync'; data: CanvasFile }
   | { type: 'canvasChanged'; data: CanvasFile; requestId?: number }
   | { type: 'saveCanvas'; data: CanvasFile; requestId?: number }
+  | { type: 'exportSelectedMarkdown'; selectedNodeIds: string[]; canvas?: CanvasFile }
   | { type: 'openFile'; filePath: string }
   | { type: 'runFunction'; nodeId: string; canvas?: CanvasFile }
   | { type: 'runBatchFunction'; nodeId: string; canvas?: CanvasFile }

@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.2.2-alpha.6",
+  "version": "2.2.2-alpha.29",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -355,12 +355,12 @@
         "researchSpace.ai.aiHubMixImageGenModel": {
           "type": "string",
           "default": "",
-          "description": "Default model for image generation (empty = use tool default: FLUX.1-Kontext-pro)"
+          "description": "Default model for image generation (empty = use tool default: gemini-3-pro-image-preview)"
         },
         "researchSpace.ai.aiHubMixImageEditModel": {
           "type": "string",
           "default": "",
-          "description": "Default model for image editing (empty = use tool default: FLUX.1-Kontext-pro)"
+          "description": "Default model for image editing (empty = use tool default: gemini-3-pro-image-preview)"
         },
         "researchSpace.ai.aiHubMixImageFusionModel": {
           "type": "string",
@@ -465,7 +465,15 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:integration": "node ./test/integration/run-integration.js",
-    "verify": "npm run lint && npm run typecheck && npm run test"
+    "verify": "npm run lint && npm run typecheck && npm run test",
+    "test:aihubmix:image-live": "node ./test/live/aihubmix-image-live.mjs",
+    "test:aihubmix:gpt-image-live": "node ./test/live/aihubmix-image-live.mjs",
+    "test:aihubmix:gemini-image-live": "node ./test/live/aihubmix-gemini-image-live.mjs",
+    "test:aihubmix:doubao-image-live": "node ./test/live/aihubmix-doubao-image-live.mjs",
+    "test:aihubmix:tts-live": "node ./test/live/aihubmix-tts-live.mjs",
+    "test:aihubmix:stt-live": "node ./test/live/aihubmix-stt-live.mjs",
+    "test:aihubmix:video-live": "node ./test/live/aihubmix-video-live.mjs",
+    "test:aihubmix:live-matrix": "npm run test:aihubmix:tts-live && npm run test:aihubmix:stt-live && npm run test:aihubmix:gpt-image-live && npm run test:aihubmix:gemini-image-live && npm run test:aihubmix:doubao-image-live"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

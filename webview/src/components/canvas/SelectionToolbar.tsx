@@ -3,12 +3,12 @@ import ReactDOM from 'react-dom';
 import { useReactFlow, useStore } from '@xyflow/react';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
-import { isDataNode } from '../../../../src/core/canvas-model';
+import { isDataNode, type CanvasNode } from '../../../../src/core/canvas-model';
+import { buildNextStepSuggestions } from '../../utils/next-step-suggestions';
 
 /**
- * Floating toolbar that appears when 2+ nodes are selected.
- * Shows node count, a "移动" hint, and — if the multi-selection
- * contains pipeline-connected function nodes — an external "▶▶ Pipeline" button.
+ * Floating toolbar that appears when selected nodes have available next steps
+ * or when 2+ nodes are selected for batch actions.
  */
 export function SelectionToolbar() {
   const selectedNodeIds = useCanvasStore(s => s.selectedNodeIds);
@@ -17,7 +17,9 @@ export function SelectionToolbar() {
   const setSelectionMode = useCanvasStore(s => s.setSelectionMode);
   const getPipelineHeadNodes = useCanvasStore(s => s.getPipelineHeadNodes);
   const createNodeGroup = useCanvasStore(s => s.createNodeGroup);
+  const createFunctionNodeFromSelection = useCanvasStore(s => s.createFunctionNodeFromSelection);
   const canvasFile = useCanvasStore(s => s.canvasFile);
+  const toolDefs = useCanvasStore(s => s.toolDefs);
   const { getNodesBounds, flowToScreenPosition } = useReactFlow();
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState('节点组');
@@ -30,8 +32,10 @@ export function SelectionToolbar() {
 
   // Compute screen position (above the center of the selection)
   let screenPos = { x: 0, y: 0 };
+  let selectionBounds = { x: 0, y: 0, width: 0, height: 0 };
   try {
     const bounds = getNodesBounds(selectedNodeIds);
+    selectionBounds = bounds;
     screenPos = flowToScreenPosition({
       x: bounds.x + bounds.width / 2,
       y: bounds.y,
@@ -47,7 +51,15 @@ export function SelectionToolbar() {
   // Check if selected nodes form a pipeline
   const pipelineHeads = getPipelineHeadNodes(selectedNodeIds);
   const hasPipeline = pipelineHeads.length > 0;
-  const shouldShowToolbar = selectedNodeIds.length >= 2;
+  const selectedCanvasNodes = selectedNodeIds
+    .map(id => nodes.find(node => node.id === id)?.data)
+    .filter((node): node is CanvasNode => !!node);
+  const nextStepSuggestions = buildNextStepSuggestions(selectedCanvasNodes, {
+    availableToolIds: toolDefs.map(tool => tool.id),
+    limit: 4,
+  });
+  const canExportMarkdown = selectedCanvasNodes.length > 0;
+  const shouldShowToolbar = selectedNodeIds.length >= 2 || nextStepSuggestions.length > 0 || canExportMarkdown;
   const selectedFunctionCount = selectedNodeIds.reduce((count, id) => {
     const node = nodes.find(item => item.id === id);
     return count + (node?.data.node_type === 'function' ? 1 : 0);
@@ -79,6 +91,21 @@ export function SelectionToolbar() {
     setGroupDialogOpen(false);
   };
 
+  const handleCreateSuggestedTool = (toolId: string) => {
+    createFunctionNodeFromSelection(toolId, selectedNodeIds, {
+      x: selectionBounds.x + selectionBounds.width + 80,
+      y: selectionBounds.y,
+    });
+  };
+
+  const handleExportMarkdown = () => {
+    postMessage({
+      type: 'exportSelectedMarkdown',
+      selectedNodeIds,
+      canvas: canvasFile ?? undefined,
+    });
+  };
+
   const handleCreateBlueprint = () => {
     postMessage({
       type: 'createBlueprintDraft',
@@ -96,8 +123,11 @@ export function SelectionToolbar() {
         transform: 'translateX(-50%)',
         zIndex: 9998,
         display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
         gap: 6,
         padding: '6px 10px',
+        maxWidth: 760,
         background: 'var(--vscode-editor-background)',
         border: '1px solid var(--vscode-widget-border)',
         borderRadius: 8,
@@ -112,6 +142,56 @@ export function SelectionToolbar() {
       }}>
         {selectedNodeIds.length} 个节点
       </span>
+      {nextStepSuggestions.length > 0 && (
+        <>
+          <span style={{
+            fontSize: 11,
+            color: 'var(--vscode-descriptionForeground)',
+            alignSelf: 'center',
+          }}>
+            下一步
+          </span>
+          {nextStepSuggestions.map(suggestion => (
+            <button
+              key={suggestion.id}
+              onClick={() => suggestion.toolId && handleCreateSuggestedTool(suggestion.toolId)}
+              style={{
+                background: 'var(--vscode-button-secondaryBackground)',
+                color: 'var(--vscode-button-secondaryForeground)',
+                border: '1px solid var(--vscode-button-border, transparent)',
+                borderRadius: 999,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+              title={`${suggestion.description}；只创建并连接功能节点，不自动运行。`}
+            >
+              {suggestion.label}
+            </button>
+          ))}
+        </>
+      )}
+      {canExportMarkdown && (
+        <button
+          onClick={handleExportMarkdown}
+          style={{
+            background: 'var(--vscode-button-background)',
+            color: 'var(--vscode-button-foreground)',
+            border: 'none',
+            borderRadius: 4,
+            padding: '4px 12px',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 600,
+            whiteSpace: 'nowrap',
+          }}
+          title="将当前选中的节点按画布位置导出为 Markdown 文件"
+        >
+          导出 MD
+        </button>
+      )}
       {selectedFunctionCount > 0 && (
         <button
           onClick={handleCreateBlueprint}

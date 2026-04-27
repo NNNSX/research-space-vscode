@@ -1,7 +1,7 @@
 {
   "id": "image-edit",
   "name": "图像编辑",
-  "description": "基于参考图像 + 连接的文本节点提示词编辑图像（Gemini / Doubao）",
+  "description": "基于参考图像 + 连接的文本节点提示词编辑图像（GPT Image / Gemini / Doubao）",
   "icon": "edit",
   "supportsImages": true,
   "outputNodeType": "image",
@@ -12,19 +12,30 @@
       "type": "select",
       "label": "模型",
       "options": [
-        "gemini-3.1-flash-image-preview",
         "gemini-3-pro-image-preview",
+        "gpt-image-2",
+        "gemini-3.1-flash-image-preview",
         "doubao-seedream-5.0-lite"
       ],
       "default": ""
     },
     {
+      "name": "instruction",
+      "type": "text",
+      "label": "编辑指令",
+      "default": ""
+    },
+    {
       "name": "size",
       "type": "select",
-      "label": "输出尺寸（Doubao）",
+      "label": "输出尺寸",
       "options": [
         "2k",
-        "3k"
+        "3k",
+        "1024x1024",
+        "1024x1536",
+        "1536x1024",
+        "auto"
       ],
       "default": "2k"
     },
@@ -46,6 +57,50 @@
       "type": "boolean",
       "label": "添加水印（Doubao）",
       "default": false
+    },
+    {
+      "name": "quality",
+      "type": "select",
+      "label": "质量（GPT Image）",
+      "options": [
+        "high",
+        "medium",
+        "low",
+        "auto"
+      ],
+      "default": "high"
+    },
+    {
+      "name": "moderation",
+      "type": "select",
+      "label": "审核强度（GPT Image）",
+      "options": [
+        "low",
+        "auto"
+      ],
+      "default": "low"
+    },
+    {
+      "name": "background",
+      "type": "select",
+      "label": "背景（GPT Image）",
+      "options": [
+        "auto",
+        "transparent",
+        "opaque"
+      ],
+      "default": "auto"
+    },
+    {
+      "name": "output_format",
+      "type": "select",
+      "label": "格式（GPT Image）",
+      "options": [
+        "png",
+        "jpeg",
+        "webp"
+      ],
+      "default": "png"
     }
   ],
   "paramMaps": {},

@@ -253,7 +253,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
 | \`supportsImages\` | boolean | 是否支持图片输入。\`true\` 时允许连接图片节点，AI 会收到图片内容（需要多模态模型） |
 | \`outputNodeType\` | string | 输出节点类型。可选值：\`"ai_output"\`（Markdown 文本，最常用）、\`"image"\`（图像文件）、\`"audio"\`（音频文件）、\`"video"\`（视频文件） |
 | \`params\` | ParamDef[] | 参数定义数组（可为空 \`[]\`），定义工具节点上显示的可调参数控件 |
-| \`systemPromptTemplate\` | string | 系统提示词模板。LLM 工具（apiType 为 \`"chat"\` 或未设置）必须非空；多模态工具可为空字符串 \`""\` |
+| \`systemPromptTemplate\` | string | 系统提示词模板。LLM 工具（apiType 为 \`"chat"\` 或未设置）必须非空；多模态工具可为空字符串 \`""\`。文本输出工具应允许并鼓励正文内引用，例如在基于来源材料的句子末尾保留 \`[资料1]\`、\`[资料2]\` |
 | \`postProcessType\` | string \\| null | 后处理器。当前可用：\`"extract_mermaid"\`（提取 Mermaid 代码块）。大多数情况用 \`null\` |
 
 ### 可选字段
@@ -295,6 +295,17 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
 
 - \`{{参数名}}\`：直接替换为参数值。例如 \`{{language}}\` 会替换为用户选择的语言值
 - \`{{参数名:map}}\`：通过 paramMaps 映射后替换。例如 \`{{language:map}}\` 会根据 paramMaps.language 查找对应的完整描述文本
+
+### 来源引用规则（LLM 文本工具必须兼容）
+
+Research Space 会在运行 LLM 文本工具时，把连接输入自动标记为 \`[资料1]\`、\`[资料2]\` 等稳定标签，并追加系统级“正文内引用”要求。
+
+生成 \`systemPromptTemplate\` 时必须遵守：
+
+1. 不要要求模型删除 \`[资料1]\` 这类标签。
+2. 不要只在末尾列“依据说明 / 来源说明 / 参考资料列表”来替代正文内引用。
+3. 如果输出包含事实、观点、数据、总结、评审意见、行动项或改写内容，应要求模型在相关句子或段落末尾保留 / 使用 \`[资料1]\`、\`[资料2]\`。
+4. 如果某句话是模型推断而非来源材料直接支持，应明确为推断，不要伪造来源标签。
 
 ## 校验规则
 
@@ -348,7 +359,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
       "en": " Output your response in English."
     }
   },
-  "systemPromptTemplate": "You are an expert writing editor. Polish the provided text with {{intensity:map}}.{{language:map}} Structure your response as:\\n## Changes Made\\n[Brief explanation of main changes]\\n\\n## Polished Text\\n[The full polished content]",
+  "systemPromptTemplate": "You are an expert writing editor. Polish the provided text with {{intensity:map}}.{{language:map}} Preserve or add inline source citations such as [资料1] when a sentence is based on provided source material. Structure your response as:\\n## Changes Made\\n[Brief explanation of main changes]\\n\\n## Polished Text\\n[The full polished content]",
   "postProcessType": null,
   "slots": [
     {
@@ -382,7 +393,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
   "outputNodeType": "ai_output",
   "params": [],
   "paramMaps": {},
-  "systemPromptTemplate": "你是一位资深软件工程师。请对所提供的代码进行逐段解释，说明每个关键部分的作用、设计意图和可能的改进点。使用中文回答，代码术语保留英文。",
+  "systemPromptTemplate": "你是一位资深软件工程师。请对所提供的代码进行逐段解释，说明每个关键部分的作用、设计意图和可能的改进点。基于来源材料的解释应在句末保留 [资料1] 这类文内引用。使用中文回答，代码术语保留英文。",
   "postProcessType": null
 }
 \`\`\`
@@ -408,7 +419,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
     }
   ],
   "paramMaps": {},
-  "systemPromptTemplate": "你是一位图像分析专家。请仔细观察所提供的图片，以 {{detail_level}} 的详细程度描述图片内容。包括：主要元素、布局、色彩、情感基调。最后提供一段适合 alt 属性的无障碍文本。",
+  "systemPromptTemplate": "你是一位图像分析专家。请仔细观察所提供的图片，以 {{detail_level}} 的详细程度描述图片内容。包括：主要元素、布局、色彩、情感基调。若回答基于连接的图片或文本材料，请在相关句子末尾保留 [资料1] 这类文内引用。最后提供一段适合 alt 属性的无障碍文本。",
   "postProcessType": null
 }
 \`\`\`
@@ -427,7 +438,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
   "uiMode": "chat",
   "params": [],
   "paramMaps": {},
-  "systemPromptTemplate": "You are a helpful research assistant. Answer the user's question based on the provided context. If files are referenced with @, focus your answer on those specific files.",
+  "systemPromptTemplate": "You are a helpful research assistant. Answer the user's question based on the provided context. If files are referenced with @, focus your answer on those specific files. Use inline source citations such as [资料1] at the end of sentences or paragraphs based on provided materials.",
   "postProcessType": null
 }
 \`\`\`
@@ -437,7 +448,7 @@ const AI_ORCHESTRATION_PROMPT = `你是一位 Research Space VSCode 插件的工
 1. 直接输出合法 JSON，不要包含注释
 2. 确保 JSON 可被 \`JSON.parse()\` 直接解析
 3. \`id\` 使用 kebab-case（小写 + 连字符），如 \`"my-custom-tool"\`
-4. \`systemPromptTemplate\` 要具体、专业、有结构化的输出指引
+4. \`systemPromptTemplate\` 要具体、专业、有结构化的输出指引，并不得破坏 Research Space 自动注入的 \`[资料1]\` 文内引用规则
 5. 如果工具需要区分不同输入文件的角色，请定义 \`slots\`
 6. 如果参数选项需要映射为更详细的提示词指令，请使用 \`paramMaps\` + \`{{参数:map}}\` 语法
 7. 大多数自定义工具 \`apiType\` 应该为 \`"chat"\`（默认值，可省略），\`outputNodeType\` 为 \`"ai_output"\`

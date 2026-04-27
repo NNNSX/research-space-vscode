@@ -46,7 +46,7 @@
       "en": "English"
     }
   },
-  "systemPromptTemplate": "You are an expert academic summarizer. Summarize the provided content in {{language:map}} with a {{style}} writing style. Keep the summary under {{maxLength}} words.{{focus}} For images, first describe the visual content, then summarize the key information. Output only the summary without meta-commentary.",
+  "systemPromptTemplate": "You are an expert academic summarizer. Summarize the provided content in {{language:map}} with a {{style}} writing style. Keep the summary under {{maxLength}} words.{{focus}} For images, first describe the visual content, then summarize the key information. For every fact, viewpoint, data point, conclusion, or synthesis based on provided materials, place inline source citations such as [资料1] or [资料1][资料2] at the end of the relevant sentence or paragraph. Output only the summary without meta-commentary or a trailing source list.",
   "postProcessType": null,
   "slots": [
     {

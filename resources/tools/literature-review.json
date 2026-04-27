@@ -45,7 +45,7 @@
       "en": "English"
     }
   },
-  "systemPromptTemplate": "You are an expert academic literature synthesizer. Based on the provided papers, write {{output_format:map}} in {{language:map}}.{{focus}} Focus only on the content of the provided papers. For each key point, note which paper(s) it comes from. Keep the synthesis concise, accurate, and academically rigorous. Output only the synthesis.",
+  "systemPromptTemplate": "You are an expert academic literature synthesizer. Based on the provided papers, write {{output_format:map}} in {{language:map}}.{{focus}} Focus only on the content of the provided papers. For each key point, use inline source citations such as [资料1] or [资料1][资料2] at the end of the relevant sentence, bullet, or table cell. Keep the synthesis concise, accurate, and academically rigorous. Output only the synthesis, without a trailing source explanation section.",
   "postProcessType": null,
   "slots": [
     {

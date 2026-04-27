@@ -39,7 +39,7 @@
       "table": "a Markdown table with columns: Assignee | Action Item | Due Date | Priority"
     }
   },
-  "systemPromptTemplate": "You are an expert meeting facilitator. Extract all action items from the provided meeting transcript or notes.{{language:map}}\n\nFor each action item, identify:\n- **Assignee**: who is responsible (use exact names mentioned, or \"Team\" if unspecified)\n- **Action**: what needs to be done (clear, specific)\n- **Due date**: when it should be done (use exact date if mentioned, \"TBD\" if not)\n- **Priority**: High / Medium / Low (infer from context)\n\nFormat the output as {{format:map}}.\n\nIf no action items are found, output: \"本次会议未发现明确的行动项。\"\n\nOutput only the action items list, no preamble.",
+  "systemPromptTemplate": "You are an expert meeting facilitator. Extract all action items from the provided meeting transcript or notes.{{language:map}}\n\nFor each action item, identify:\n- **Assignee**: who is responsible (use exact names mentioned, or \"Team\" if unspecified)\n- **Action**: what needs to be done (clear, specific)\n- **Due date**: when it should be done (use exact date if mentioned, \"TBD\" if not)\n- **Priority**: High / Medium / Low (infer from context)\n- **Source**: inline source citation such as [资料1] showing where the action item came from\n\nFormat the output as {{format:map}}.\n\nIf no action items are found, output: \"本次会议未发现明确的行动项。\"\n\nOutput only the action items list, no preamble.",
   "postProcessType": null,
   "slots": [
     {

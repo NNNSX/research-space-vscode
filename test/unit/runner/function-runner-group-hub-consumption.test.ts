@@ -52,7 +52,7 @@ vi.mock('../../../src/providers/CanvasEditorProvider', () => ({
 import type { CanvasFile, CanvasNode, JsonToolDef } from '../../../src/core/canvas-model';
 import { runFunctionNode, setToolRegistry } from '../../../src/ai/function-runner';
 
-function createProvider(onStream: (contents: AIContent[]) => void): AIProvider {
+function createProvider(onStream: (contents: AIContent[], systemPrompt: string) => void): AIProvider {
   return {
     id: 'mock',
     name: 'Mock Provider',
@@ -60,9 +60,9 @@ function createProvider(onStream: (contents: AIContent[]) => void): AIProvider {
     isAvailable: async () => true,
     listModels: async () => [],
     resolveModel: async () => 'mock-model',
-    async *stream(_systemPrompt, contents) {
-      onStream(contents);
-      yield 'group hub ok';
+    async *stream(systemPrompt, contents) {
+      onStream(contents, systemPrompt);
+      yield 'group hub ok [资料1][资料2]';
     },
   };
 }
@@ -74,8 +74,10 @@ describe('function-runner group hub consumption', () => {
 
   it('passes document relation note, page text, and page image to the provider in stable group order', async () => {
     const seenContents: AIContent[] = [];
-    mockGetProvider.mockResolvedValue(createProvider(contents => {
+    let seenSystemPrompt = '';
+    mockGetProvider.mockResolvedValue(createProvider((contents, systemPrompt) => {
       seenContents.push(...contents);
+      seenSystemPrompt = systemPrompt;
     }));
     mockExtractContent.mockImplementation(async (node: CanvasNode) => {
       if (node.node_type === 'image') {
@@ -210,10 +212,17 @@ describe('function-runner group hub consumption', () => {
     const result = await runFunctionNode('fn-summary', canvas, { fsPath: '/tmp/research.rsws' } as any, webview);
 
     expect(result.success).toBe(true);
-    expect(seenContents.map(content => content.title)).toEqual(['文档关系索引', '第 1 页文本', '第 1 页图片 1']);
+    expect(seenContents.map(content => content.title)).toEqual(['资料1 · 文档关系索引', '资料2 · 第 1 页文本', '资料3 · 第 1 页图片 1']);
     expect(seenContents.map(content => content.type)).toEqual(['text', 'text', 'image']);
+    expect(seenSystemPrompt).toContain('【文内引用要求】');
+    expect(seenSystemPrompt).toContain('[资料1] 文档关系索引（note，文件：exploded/0000-document-relations.md）');
     expect(mockExtractContent).toHaveBeenCalledTimes(3);
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
+    const persistedText = (mockWriteFile.mock.calls[0][1] as Buffer).toString('utf-8');
+    expect(persistedText).toBe('group hub ok [资料1][资料2]\n');
+    expect(persistedText).not.toContain('## 依据说明');
+    expect(result.outputNode?.meta?.ai_source_nodes?.map(node => node.id)).toEqual(['relation-note', 'page-note', 'page-image']);
+    expect(result.outputNode?.meta?.ai_source_nodes?.map(node => node.label)).toEqual(['资料1', '资料2', '资料3']);
     expect(mockSuppressRevert).toHaveBeenCalledWith('/tmp/research.rsws');
   });
 });

@@ -82,7 +82,7 @@
       "finance": "financial and economic"
     }
   },
-  "systemPromptTemplate": "You are an expert {{domain:map}} translator. Translate the provided content from {{sourceLang:map}} to {{targetLang:map}}. Maintain academic terminology and style. After the translation, include a \"## Key Terms\" section with a table of important technical terms and their translations.",
+  "systemPromptTemplate": "You are an expert {{domain:map}} translator. Translate the provided content from {{sourceLang:map}} to {{targetLang:map}}. Maintain academic terminology and style. Preserve inline source citations such as [资料1] exactly where they support the translated sentence. After the translation, include a \"## Key Terms\" section with a table of important technical terms and their translations.",
   "postProcessType": null,
   "slots": [
     {

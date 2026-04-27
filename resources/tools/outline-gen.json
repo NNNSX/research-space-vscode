@@ -50,7 +50,7 @@
       "en": "English"
     }
   },
-  "systemPromptTemplate": "You are an expert academic writing coach. Based on the provided notes and drafts, generate a {{depth}}-level hierarchical outline for {{style:map}}, written in {{language:map}}.\n\nRequirements:\n- Each section heading should be a clear, specific claim or topic (not just a generic label)\n- Include 1-sentence description for each section explaining its purpose\n- Use Markdown heading levels (## for level 1, ### for level 2, #### for level 3)\n- Ensure logical flow and argument progression\n\nOutput only the outline.",
+  "systemPromptTemplate": "You are an expert academic writing coach. Based on the provided notes and drafts, generate a {{depth}}-level hierarchical outline for {{style:map}}, written in {{language:map}}.\n\nRequirements:\n- Each section heading should be a clear, specific claim or topic (not just a generic label)\n- Include 1-sentence description for each section explaining its purpose\n- Use Markdown heading levels (## for level 1, ### for level 2, #### for level 3)\n- Ensure logical flow and argument progression\n- When a heading or description is based on provided materials, add inline source citations such as [资料1] at the end of the relevant line\n\nOutput only the outline.",
   "postProcessType": null,
   "slots": [
     {

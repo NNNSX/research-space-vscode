@@ -7,11 +7,13 @@ import {
   MINERU_SUPPORTED_FILE_HINT,
   requiresMinerUTokenForSourceType,
 } from '../../../../src/core/explosion-file-types';
+import { getVisibleAihubmixImageParamNames } from '../../../../src/core/aihubmix-image-models';
 import { postMessage } from '../../bridge';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { formatModelLabel, getAutoModelLabel, getConcreteProviderModelLabel, getFavoriteModelsForProvider, getProviderDisplayName, orderModelsByIds } from '../../utils/model-labels';
 import { buildNodePortStyle, getNodePortLabel, NODE_PORT_CLASSNAME, NODE_PORT_IDS } from '../../utils/node-port';
 import { closeAllCanvasContextMenus } from '../../utils/context-menu';
+import { getAiToolCostNotice, getCancelButtonLabel, getRunButtonLabel, isHighCostAiTool } from '../../utils/ai-tool-experience';
 import {
   ensureNodeChromeStyles,
   NODE_BORDER_WIDTH,
@@ -70,15 +72,15 @@ const TOOL_ICONS: Record<string, string> = {
 
 // Default prompts for each tool — shown as placeholder in the editor so users know what they're overriding
 const TOOL_DEFAULT_PROMPTS: Record<string, string> = {
-  summarize:          '你是一位专业学术摘要专家。请以目标语言、指定风格对所提供内容进行摘要，字数不超过指定限制。仅输出摘要，无需任何元评论。',
-  polish:             '你是一位专业编辑。请以指定强度对所提供文本进行润色。输出应包括改动说明和完整修订文本两部分。',
-  review:             '你是一位严格的同行评审专家。请以指定严格程度对所提供内容进行评审。输出总体评分、各维度评分，以及主要/次要问题清单。',
-  translate:          '你是一位专业学术翻译。请将内容翻译为目标语言，保持学术术语准确。翻译后附上「## 关键术语」部分，列出重要术语及其翻译对照表。',
+  summarize:          '你是一位专业学术摘要专家。请以目标语言、指定风格对所提供内容进行摘要，字数不超过指定限制。涉及来源材料的事实、观点或归纳时，在句子或段落末尾保留 [资料1] 这类文内引用。仅输出摘要，无需任何元评论。',
+  polish:             '你是一位专业编辑。请以指定强度对所提供文本进行润色。输出应包括改动说明和完整修订文本两部分，并尽量保留或补充 [资料1] 这类文内引用。',
+  review:             '你是一位严格的同行评审专家。请以指定严格程度对所提供内容进行评审。输出总体评分、各维度评分，以及主要/次要问题清单；基于来源材料的评价应在句末标注 [资料1] 这类文内引用。',
+  translate:          '你是一位专业学术翻译。请将内容翻译为目标语言，保持学术术语准确，并保留原文中的 [资料1] 这类文内引用。翻译后附上「## 关键术语」部分，列出重要术语及其翻译对照表。',
   draw:               '你是 Mermaid 图表专家。请根据所提供内容生成 Mermaid 语法图表。仅输出 Mermaid 代码块，不包含任何解释或注释。',
-  rag:                '你是一位研究助手。请根据所提供的文档内容回答用户问题。引用具体信息时请注明来源文件名。',
-  'literature-review':'你是一位学术文献综合分析专家。请基于所提供的论文，按指定输出格式与语言撰写文献综述。每个要点需注明来源论文。',
-  'outline-gen':      '你是一位学术写作教练。请基于所提供的笔记和草稿，生成指定层级的论文大纲。每个章节标题应具体明确，并附一句话描述。',
-  'action-items':     '你是一位会议行动项提取专家。请从所提供的会议记录中提取所有行动项，标注负责人、具体内容、截止日期和优先级。',
+  rag:                '你是一位研究助手。请根据所提供的文档内容回答用户问题。引用具体信息时在句末标注 [资料1] 这类文内引用。',
+  'literature-review':'你是一位学术文献综合分析专家。请基于所提供的论文，按指定输出格式与语言撰写文献综述。每个要点需在句末标注 [资料1]、[资料2] 这类来源标签。',
+  'outline-gen':      '你是一位学术写作教练。请基于所提供的笔记和草稿，生成指定层级的论文大纲。每个章节标题应具体明确，并附一句话描述；基于材料的描述应带文内引用。',
+  'action-items':     '你是一位会议行动项提取专家。请从所提供的会议记录中提取所有行动项，标注负责人、具体内容、截止日期和优先级；行动项依据应保留文内引用。',
   'explode-document': '这是一个系统级文件转换工具，不走文本生成模型。连接一个受支持文件后，可把表格转为 Markdown / TeX，或把 PDF / Word / PPT 转 PNG / 拆解为文字 + 图片。',
 };
 
@@ -169,10 +171,6 @@ function FunctionNodeInner({ id, data, selected }: FunctionNodeProps) {
   );
 }
 
-function isDoubaoImageModel(model: string): boolean {
-  return /^doubao-seedream-/i.test(model);
-}
-
 function resolveVisibleOptionalParams(
   toolId: string,
   params: ParamDef[],
@@ -183,23 +181,13 @@ function resolveVisibleOptionalParams(
   }
 
   if (toolId === 'image-gen') {
-    const isDoubao = isDoubaoImageModel(effectiveModel);
-    return params.filter(param => {
-      if (isDoubao) {
-        return param.name !== 'aspect_ratio';
-      }
-      return !['size', 'web_search', 'watermark'].includes(param.name);
-    });
+    const visibleNames = getVisibleAihubmixImageParamNames('image-gen', effectiveModel);
+    return params.filter(param => visibleNames.has(param.name));
   }
 
   if (toolId === 'image-edit') {
-    const isDoubao = isDoubaoImageModel(effectiveModel);
-    return params.filter(param => {
-      if (isDoubao) {
-        return param.name !== 'aspect_ratio';
-      }
-      return !['size', 'watermark'].includes(param.name);
-    });
+    const visibleNames = getVisibleAihubmixImageParamNames('image-edit', effectiveModel);
+    return params.filter(param => visibleNames.has(param.name));
   }
 
   return params;
@@ -210,6 +198,7 @@ function buildToolWarnings(args: {
   toolDef: NonNullable<ReturnType<typeof useCanvasStore.getState>['toolDefs'][number]> | undefined;
   upstreamNodes: CanvasNode[];
   promptParamValue: string;
+  instructionParamValue: string;
   chatDraft: string;
   queryValue: string;
   styleHintValue: string;
@@ -220,9 +209,9 @@ function buildToolWarnings(args: {
     toolDef,
     upstreamNodes,
     promptParamValue,
+    instructionParamValue,
     chatDraft,
     queryValue,
-    styleHintValue,
     motionPromptValue,
   } = args;
 
@@ -252,8 +241,8 @@ function buildToolWarnings(args: {
   }
 
   if (toolId === 'image-gen') {
-    if (textCount === 0 && !styleHintValue) {
-      warnings.push('📝 需连接文本节点提供图像描述');
+    if (textCount === 0 && !promptParamValue) {
+      warnings.push('📝 需填写图像描述，或连接文本节点');
     }
     return warnings;
   }
@@ -262,8 +251,8 @@ function buildToolWarnings(args: {
     if (imageCount === 0) {
       warnings.push('🖼 需连接图像节点作为参考图');
     }
-    if (textCount === 0) {
-      warnings.push('📝 需连接文本节点作为编辑提示词');
+    if (textCount === 0 && !instructionParamValue) {
+      warnings.push('📝 需填写编辑指令，或连接文本节点');
     }
     return warnings;
   }
@@ -506,6 +495,7 @@ function FullFunctionNode({
     : '';
   const visibleOptionalParams = resolveVisibleOptionalParams(tool, schema.optional, effectiveMultimodalModel);
   const promptParamValue = String((data.meta?.param_values?.['prompt'] as string | undefined) ?? '').trim();
+  const instructionParamValue = String((data.meta?.param_values?.['instruction'] as string | undefined) ?? '').trim();
   const queryValue = String((data.meta?.param_values?.['query'] as string | undefined) ?? '').trim();
   const styleHintValue = String((data.meta?.param_values?.['style_hint'] as string | undefined) ?? '').trim();
   const motionPromptValue = String((data.meta?.param_values?.['motion_prompt'] as string | undefined) ?? '').trim();
@@ -514,6 +504,7 @@ function FullFunctionNode({
     toolDef,
     upstreamNodes,
     promptParamValue,
+    instructionParamValue,
     chatDraft,
     queryValue,
     styleHintValue,
@@ -671,8 +662,8 @@ function FullFunctionNode({
   };
 
   // High-cost tools get a 2s delay before API call
-  const HIGH_COST_API_TYPES = new Set(['image_generation', 'image_edit', 'video_generation']);
-  const isHighCost = !!(toolDef?.apiType && HIGH_COST_API_TYPES.has(toolDef.apiType));
+  const isHighCost = isHighCostAiTool(toolDef?.apiType);
+  const costNotice = getAiToolCostNotice(tool, toolDef?.apiType);
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1362,11 +1353,11 @@ function FullFunctionNode({
             if (toolDef?.id === 'image-fusion') {
               hint = '🧩 需至少连接 2 个图像节点；融合指令请在下方参数中填写';
             } else if (toolDef?.apiType === 'image_edit') {
-              hint = '🖼 需连接图像节点作为参考图，并连接文本节点作为编辑提示词';
+              hint = '🖼 需连接图像节点作为参考图；编辑指令可直接填写，也可连接文本节点';
             } else if (toolDef?.id === 'image-group-output') {
               hint = '📝 可连接文本节点提供组图描述，或直接在下方参数中填写';
             } else if (toolDef?.id === 'image-gen') {
-              hint = '📝 需连接文本节点提供描述；下方只补充模型、风格与输出参数';
+              hint = '📝 可直接填写图像描述，也可连接文本节点提供描述';
             } else if (toolDef?.id === 'image-to-video') {
               hint = '🖼 需连接图像节点实现图生视频';
             } else if (toolDef?.apiType === 'stt') {
@@ -1415,6 +1406,26 @@ function FullFunctionNode({
                   {warning}
                 </div>
               ))}
+            </div>
+          )}
+
+          {costNotice && (
+            <div style={{
+              fontSize: 10,
+              padding: '5px 8px',
+              borderRadius: 4,
+              lineHeight: 1.45,
+              background: costNotice.tone === 'warning'
+                ? 'var(--vscode-inputValidation-warningBackground, #3a2e00)'
+                : 'var(--vscode-inputValidation-infoBackground, #0e3a5e)',
+              color: costNotice.tone === 'warning'
+                ? 'var(--vscode-inputValidation-warningForeground, #ffcc00)'
+                : 'var(--vscode-inputValidation-infoForeground, #75beff)',
+              border: `1px solid ${costNotice.tone === 'warning'
+                ? 'var(--vscode-inputValidation-warningBorder, #ffcc0060)'
+                : 'var(--vscode-inputValidation-infoBorder, #75beff60)'}`,
+            }}>
+              {costNotice.text}
             </div>
           )}
 
@@ -1490,6 +1501,9 @@ function FullFunctionNode({
                       </button>
                     )}
                   </div>
+                  <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.45 }}>
+                    运行时会自动追加正文内引用规则：连接输入会标记为 [资料1]、[资料2]，AI 应在相关句子或段落末尾嵌入这些来源标签；请避免在自定义 Prompt 中要求删除引用或仅在末尾列来源。
+                  </div>
                 </div>
               )}
             </>
@@ -1532,7 +1546,7 @@ function FullFunctionNode({
               fontWeight: 600,
             }}
           >
-            {countdown !== null ? `取消 (${countdown}s)` : '⏹ 停止'}
+            {getCancelButtonLabel(countdown)}
           </button>
         ) : (
           <>
@@ -1551,7 +1565,7 @@ function FullFunctionNode({
                 fontWeight: 600,
               }}
             >
-              ▶ 运行
+              {getRunButtonLabel({ isHighCost, countdown, isRunning: isVisuallyRunning })}
             </button>
           </>
         )}

@@ -16,6 +16,7 @@ import { explodeDocumentNodeViaMinerU } from '../explosion/mineru-pdf-explosion'
 import { isMinerUSupportedFilePath, MINERU_SUPPORTED_FILE_HINT } from '../core/explosion-file-types';
 import { MinerUError, formatMinerUErrorForDisplay } from '../explosion/mineru-adapter';
 import { runConversionDiagnostics } from '../explosion/conversion-diagnostics';
+import { buildSelectedNodesMarkdown, type SelectedMarkdownContent } from '../export/selected-markdown';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,86 @@ function buildBlueprintCopyTitle(title: string, existingTitles: Set<string>): st
     index += 1;
   }
   return `${baseTitle} - 副本 ${index}`;
+}
+
+const MARKDOWN_EXPORT_TEXT_EXTENSIONS = new Set([
+  'md', 'markdown', 'mdown', 'mkd', 'txt', 'text', 'rst', 'adoc',
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rs', 'go', 'java', 'c', 'cc', 'cpp', 'cxx',
+  'cs', 'rb', 'swift', 'kt', 'r', 'php', 'lua', 'sh', 'bash', 'zsh', 'fish', 'ps1',
+  'yaml', 'yml', 'json', 'jsonl', 'toml', 'tex', 'bib', 'xml', 'html', 'css', 'scss',
+  'sql', 'graphql', 'proto', 'ini', 'cfg', 'env', 'log', 'conf', 'csv', 'tsv',
+]);
+
+function sanitizeExportFilename(value: string): string {
+  const cleaned = value.trim().replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '-');
+  return cleaned || 'research-space-export';
+}
+
+function shouldReadNodeFileForMarkdownExport(node: CanvasNode): boolean {
+  if (!node.file_path) { return false; }
+  if (['image', 'audio', 'video', 'paper'].includes(node.node_type)) { return false; }
+  const ext = path.extname(node.file_path).slice(1).toLowerCase();
+  return MARKDOWN_EXPORT_TEXT_EXTENSIONS.has(ext);
+}
+
+async function resolveNodeMarkdownExportContent(node: CanvasNode, canvasUri: vscode.Uri): Promise<SelectedMarkdownContent> {
+  if (!node.file_path || !shouldReadNodeFileForMarkdownExport(node)) {
+    return {
+      nodeId: node.id,
+      content: node.meta?.content_preview ?? '',
+      note: node.file_path ? '当前文件类型未直接读取，已使用节点预览内容。' : undefined,
+    };
+  }
+
+  try {
+    const absPath = path.isAbsolute(node.file_path)
+      ? node.file_path
+      : path.join(path.dirname(canvasUri.fsPath), node.file_path);
+    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
+    return {
+      nodeId: node.id,
+      content: Buffer.from(bytes).toString('utf-8'),
+    };
+  } catch (error) {
+    return {
+      nodeId: node.id,
+      content: node.meta?.content_preview ?? '',
+      note: `文件读取失败，已使用节点预览内容：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function expandSelectedMarkdownNodes(canvas: CanvasFile, selectedNodeIds: string[]): CanvasNode[] {
+  const nodesById = new Map(canvas.nodes.map(node => [node.id, node]));
+  const selectedIdSet = new Set(selectedNodeIds);
+  const added = new Set<string>();
+  const result: CanvasNode[] = [];
+
+  const addNode = (node: CanvasNode | undefined) => {
+    if (!node || added.has(node.id)) { return; }
+    added.add(node.id);
+    result.push(node);
+  };
+
+  for (const nodeId of selectedNodeIds) {
+    const node = nodesById.get(nodeId);
+    addNode(node);
+    if (node?.node_type !== 'group_hub') { continue; }
+    const group = (canvas.nodeGroups ?? []).find(candidate =>
+      candidate.hubNodeId === node.id || candidate.id === node.meta?.hub_group_id
+    );
+    for (const memberId of group?.nodeIds ?? []) {
+      addNode(nodesById.get(memberId));
+    }
+  }
+
+  for (const node of canvas.nodes) {
+    if (selectedIdSet.has(node.id)) {
+      addNode(node);
+    }
+  }
+
+  return result;
 }
 
 // ── Canvas Document ─────────────────────────────────────────────────────────
@@ -542,6 +623,37 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           webview.postMessage({ type: 'canvasSaveStatus', status: 'error', message: msg2, mode: 'manual', requestId });
           webview.postMessage({ type: 'toastError', message: `保存失败: ${msg2}` });
         }
+        break;
+      }
+
+      case 'exportSelectedMarkdown': {
+        const selectedNodeIds = Array.isArray(msg['selectedNodeIds'])
+          ? msg['selectedNodeIds'].filter((id): id is string => typeof id === 'string')
+          : [];
+        const executionCanvas = isCanvasFile(msg['canvas']) ? msg['canvas'] : document.data;
+        const selectedNodes = expandSelectedMarkdownNodes(executionCanvas, selectedNodeIds);
+        if (selectedNodes.length === 0) {
+          webview.postMessage({ type: 'toastError', message: '请先选择要导出的节点。' });
+          break;
+        }
+
+        const contents = await Promise.all(
+          selectedNodes.map(node => resolveNodeMarkdownExportContent(node, document.uri))
+        );
+        const markdown = buildSelectedNodesMarkdown({
+          canvasTitle: executionCanvas.metadata.title,
+          nodes: selectedNodes,
+          contents,
+        });
+        const defaultName = `${sanitizeExportFilename(executionCanvas.metadata.title)}-selected.md`;
+        const saveUri = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(path.join(canvasDir, defaultName)),
+          filters: { Markdown: ['md'] },
+          saveLabel: '导出选中节点',
+        });
+        if (!saveUri) { break; }
+        await vscode.workspace.fs.writeFile(saveUri, Buffer.from(markdown, 'utf-8'));
+        vscode.window.showInformationMessage(`已导出选中节点：${path.basename(saveUri.fsPath)}`);
         break;
       }
 

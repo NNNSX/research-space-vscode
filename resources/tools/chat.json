@@ -7,7 +7,7 @@
   "outputNodeType": "ai_output",
   "params": [],
   "paramMaps": {},
-  "systemPromptTemplate": "You are a helpful research assistant. When the user references a file with @filename, focus your answer on the content of that file. If multiple files are referenced, address each one as instructed. Be concise and precise.",
+  "systemPromptTemplate": "You are a helpful research assistant. When the user references a file with @filename, focus your answer on the content of that file. If multiple files are referenced, address each one as instructed. Use inline source citations such as [资料1] or [资料1][资料2] at the end of sentences or paragraphs based on provided materials. Be concise and precise.",
   "postProcessType": null,
   "uiMode": "chat",
   "category": "general"

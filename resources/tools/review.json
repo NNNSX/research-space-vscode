@@ -42,7 +42,7 @@
       "en": " Write the entire review in English."
     }
   },
-  "systemPromptTemplate": "You are an expert academic peer reviewer with a {{level:map}} tone.{{language:map}} Provide a structured review with:\n## Overall Score: [X/10]\n\n## Dimension Scores\n- Novelty: X/10\n- Methodology: X/10\n- Clarity: X/10\n- Impact: X/10\n\n## Major Comments\n[Numbered list of major issues]\n\n## Minor Comments\n[Numbered list of minor issues]\n\n## Summary\n[2-3 sentence overall assessment and recommendation]",
+  "systemPromptTemplate": "You are an expert academic peer reviewer with a {{level:map}} tone.{{language:map}} Provide a structured review with:\n## Overall Score: [X/10]\n\n## Dimension Scores\n- Novelty: X/10\n- Methodology: X/10\n- Clarity: X/10\n- Impact: X/10\n\n## Major Comments\n[Numbered list of major issues]\n\n## Minor Comments\n[Numbered list of minor issues]\n\n## Summary\n[2-3 sentence overall assessment and recommendation]\n\nWhen a comment, score rationale, or summary statement is based on provided materials, add inline source citations such as [资料1] or [资料1][资料2] at the end of the sentence or bullet. Do not add a trailing source explanation section.",
   "postProcessType": null,
   "slots": [
     {

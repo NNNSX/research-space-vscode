@@ -1099,10 +1099,11 @@ export function SettingsPanel() {
       </Field>
       <Field label="图像生成默认模型">
         <MultimodalModelSelect
-          value={settings.aiHubMixImageGenModel || 'gemini-3.1-flash-image-preview'}
+          value={settings.aiHubMixImageGenModel || 'gemini-3-pro-image-preview'}
           options={[
-            { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
+            { value: 'gpt-image-2',                     label: 'GPT Image 2' },
             { value: 'gemini-3-pro-image-preview',     label: 'Gemini 3 Pro Image Preview' },
+            { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
             { value: 'doubao-seedream-5.0-lite',       label: 'Doubao Seedream 5.0 Lite' },
           ]}
           onChange={v => saveSetting('aiHubMixImageGenModel', v)}
@@ -1110,10 +1111,11 @@ export function SettingsPanel() {
       </Field>
       <Field label="图像编辑默认模型">
         <MultimodalModelSelect
-          value={settings.aiHubMixImageEditModel || 'gemini-3.1-flash-image-preview'}
+          value={settings.aiHubMixImageEditModel || 'gemini-3-pro-image-preview'}
           options={[
-            { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
+            { value: 'gpt-image-2',                     label: 'GPT Image 2' },
             { value: 'gemini-3-pro-image-preview',     label: 'Gemini 3 Pro Image Preview' },
+            { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image Preview' },
             { value: 'doubao-seedream-5.0-lite',       label: 'Doubao Seedream 5.0 Lite' },
           ]}
           onChange={v => saveSetting('aiHubMixImageEditModel', v)}

@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', () => ({}));
 
 import type { CanvasFile, CanvasNode } from '../../../src/core/canvas-model';
-import { calcOutputPosition, runFunctionNode, setToolRegistry } from '../../../src/ai/function-runner';
+import {
+  calcOutputPosition,
+  cancelRunByNodeId,
+  reserveFunctionNodeRun,
+  runFunctionNode,
+  setToolRegistry,
+} from '../../../src/ai/function-runner';
 
 function createCanvas(nodes: CanvasNode[]): CanvasFile {
   return {
@@ -54,6 +60,25 @@ describe('function-runner contract', () => {
       nodeId: 'fn-missing-tool',
       issueKind: 'missing_config',
     }));
+  });
+
+  it('rejects duplicate runs while the same function node is already running', () => {
+    const webview = { postMessage: vi.fn() } as any;
+    expect(reserveFunctionNodeRun('fn-image', 'run-1', webview)).toBeNull();
+
+    const duplicate = reserveFunctionNodeRun('fn-image', 'run-2', webview);
+    expect(duplicate).toMatchObject({
+      success: false,
+      runId: 'run-1',
+      errorMessage: '该功能节点已有任务正在运行，请等待完成或先停止后再运行。',
+    });
+    expect(webview.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'aiError',
+      nodeId: 'fn-image',
+      message: '该功能节点已有任务正在运行，请等待完成或先停止后再运行。',
+    }));
+
+    cancelRunByNodeId('fn-image');
   });
 
   it('returns a stable missing_config payload when the tool registry cannot resolve the tool', async () => {
@@ -141,4 +166,5 @@ describe('function-runner contract', () => {
       y: 262,
     });
   });
+
 });

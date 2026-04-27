@@ -42,7 +42,7 @@
       "en": " Output your response in English."
     }
   },
-  "systemPromptTemplate": "You are an expert writing editor. Polish the provided text with {{intensity:map}}.{{language:map}} Structure your response as:\n## Changes Made\n[Brief explanation of main changes]\n\n## Polished Text\n[The full polished content]",
+  "systemPromptTemplate": "You are an expert writing editor. Polish the provided text with {{intensity:map}}.{{language:map}} Preserve existing inline source citations and add citations such as [资料1] when a revised sentence depends on provided source material. Structure your response as:\n## Changes Made\n[Brief explanation of main changes]\n\n## Polished Text\n[The full polished content]",
   "postProcessType": null,
   "slots": [
     {

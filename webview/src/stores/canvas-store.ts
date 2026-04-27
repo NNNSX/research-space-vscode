@@ -310,6 +310,7 @@ interface CanvasState {
   resolveStagingMaterialization(sourceNodeId: string, node: CanvasNode, position: { x: number; y: number }): void;
   failStagingMaterialization(sourceNodeId: string): void;
   createFunctionNode(tool: AiTool | string, position: { x: number; y: number }): void;
+  createFunctionNodeFromSelection(tool: AiTool | string, sourceNodeIds: string[], position: { x: number; y: number }): void;
   createBlueprintInstance(entry: BlueprintRegistryEntry, position?: { x: number; y: number }): void;
   instantiateBlueprintDefinition(
     entry: BlueprintRegistryEntry,
@@ -5030,6 +5031,89 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
       debouncedSave(newFile, 'immediate');
       return { nodes: updatedNodes, canvasFile: newFile };
+    });
+  },
+
+  createFunctionNodeFromSelection(tool, sourceNodeIds, position) {
+    get().pushUndo();
+    const toolId = String(tool);
+    const toolDefs = get().toolDefs;
+    const toolDef = toolDefs.find(d => d.id === toolId);
+    const toolParams = toolDef?.params ?? [];
+    const toolName = toolDef?.name ?? toolId;
+
+    const settings = get().settings;
+    const { provider, model } = resolveDefaultsFromSettings(settings);
+    const defaultParamValues: Record<string, unknown> = { _provider: provider, _model: model };
+    for (const p of toolParams) {
+      if (p.default !== undefined) { defaultParamValues[p.name] = p.default; }
+    }
+
+    const node: CanvasNode = {
+      id: uuid(),
+      node_type: 'function',
+      title: toolName,
+      position,
+      size: { width: 280, height: 220 },
+      meta: {
+        ai_tool: toolId,
+        fn_status: 'idle',
+        input_schema: toolParams,
+        param_values: defaultParamValues,
+      },
+    };
+
+    set(state => {
+      if (!state.canvasFile) { return {}; }
+      if (state.nodes.some(n => n.id === node.id)) { return {}; }
+
+      const sourceIdSet = new Set(sourceNodeIds);
+      const sourceNodes = state.canvasFile.nodes.filter(sourceNode =>
+        sourceIdSet.has(sourceNode.id) &&
+        (isDataNode(sourceNode) || sourceNode.node_type === 'group_hub')
+      );
+      const connectedSourceIds = new Set<string>();
+      const newEdges: FlowEdge[] = [];
+
+      for (const sourceNode of sourceNodes) {
+        if (connectedSourceIds.has(sourceNode.id)) { continue; }
+        connectedSourceIds.add(sourceNode.id);
+        newEdges.push({
+          id: uuid(),
+          source: sourceNode.id,
+          target: node.id,
+          type: 'custom',
+          data: { edge_type: 'data_flow' },
+        });
+      }
+
+      const flowNode: FlowNode = {
+        id: node.id,
+        type: 'functionNode',
+        position: node.position,
+        data: node,
+        width: node.size.width,
+        height: node.size.height,
+        selected: true,
+      };
+      const updatedNodes = [
+        ...state.nodes.map(n => n.selected ? { ...n, selected: false } : n),
+        flowNode,
+      ];
+      const updatedEdges = [
+        ...state.edges.map(edge => edge.selected ? { ...edge, selected: false } : edge),
+        ...newEdges,
+      ];
+      const { nodes: cnNodes, edges: cnEdges } = flowToCanvas(updatedNodes, updatedEdges);
+      const newFile: CanvasFile = { ...state.canvasFile, nodes: cnNodes, edges: cnEdges };
+      debouncedSave(newFile, 'immediate');
+      return {
+        nodes: updatedNodes,
+        edges: updatedEdges,
+        canvasFile: newFile,
+        selectedNodeIds: [node.id],
+        activeBoardId: null,
+      };
     });
   },
 

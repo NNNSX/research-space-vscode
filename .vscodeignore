@@ -65,3 +65,6 @@ eslint.config.cjs
 webview/package.json
 webview/package-lock.json
 **/*.map
+
+# Internal docs
+docs/
