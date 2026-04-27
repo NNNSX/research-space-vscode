@@ -58,11 +58,26 @@ describe('selected markdown export builder', () => {
             ai_source_nodes: [
               {
                 id: 'paper-a',
+                label: '资料1',
                 title: '论文 A',
                 node_type: 'paper',
                 file_path: 'papers/a.pdf',
               },
+              {
+                id: 'note-b',
+                label: '资料2',
+                title: '笔记 B',
+                node_type: 'note',
+              },
             ],
+            ai_citation_coverage: {
+              expectedLabels: ['资料1', '资料2'],
+              citedLabels: ['资料1'],
+              missingLabels: ['资料2'],
+              unknownLabels: [],
+              citationCount: 1,
+            },
+            ai_citation_warning: '未看到 [资料2] 的正文引用；请检查引用是否完整、准确。',
           },
         }),
       ],
@@ -70,8 +85,12 @@ describe('selected markdown export builder', () => {
     });
 
     expect(markdown).toContain('- 依据摘要：论文 A（paper，文件：papers/a.pdf）');
+    expect(markdown).toContain('- 文内引用：1/2 个来源已在正文中出现，检测到 1 处来源标签。');
+    expect(markdown).toContain('- 未出现来源：[资料2]');
+    expect(markdown).toContain('- 引用提醒：未看到 [资料2] 的正文引用；请检查引用是否完整、准确。');
     expect(markdown).toContain('### 来源节点');
-    expect(markdown).toContain('- 论文 A（文献，文件：papers/a.pdf）');
+    expect(markdown).toContain('- [资料1] 论文 A（文献，文件：papers/a.pdf）');
+    expect(markdown).toContain('- [资料2] 笔记 B（笔记）');
     expect(markdown).toContain('摘要正文');
   });
 

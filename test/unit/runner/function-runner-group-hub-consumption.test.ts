@@ -223,6 +223,14 @@ describe('function-runner group hub consumption', () => {
     expect(persistedText).not.toContain('## 依据说明');
     expect(result.outputNode?.meta?.ai_source_nodes?.map(node => node.id)).toEqual(['relation-note', 'page-note', 'page-image']);
     expect(result.outputNode?.meta?.ai_source_nodes?.map(node => node.label)).toEqual(['资料1', '资料2', '资料3']);
+    expect(result.outputNode?.meta?.ai_citation_coverage).toMatchObject({
+      expectedLabels: ['资料1', '资料2', '资料3'],
+      citedLabels: ['资料1', '资料2'],
+      missingLabels: ['资料3'],
+      unknownLabels: [],
+      citationCount: 2,
+    });
+    expect(result.outputNode?.meta?.ai_citation_warning).toContain('未看到 [资料3]');
     expect(mockSuppressRevert).toHaveBeenCalledWith('/tmp/research.rsws');
   });
 });

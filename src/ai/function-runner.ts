@@ -35,8 +35,9 @@ import { buildImageEditPrompt, buildImageGenerationPrompt } from './multimodal/i
 import { requestSpeechToText, requestTextToSpeech } from './multimodal/audio-execution';
 import { requestVideoGeneration } from './multimodal/video-execution';
 import {
+  analyzeInlineCitationCoverage,
   buildAiOutputProvenance,
-  hasInlineCitationLabels,
+  buildCitationWarning,
   labelAiContentsForInlineCitations,
   withInlineCitationInstruction,
 } from './output-provenance';
@@ -1093,9 +1094,8 @@ async function _runFunctionNodeInner(
     return { success: false, runId, errorMessage: 'Cancelled' };
   }
   const persistedText = processed.trimEnd() + '\n';
-  const citationWarning = provenance.sourceNodes.length > 0 && !hasInlineCitationLabels(persistedText)
-    ? '本次输出未检测到 [资料1] 这类文内引用；请检查结果，必要时重新运行或在提示词中强调逐句引用。'
-    : undefined;
+  const citationCoverage = analyzeInlineCitationCoverage(persistedText, provenance.sourceNodes);
+  const citationWarning = buildCitationWarning(citationCoverage);
 
   // 9. Write output file
   const aiDir = await ensureAiOutputDir(canvasUri);
@@ -1124,6 +1124,7 @@ async function _runFunctionNodeInner(
       ai_model: effectiveModel || undefined,
       ai_source_nodes: provenance.sourceNodes,
       ai_source_summary: provenance.sourceSummary,
+      ai_citation_coverage: citationCoverage,
       ai_citation_warning: citationWarning,
     }),
   };

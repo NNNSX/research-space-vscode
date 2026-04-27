@@ -73,6 +73,25 @@ function fallbackContent(node: CanvasNode): string {
   return normalizeText(node.meta?.content_preview);
 }
 
+
+function formatCitationCoverage(meta?: NodeMeta): string[] {
+  const coverage = meta?.ai_citation_coverage;
+  if (!coverage || coverage.expectedLabels.length === 0) { return []; }
+  const lines = [
+    `- 文内引用：${coverage.citedLabels.length}/${coverage.expectedLabels.length} 个来源已在正文中出现，检测到 ${coverage.citationCount} 处来源标签。`,
+  ];
+  if (coverage.missingLabels.length > 0) {
+    lines.push(`- 未出现来源：${coverage.missingLabels.map(label => `[${label}]`).join('、')}`);
+  }
+  if (coverage.unknownLabels.length > 0) {
+    lines.push(`- 未连接标签：${coverage.unknownLabels.map(label => `[${label}]`).join('、')}`);
+  }
+  if (meta?.ai_citation_warning) {
+    lines.push(`- 引用提醒：${meta.ai_citation_warning}`);
+  }
+  return lines;
+}
+
 function formatSourceNodes(meta?: NodeMeta): string[] {
   const refs = meta?.ai_source_nodes ?? [];
   if (refs.length === 0) { return []; }
@@ -113,6 +132,7 @@ export function buildSelectedNodesMarkdown(args: BuildSelectedMarkdownArgs): str
     if (node.meta?.ai_source_summary) {
       sections.push(`- 依据摘要：${node.meta.ai_source_summary}`);
     }
+    sections.push(...formatCitationCoverage(node.meta));
     if (contentNote) {
       sections.push(`- 读取说明：${contentNote}`);
     }

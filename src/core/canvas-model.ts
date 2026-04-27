@@ -112,6 +112,13 @@ export interface NodeMeta {
     file_path?: string;
   }>;                         // lightweight provenance for generated outputs
   ai_source_summary?: string; // human-readable source summary
+  ai_citation_coverage?: {
+    expectedLabels: string[];
+    citedLabels: string[];
+    missingLabels: string[];
+    unknownLabels: string[];
+    citationCount: number;
+  }; // lightweight inline citation coverage for generated outputs
   ai_citation_warning?: string; // warning if generated text did not include expected inline citations
   input_schema?: ParamDef[];
   param_values?: Record<string, unknown>;

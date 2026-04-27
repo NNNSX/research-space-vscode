@@ -28,6 +28,7 @@ import {
 } from '../../utils/node-chrome';
 import { buildBlueprintOutputSlotIssueMap } from '../../utils/blueprint-slot-issues';
 import { buildBlueprintOutputSlotBindingState } from '../../utils/blueprint-output-bindings';
+import { buildCitationCoverageDisplay } from '../../utils/citation-coverage';
 
 // Create blob worker URL from inlined source (CSP: worker-src blob:)
 const workerBlob = new Blob([pdfjsWorkerSrc], { type: 'application/javascript' });
@@ -465,6 +466,8 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     outputSlotWaiting,
     placeholderBindingInfo,
   ]);
+  const citationStatusBadge = useMemo(() => buildCitationCoverageDisplay(data.meta), [data.meta]);
+
   const placeholderPrimaryText = isBlueprintInputPlaceholder
     ? inputPlaceholderStatusText
     : outputSlotRuntimeInfo
@@ -1165,6 +1168,32 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
                   {data.meta.ai_model as string}
                 </span>
               )}
+            </div>
+          )}
+
+          {citationStatusBadge && (
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              <span
+                title={citationStatusBadge.tooltip}
+                style={{
+                  fontSize: 9,
+                  padding: '1px 5px',
+                  background: citationStatusBadge.hasWarning
+                    ? 'var(--vscode-inputValidation-warningBackground)'
+                    : 'var(--vscode-inputOption-activeBackground, var(--vscode-input-background))',
+                  color: citationStatusBadge.hasWarning
+                    ? 'var(--vscode-inputValidation-warningForeground)'
+                    : 'var(--vscode-descriptionForeground)',
+                  border: `1px solid ${citationStatusBadge.hasWarning
+                    ? 'var(--vscode-inputValidation-warningBorder)'
+                    : 'var(--vscode-panel-border)'}`,
+                  borderRadius: 10,
+                  whiteSpace: 'nowrap',
+                  fontWeight: 600,
+                }}
+              >
+                引用 {citationStatusBadge.badgeText}
+              </span>
             </div>
           )}
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { CanvasNode } from '../../../src/core/canvas-model';
 import {
+  analyzeInlineCitationCoverage,
   buildAiOutputProvenance,
+  buildCitationWarning,
   hasInlineCitationLabels,
   labelAiContentsForInlineCitations,
   withInlineCitationInstruction,
@@ -43,6 +45,7 @@ describe('AI output provenance', () => {
     expect(provenance.citationInstruction).toContain('【文内引用要求】');
     expect(provenance.citationInstruction).toContain('本次工具：摘要');
     expect(provenance.citationInstruction).toContain('[资料1] 论文 A（paper，文件：papers/a.pdf）');
+    expect(provenance.citationInstruction).toContain('如果同时综合多个来源');
     expect(provenance.citationInstruction).toContain('不要在输出末尾额外添加“依据说明”');
     expect(withInlineCitationInstruction('system', provenance)).toContain('system\n\n【文内引用要求】');
   });
@@ -84,5 +87,29 @@ describe('AI output provenance', () => {
   it('detects inline citation labels in generated text', () => {
     expect(hasInlineCitationLabels('该结论来自实验记录 [资料2]。')).toBe(true);
     expect(hasInlineCitationLabels('该结论来自实验记录。')).toBe(false);
+  });
+
+  it('analyzes citation coverage across expected, missing and unknown labels', () => {
+    const coverage = analyzeInlineCitationCoverage('结论 A [资料1]。结论 B [资料3]。', [
+      { id: 'a', label: '资料1', title: 'A', node_type: 'paper' },
+      { id: 'b', label: '资料2', title: 'B', node_type: 'note' },
+    ]);
+
+    expect(coverage).toEqual({
+      expectedLabels: ['资料1', '资料2'],
+      citedLabels: ['资料1'],
+      missingLabels: ['资料2'],
+      unknownLabels: ['资料3'],
+      citationCount: 2,
+    });
+    expect(buildCitationWarning(coverage)).toBe('未看到 [资料2] 的正文引用；检测到未连接来源标签 [资料3]；请检查引用是否完整、准确。');
+  });
+
+  it('keeps the stronger no-citation warning when no expected source is cited at all', () => {
+    const coverage = analyzeInlineCitationCoverage('没有任何引用。', [
+      { id: 'a', label: '资料1', title: 'A', node_type: 'paper' },
+    ]);
+
+    expect(buildCitationWarning(coverage)).toContain('未检测到 [资料1]');
   });
 });
