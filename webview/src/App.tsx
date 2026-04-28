@@ -601,10 +601,33 @@ export function App() {
             !!msg.petEnabled,
             msg.restReminderMin ?? 45,
             msg.groundTheme ?? 'forest',
+            msg.suggestionActivity,
+            msg.displayMode,
+            msg.longTermMemory,
           );
           break;
         case 'petAssetsBase':
           petSetAssets(msg.uri ?? '');
+          break;
+        case 'petMemorySummary':
+          usePetStore.getState().setMemorySummary({
+            profile: {
+              frequentEventTypes: Array.isArray((msg.profile as any)?.frequentEventTypes) ? (msg.profile as any).frequentEventTypes : [],
+              frequentNodeTypes: Array.isArray((msg.profile as any)?.frequentNodeTypes) ? (msg.profile as any).frequentNodeTypes : [],
+              frequentTools: Array.isArray((msg.profile as any)?.frequentTools) ? (msg.profile as any).frequentTools : [],
+              frequentScenes: Array.isArray((msg.profile as any)?.frequentScenes) ? (msg.profile as any).frequentScenes : [],
+              suggestionStats: {
+                shown: Number((msg.profile as any)?.suggestionStats?.shown) || 0,
+                accepted: Number((msg.profile as any)?.suggestionStats?.accepted) || 0,
+                later: Number((msg.profile as any)?.suggestionStats?.later) || 0,
+                muted: Number((msg.profile as any)?.suggestionStats?.muted) || 0,
+              },
+              suggestionActivity: typeof (msg.profile as any)?.suggestionActivity === 'string' ? (msg.profile as any).suggestionActivity : 'balanced',
+              displayMode: typeof (msg.profile as any)?.displayMode === 'string' ? (msg.profile as any).displayMode : 'panel',
+              updatedAt: typeof (msg.profile as any)?.updatedAt === 'string' ? (msg.profile as any).updatedAt : undefined,
+            },
+            records: Array.isArray(msg.records) ? msg.records as any[] : [],
+          });
           break;
         case 'petAiChatResponse': {
           // Handle AI suggestion responses (auto-triggered, not user chat)
@@ -631,7 +654,12 @@ export function App() {
           if (msg.runId && msg.node && msg.edge) {
             flushAiChunksForRun(msg.runId);
             finishAiRun(msg.runId, msg.node, msg.edge);
-            usePetStore.getState().notifyCanvasEvent('aiDone');
+            const outputNode = msg.node as import('../../src/core/canvas-model').CanvasNode;
+            usePetStore.getState().notifyCanvasEvent('tool_run_completed', {
+              nodeId: outputNode.id,
+              nodeType: outputNode.node_type,
+              title: outputNode.title,
+            });
           }
           break;
         case 'aiError':
@@ -643,7 +671,7 @@ export function App() {
               updateNodeStatus(msg.nodeId, 'error', undefined, msg.issueKind ?? 'run_failed', msg.message as string);
             }
             setError(msg.message as string);
-            usePetStore.getState().notifyCanvasEvent('aiError');
+            usePetStore.getState().notifyCanvasEvent('tool_run_failed');
           }
           break;
         case 'modelList':
@@ -673,8 +701,13 @@ export function App() {
           break;
         case 'stageNodes':
           if (Array.isArray(msg.nodes)) {
-            addToStaging(msg.nodes as import('../../src/core/canvas-model').CanvasNode[]);
-            usePetStore.getState().notifyCanvasEvent('nodeAdded');
+            const stagedNodes = msg.nodes as import('../../src/core/canvas-model').CanvasNode[];
+            addToStaging(stagedNodes);
+            usePetStore.getState().notifyCanvasEvent('node_added', stagedNodes[0] ? {
+              nodeId: stagedNodes[0].id,
+              nodeType: stagedNodes[0].node_type,
+              title: stagedNodes[0].title,
+            } : undefined);
           }
           break;
         case 'stagingNodeMaterialized':
@@ -697,8 +730,13 @@ export function App() {
         case 'nodeAdded':
           // Legacy: redirect to staging area
           if (msg.node) {
-            addToStaging([msg.node as import('../../src/core/canvas-model').CanvasNode]);
-            usePetStore.getState().notifyCanvasEvent('nodeAdded');
+            const addedNode = msg.node as import('../../src/core/canvas-model').CanvasNode;
+            addToStaging([addedNode]);
+            usePetStore.getState().notifyCanvasEvent('node_added', {
+              nodeId: addedNode.id,
+              nodeType: addedNode.node_type,
+              title: addedNode.title,
+            });
           }
           break;
         case 'nodeFileStatus':

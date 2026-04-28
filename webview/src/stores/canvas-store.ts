@@ -4050,7 +4050,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const hasRemove = normalizedChanges.some(c => c.type === 'remove');
     if (hasRemove) {
       get().pushUndo();
-      try { usePetStore.getState().notifyCanvasEvent('nodeDeleted'); } catch { /* pet may not be initialized */ }
+      try { usePetStore.getState().notifyCanvasEvent('node_deleted'); } catch { /* pet may not be initialized */ }
     }
 
     const expandedChanges: NodeChange[] = [];
@@ -4289,6 +4289,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       debouncedSave(newFile);
       return { edges: updated, canvasFile: newFile };
     });
+    try { usePetStore.getState().notifyCanvasEvent('node_connected'); } catch { /* pet may not be initialized */ }
   },
 
   onConnect(connection) {

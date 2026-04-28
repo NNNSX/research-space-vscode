@@ -25,7 +25,7 @@ export function getExpForNextLevel(level: number): number {
   return PET_LEVEL_THRESHOLDS[level];
 }
 
-const PET_UNLOCK_LEVELS: Record<PetTypeId, number> = {
+export const PET_UNLOCK_LEVELS: Record<PetTypeId, number> = {
   dog: 1,
   fox: 1,
   'rubber-duck': 3,
@@ -127,6 +127,8 @@ export function normalizePetState(raw: unknown, seed?: { petType?: PetTypeId; pe
   const level = getLevelFromExp(Math.floor(exp));
   const widgetLeft = Number.isFinite(raw.widgetLeft) ? Number(raw.widgetLeft) : undefined;
   const widgetTop = Number.isFinite(raw.widgetTop) ? Number(raw.widgetTop) : undefined;
+  const canvasPetLeft = Number.isFinite(raw.canvasPetLeft) ? Number(raw.canvasPetLeft) : undefined;
+  const canvasPetTop = Number.isFinite(raw.canvasPetTop) ? Number(raw.canvasPetTop) : undefined;
 
   return {
     petType,
@@ -151,6 +153,9 @@ export function normalizePetState(raw: unknown, seed?: { petType?: PetTypeId; pe
     widgetOffsetY: Number.isFinite(raw.widgetOffsetY) ? Number(raw.widgetOffsetY) : undefined,
     widgetLeft,
     widgetTop,
+    canvasPetLeft,
+    canvasPetTop,
+    canvasPetManual: raw.canvasPetManual === true && canvasPetLeft !== undefined && canvasPetTop !== undefined,
     miniGameStatsDate: typeof raw.miniGameStatsDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.miniGameStatsDate)
       ? raw.miniGameStatsDate
       : base.miniGameStatsDate,

@@ -190,6 +190,9 @@ export interface PetState {
   widgetOffsetY?: number;        // legacy
   widgetLeft?: number;
   widgetTop?: number;
+  canvasPetLeft?: number;
+  canvasPetTop?: number;
+  canvasPetManual?: boolean;
   miniGameStatsDate?: string;
   snakeLastScore?: number;
   snakeBestScoreToday?: number;

@@ -15,7 +15,7 @@ const MINIMIZED_SIZE = 32;
  * drag positioning, and hover opacity.
  */
 export function PetWidget() {
-  const { enabled, hydrated, mode, widgetLeft, widgetTop, hovered, setAnchor, setHovered } = usePetStore();
+  const { enabled, hydrated, mode, displayMode, widgetLeft, widgetTop, hovered, setAnchor, setHovered } = usePetStore();
   const tickEngine = usePetStore(s => s.tickEngine);
   const savePetState = usePetStore(s => s.savePetState);
   const saveMemory = usePetStore(s => s.saveMemory);
@@ -156,6 +156,10 @@ export function PetWidget() {
   }, [setHovered]);
 
   if (!enabled || !hydrated) { return null; }
+
+  if (displayMode === 'canvas-follow' && mode === 'roaming') {
+    return <PetAnimStyles />;
+  }
 
   // Opacity: roaming uses hover-based opacity; minimized/chat always full
   // Entrance fade-in: start from 0

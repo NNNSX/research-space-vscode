@@ -41,6 +41,7 @@ playwright.config.*
 webview/src/
 webview/vite.config.ts
 webview/tsconfig.json
+scripts/
 src/
 tsconfig.json
 .eslintrc*

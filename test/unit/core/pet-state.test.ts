@@ -67,4 +67,30 @@ describe('pet state mini-game stats', () => {
     expect(state?.twenty48LastPlayedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(state?.flappyLastPlayedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
+
+  it('normalizes canvas follow manual placement defensively', () => {
+    expect(normalizePetState({
+      petType: 'dog',
+      petName: '旺财',
+      canvasPetLeft: 120.5,
+      canvasPetTop: 260.25,
+      canvasPetManual: true,
+    })).toMatchObject({
+      canvasPetLeft: 120.5,
+      canvasPetTop: 260.25,
+      canvasPetManual: true,
+    });
+
+    expect(normalizePetState({
+      petType: 'dog',
+      petName: '旺财',
+      canvasPetLeft: Number.NaN,
+      canvasPetTop: 260,
+      canvasPetManual: true,
+    })).toMatchObject({
+      canvasPetLeft: undefined,
+      canvasPetTop: 260,
+      canvasPetManual: false,
+    });
+  });
 });

@@ -53,6 +53,9 @@ export interface SettingsSnapshot {
   mineruLocalApiUrl: string;
   petAiProvider?: string;            // Pet AI provider override: 'auto' | provider id (v0.10.7)
   petAiModel?: string;               // Pet AI model override (empty = provider default) (v0.10.7)
+  petDisplayMode?: string;            // Pet display mode: 'panel' | 'canvas-follow'
+  petSuggestionActivity?: string;     // Pet proactive suggestion activity
+  petLongTermMemory?: boolean;        // Pet local long-term memory switch
   testMode?: boolean;
 }
 
@@ -384,6 +387,9 @@ export interface PetState {
   widgetOffsetY?: number;
   widgetLeft?: number;
   widgetTop?: number;
+  canvasPetLeft?: number;
+  canvasPetTop?: number;
+  canvasPetManual?: boolean;
   miniGameStatsDate?: string;
   snakeLastScore?: number;
   snakeBestScoreToday?: number;
@@ -403,7 +409,7 @@ export interface PetState {
   flappyLastPlayedAt?: string;
 }
 
-export type PetSettingsKey = 'pet.enabled' | 'pet.groundTheme' | 'pet.restReminder';
+export type PetSettingsKey = 'pet.enabled' | 'pet.groundTheme' | 'pet.restReminder' | 'pet.suggestionActivity' | 'pet.displayMode' | 'pet.longTermMemory';
 
 // ── Canvas file (.rsws) ─────────────────────────────────────────────────────
 
@@ -577,9 +583,11 @@ export type WebviewMessage =
   | { type: 'pipelinePause'; pipelineId: string }
   | { type: 'pipelineResume'; pipelineId: string }
   | { type: 'pipelineCancel'; pipelineId: string }
-  | { type: 'petSettingChanged'; key: PetSettingsKey; value: boolean | number | GroundThemeId }
+  | { type: 'petSettingChanged'; key: PetSettingsKey; value: boolean | number | string | GroundThemeId }
   | { type: 'savePetState'; state: PetState }
-  | { type: 'petSaveMemory'; content: string }
+  | { type: 'petSaveMemory'; content: string; profileSnapshot?: unknown; memoryRecord?: unknown }
+  | { type: 'petClearMemory' }
+  | { type: 'petRequestMemorySummary' }
   | {
       type: 'petAiChat';
       requestId: string;
@@ -598,8 +606,16 @@ export type ExtensionMessage =
       petEnabled: boolean;
       restReminderMin: number;
       groundTheme?: GroundThemeId;
+      suggestionActivity?: string;
+      displayMode?: string;
+      longTermMemory?: boolean;
     }
   | { type: 'petAssetsBase'; uri: string }
+  | {
+      type: 'petMemorySummary';
+      profile: unknown;
+      records: unknown[];
+    }
   | { type: 'petAiChatResponse'; requestId: string; text: string; success: boolean }
   | { type: 'toolDefs'; tools: JsonToolDef[] }
   | { type: 'toolDefError'; message: string }

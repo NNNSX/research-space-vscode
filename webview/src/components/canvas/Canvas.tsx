@@ -16,6 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react';
 import { useCanvasStore, type CanvasDetailLevel } from '../../stores/canvas-store';
+import { usePetStore } from '../../stores/pet-store';
 import { postMessage } from '../../bridge';
 import { wouldCreateCycle } from '../../utils/graph-utils';
 import { DataNode } from '../nodes/DataNode';
@@ -37,6 +38,7 @@ import { BlueprintOverlays } from './BlueprintOverlay';
 import { SearchBar } from './SearchBar';
 import { PreviewModal } from './PreviewModal';
 import { PipelineToolbar } from '../pipeline/PipelineToolbar';
+import { PetCanvasCompanion } from '../pet/PetCanvasCompanion';
 import { isBlueprintInputPlaceholderNode, isDataNode, isGroupHubNode } from '../../../../src/core/canvas-model';
 import type { AiTool, CanvasFile, CanvasNode } from '../../../../src/core/canvas-model';
 import { closeAllCanvasContextMenus, useCanvasContextMenuAutoClose } from '../../utils/context-menu';
@@ -276,6 +278,19 @@ export function Canvas() {
     onChange: useCallback(({ nodes: selNodes }: { nodes: RFNode[] }) => {
       const ids = selNodes.map(n => n.id);
       setSelectedNodeIds(ids);
+      if (ids.length > 0) {
+        const first = selNodes[0];
+        const data = first.data as CanvasNode | undefined;
+        try {
+          usePetStore.getState().notifyCanvasEvent('node_selected', {
+            nodeId: String(first.id),
+            nodeType: data?.node_type ?? (typeof first.type === 'string' ? first.type : undefined),
+            title: data?.title,
+          });
+        } catch {
+          // pet may not be initialized
+        }
+      }
     }, [setSelectedNodeIds]),
   });
 
@@ -835,6 +850,7 @@ export function Canvas() {
           )}
           <BoardOverlays />
           <BlueprintOverlays />
+          <PetCanvasCompanion containerRef={reactFlowWrapper} detailLevel={canvasDetailLevel} />
           {edgeContextMenu && (
             <EdgeContextMenu
               edgeId={edgeContextMenu.edgeId}

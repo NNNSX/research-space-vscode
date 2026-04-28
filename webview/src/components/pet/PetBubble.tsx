@@ -6,14 +6,18 @@ interface PetBubbleProps {
   maxWidth?: number;
   /** If provided, clicking the bubble calls this */
   onClick?: () => void;
+  onAccept?: () => void;
+  onLater?: () => void;
+  onMute?: () => void;
 }
 
 /**
  * Speech bubble that appears above the pet.
  * Styled after vscode-pets: white background, dark border, CSS triangle tail.
  */
-export function PetBubble({ text, maxWidth = 200, onClick }: PetBubbleProps) {
+export function PetBubble({ text, maxWidth = 200, onClick, onAccept, onLater, onMute }: PetBubbleProps) {
   const [visible, setVisible] = useState(false);
+  const hasActions = !!onAccept || !!onLater || !!onMute;
 
   useEffect(() => {
     requestAnimationFrame(() => setVisible(true));
@@ -42,13 +46,50 @@ export function PetBubble({ text, maxWidth = 200, onClick }: PetBubbleProps) {
         boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
         opacity: visible ? 1 : 0,
         transition: 'opacity 0.3s ease',
-        pointerEvents: onClick ? 'auto' : 'none',
+        pointerEvents: onClick || hasActions ? 'auto' : 'none',
         cursor: onClick ? 'pointer' : undefined,
         zIndex: 10,
         textAlign: 'center',
       }}
     >
-      {text}
+      <div>{text}</div>
+      {hasActions && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 6,
+            justifyContent: 'center',
+            marginTop: 5,
+            paddingTop: 4,
+            borderTop: '1px solid rgba(0,0,0,0.12)',
+          }}
+        >
+          {onAccept && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onAccept(); }}
+              style={bubbleActionButtonStyle}
+            >
+              采纳
+            </button>
+          )}
+          {onLater && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onLater(); }}
+              style={bubbleActionButtonStyle}
+            >
+              稍后
+            </button>
+          )}
+          {onMute && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onMute(); }}
+              style={bubbleActionButtonStyle}
+            >
+              不再提醒
+            </button>
+          )}
+        </div>
+      )}
       {/* Tail — outer (border color) */}
       <div
         style={{
@@ -80,3 +121,14 @@ export function PetBubble({ text, maxWidth = 200, onClick }: PetBubbleProps) {
     </div>
   );
 }
+
+const bubbleActionButtonStyle: React.CSSProperties = {
+  border: '1px solid rgba(0,0,0,0.25)',
+  borderRadius: 999,
+  background: 'rgba(255,255,255,0.9)',
+  color: '#333',
+  fontSize: 10,
+  lineHeight: 1.2,
+  padding: '2px 6px',
+  cursor: 'pointer',
+};

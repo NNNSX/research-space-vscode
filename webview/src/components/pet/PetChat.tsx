@@ -122,7 +122,7 @@ export function PetChat({ dragHandleProps }: PetChatProps) {
         <div style={{ flex: 1 }} />
         <button
           onClick={(e) => { e.stopPropagation(); setMode('game'); }}
-          title="打开小游戏"
+          title="短休息"
           style={{
             background: 'transparent',
             color: 'var(--vscode-descriptionForeground)',

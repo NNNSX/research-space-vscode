@@ -443,7 +443,7 @@ function GameLauncherCard(props: GameLauncherCardProps) {
         <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--vscode-foreground)' }}>{props.title}</div>
           <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', opacity: 0.82 }}>{props.hint}</div>
-          <div style={{ marginTop: 3, fontSize: 10, color: 'var(--vscode-button-foreground)', opacity: 0.88 }}>点击开始</div>
+          <div style={{ marginTop: 3, fontSize: 10, color: 'var(--vscode-button-foreground)', opacity: 0.88 }}>短休息一下</div>
         </div>
         <div style={{
           minWidth: 108,
@@ -455,9 +455,9 @@ function GameLauncherCard(props: GameLauncherCardProps) {
           color: 'var(--vscode-descriptionForeground)',
           flexShrink: 0,
         }}>
-          <div>最近分数：{props.lastScore ?? 0}</div>
-          <div>今日最佳：{props.bestToday ?? 0}</div>
-          <div>历史最佳：{props.bestEver ?? 0}</div>
+          <div>最近：{props.lastScore ?? 0}</div>
+          <div>今日：{props.bestToday ?? 0}</div>
+          <div>历史：{props.bestEver ?? 0}</div>
           <div>最近一次：{formatPlayedAt(props.lastPlayedAt)}</div>
         </div>
       </div>
@@ -948,7 +948,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
   };
 
   const title = activeGame === 'launcher'
-    ? '小游戏'
+    ? '短休息'
     : activeGame === 'snake'
       ? '贪吃蛇'
       : activeGame === 'twenty48'
@@ -1134,12 +1134,17 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
           minHeight: 0,
           overflowY: 'auto',
         }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vscode-foreground)' }}>休息一下</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vscode-foreground)' }}>短休息</div>
+            <div style={{ fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+              用 3-5 分钟换一下脑子。这里不会替代画布主线，也不会自动改动你的研究内容。
+            </div>
+          </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <GameLauncherCard
               title="贪吃蛇"
-              hint="方向键 / WASD 控制，难度在游戏内切换。"
+              hint="适合 1-2 分钟快速放松，方向键 / WASD 控制。"
               emoji="🐍"
               lastScore={pet.snakeLastScore}
               bestToday={pet.snakeBestScoreToday}
@@ -1149,7 +1154,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
             />
             <GameLauncherCard
               title="2048"
-              hint="方向键 / WASD 控制，合并分数也会给宠物增加经验。"
+              hint="适合短暂停顿时整理注意力，方向键 / WASD 控制。"
               emoji="🧩"
               lastScore={pet.twenty48LastScore}
               bestToday={pet.twenty48BestScoreToday}
@@ -1159,7 +1164,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
             />
             <GameLauncherCard
               title="数独"
-              hint="点击格子后填入 1-9，方向键移动，难度在游戏内切换。"
+              hint="更偏安静思考，适合稍长一点的短休息。"
               emoji="🔢"
               lastScore={pet.sudokuLastScore}
               bestToday={pet.sudokuBestScoreToday}
@@ -1169,7 +1174,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
             />
             <GameLauncherCard
               title="像素鸟"
-              hint="空格 / ↑ / W 拍翅穿过管道，难度在游戏内切换。"
+              hint="节奏更轻快，空格 / ↑ / W 拍翅。"
               emoji="🐤"
               lastScore={pet.flappyLastScore}
               bestToday={pet.flappyBestScoreToday}
@@ -1189,7 +1194,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
             color: 'var(--vscode-descriptionForeground)',
             lineHeight: 1.55,
           }}>
-            按 <strong>Esc</strong> 可直接返回宠物漫游。小游戏窗口保持独立，不影响画布工作流。
+            建议只作为短休息使用。按 <strong>Esc</strong> 可直接返回宠物漫游，画布工作流不会被自动改变。
           </div>
         </div>
       ) : activeGame === 'snake' ? (
@@ -1308,7 +1313,7 @@ export function PetGame({ dragHandleProps, onHeightChange }: PetGameProps) {
               cursor: 'grab',
             }}
           >
-            <span>🎮 科研间隙放松一下</span>
+            <span>☕ 短休息，结束后回到画布</span>
             <div style={{ flex: 1 }} />
             <span style={{ opacity: 0.45 }}>Esc 返回列表</span>
           </div>

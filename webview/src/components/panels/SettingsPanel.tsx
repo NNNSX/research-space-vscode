@@ -1,14 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useCanvasStore } from '../../stores/canvas-store';
-import { usePetStore } from '../../stores/pet-store';
+import { usePetStore, type PetDisplayMode } from '../../stores/pet-store';
 import { onMessage, postMessage } from '../../bridge';
 import type { ConversionDiagnosticStatus, ConversionDiagnosticsReport, CustomProviderConfig, SettingsSnapshot } from '../../../../src/core/canvas-model';
 import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect';
 import { getAutoModelLabel, getConcreteProviderModelLabel, getFavoriteModelsForProvider, getProviderDisplayName, orderModelsByIds } from '../../utils/model-labels';
 import { PET_TYPES, getPetType, GROUND_THEMES } from '../../pet/pet-types';
 import type { PetTypeId, GroundThemeId } from '../../pet/pet-types';
+import type { PetSuggestionActivity } from '../../pet/pet-event-policy';
 import { getPetLevelProgress } from '../../../../src/core/pet-state';
+import { getPetGrowthSummary, type PetGrowthMilestoneKind } from '../../../../src/core/pet-growth';
 import { buildCanvasHealthReport, type CanvasHealthReport, type CanvasHealthSeverity } from '../../utils/canvas-health';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1689,7 +1691,26 @@ const modalPanelStyle: React.CSSProperties = {
 // ── PetSettingsSection ───────────────────────────────────────────────────────
 
 function PetSettingsSection() {
-  const { enabled, setEnabled, pet, setPetType, setPetName, restReminderMin, setRestReminderMin, groundTheme, setGroundTheme } = usePetStore();
+  const {
+    enabled,
+    setEnabled,
+    pet,
+    setPetType,
+    setPetName,
+    restReminderMin,
+    setRestReminderMin,
+    groundTheme,
+    setGroundTheme,
+    suggestionActivity,
+    setSuggestionActivity,
+    displayMode,
+    setDisplayMode,
+    longTermMemory,
+    setLongTermMemory,
+    clearLongTermMemory,
+    memorySummary,
+    requestMemorySummary,
+  } = usePetStore();
   const settings = useCanvasStore(s => s.settings);
   const modelCache = useCanvasStore(s => s.modelCache);
   const { saveSetting } = useSettingsPersistence();
@@ -1699,6 +1720,12 @@ function PetSettingsSection() {
   useEffect(() => {
     setNameInput(pet.petName);
   }, [pet.petName]);
+
+  useEffect(() => {
+    if (enabled && longTermMemory) {
+      requestMemorySummary();
+    }
+  }, [enabled, longTermMemory, requestMemorySummary]);
 
   const handleNameChange = (v: string) => {
     setNameInput(v);
@@ -1717,6 +1744,7 @@ function PetSettingsSection() {
     settings ?? null
   )}${resolvedPetModel ? ` · ${resolvedPetModel}` : ''})`;
   const petExpProgress = getPetLevelProgress(pet.exp, pet.level);
+  const petGrowth = getPetGrowthSummary(pet);
 
   return (
     <>
@@ -1781,6 +1809,22 @@ function PetSettingsSection() {
             />
           </Section>
 
+          <Section title="显示模式">
+            <SearchableSelect
+              style={selectStyle}
+              value={displayMode}
+              options={[
+                { value: 'panel', label: '固定小面板', keywords: ['panel', '面板', '固定'] },
+                { value: 'canvas-follow', label: '全画布跟随', keywords: ['canvas', 'follow', '画布', '跟随'] },
+              ]}
+              onChange={v => setDisplayMode(v as PetDisplayMode)}
+              placeholder="选择显示模式..."
+            />
+            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+              全画布跟随会把宠物作为画布内轻量悬浮角色，聊天和小游戏仍使用固定面板。
+            </div>
+          </Section>
+
           <Section title="宠物名字">
             <input
               style={inputStyle}
@@ -1799,6 +1843,124 @@ function PetSettingsSection() {
               value={restReminderMin}
               onChange={e => setRestReminderMin(Number(e.target.value) || 0)}
             />
+          </Section>
+
+          <Section title="主动建议">
+            <SearchableSelect
+              style={selectStyle}
+              value={suggestionActivity}
+              options={[
+                { value: 'off', label: '勿扰：不主动气泡提醒', keywords: ['off', '勿扰', '关闭'] },
+                { value: 'quiet', label: '安静：只保留重要提醒', keywords: ['quiet', '安静'] },
+                { value: 'balanced', label: '平衡：低频上下文建议', keywords: ['balanced', '平衡'] },
+                { value: 'active', label: '活跃：更快给出整理建议', keywords: ['active', '活跃'] },
+              ]}
+              onChange={v => setSuggestionActivity(v as PetSuggestionActivity)}
+              placeholder="选择活跃度..."
+            />
+            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+              该设置只影响宠物主动提醒，不影响点击、对话和休息统计。
+            </div>
+          </Section>
+
+          <Section title="长期记忆">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={longTermMemory}
+                onChange={e => setLongTermMemory(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <span>启用本地长期记忆</span>
+            </label>
+            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--vscode-descriptionForeground)', lineHeight: 1.5 }}>
+              只保存宠物状态、近期事件类型和会话摘要，不保存源文件正文。
+            </div>
+            {longTermMemory && (
+              <div style={{
+                marginTop: 8,
+                padding: 8,
+                borderRadius: 6,
+                border: '1px solid var(--vscode-panel-border)',
+                background: 'var(--vscode-editorWidget-background, rgba(255,255,255,0.04))',
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>我学到了</div>
+                {memorySummary ? (
+                  <>
+                    <div>主动建议：{formatPetSuggestionActivity(memorySummary.profile.suggestionActivity)}</div>
+                    <div>显示偏好：{memorySummary.profile.displayMode === 'canvas-follow' ? '全画布跟随' : '固定小面板'}</div>
+                    <div>
+                      常用场景：{memorySummary.profile.frequentScenes.length > 0
+                        ? memorySummary.profile.frequentScenes.map(formatPetScene).join('、')
+                        : '暂无'}
+                    </div>
+                    <div>
+                      常用节点：{memorySummary.profile.frequentNodeTypes.length > 0
+                        ? memorySummary.profile.frequentNodeTypes.map(formatPetNodeType).join('、')
+                        : '暂无'}
+                    </div>
+                    <div>
+                      常用工具：{memorySummary.profile.frequentTools.length > 0
+                        ? memorySummary.profile.frequentTools.slice(-4).join('、')
+                        : '暂无'}
+                    </div>
+                    <div>
+                      近期事件：{memorySummary.profile.frequentEventTypes.length > 0
+                        ? memorySummary.profile.frequentEventTypes.map(formatPetEventType).join('、')
+                        : '暂无'}
+                    </div>
+                    <div>
+                      建议响应：展示 {memorySummary.profile.suggestionStats.shown} 次，采纳 {memorySummary.profile.suggestionStats.accepted} 次，稍后 {memorySummary.profile.suggestionStats.later} 次，屏蔽 {memorySummary.profile.suggestionStats.muted} 次
+                      {memorySummary.profile.suggestionStats.shown > 0
+                        ? `，采纳率 ${Math.round((memorySummary.profile.suggestionStats.accepted / memorySummary.profile.suggestionStats.shown) * 100)}%`
+                        : ''}
+                    </div>
+                    <div style={{ marginTop: 4, color: 'var(--vscode-descriptionForeground)' }}>
+                      最近记忆：{memorySummary.records[0]?.text ?? '暂无会话摘要'}
+                    </div>
+                  </>
+                ) : (
+                  <span style={{ color: 'var(--vscode-descriptionForeground)' }}>暂无长期记忆摘要。</span>
+                )}
+              </div>
+            )}
+            <button
+              onClick={() => {
+                const ok = window.confirm('确定清空宠物长期记忆吗？这会删除 pet/profile.json、pet/memory.jsonl 和 pet/memory.md，但不会删除宠物等级和位置状态。');
+                if (ok) { clearLongTermMemory(); }
+              }}
+              style={{
+                marginTop: 8,
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid var(--vscode-inputValidation-warningBorder, #cca700)',
+                background: 'transparent',
+                color: 'var(--vscode-foreground)',
+                cursor: 'pointer',
+                fontSize: 11,
+              }}
+            >
+              清空长期记忆
+            </button>
+            <button
+              onClick={() => requestMemorySummary()}
+              disabled={!longTermMemory}
+              style={{
+                marginTop: 8,
+                marginLeft: 8,
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid var(--vscode-button-border, var(--vscode-panel-border))',
+                background: 'transparent',
+                color: longTermMemory ? 'var(--vscode-foreground)' : 'var(--vscode-disabledForeground)',
+                cursor: longTermMemory ? 'pointer' : 'default',
+                fontSize: 11,
+              }}
+            >
+              刷新记忆摘要
+            </button>
           </Section>
 
           <Section title="宠物 AI">
@@ -1861,8 +2023,147 @@ function PetSettingsSection() {
               <span>总工作时间: {Math.floor(pet.totalWorkMinutes)} 分钟</span>
             </div>
           </Section>
+
+          <Section title="成长与进化">
+            <div style={{
+              padding: 8,
+              borderRadius: 8,
+              border: '1px solid var(--vscode-panel-border)',
+              background: 'var(--vscode-editorWidget-background, rgba(255,255,255,0.04))',
+              fontSize: 11,
+              lineHeight: 1.5,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--vscode-foreground)' }}>{petGrowth.stageLabel}</div>
+                  <div style={{ color: 'var(--vscode-descriptionForeground)' }}>
+                    {petGrowth.isMaxLevel
+                      ? '当前已达到最高成长阶段。'
+                      : `距下一等级还需 ${Math.ceil(petGrowth.remainingToNextLevel)} 经验`}
+                  </div>
+                </div>
+                <div style={{
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  border: '1px solid var(--vscode-panel-border)',
+                  color: 'var(--vscode-foreground)',
+                  whiteSpace: 'nowrap',
+                }}>
+                  Lv.{pet.level}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 8 }}>
+                <div style={{ marginBottom: 4, color: 'var(--vscode-descriptionForeground)' }}>
+                  已获得能力 / 伙伴
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {petGrowth.unlockedMilestones.slice(-8).map(milestone => (
+                    <span
+                      key={milestone.id}
+                      title={milestone.description}
+                      style={petMilestonePillStyle}
+                    >
+                      {formatPetMilestoneKind(milestone.kind)} {milestone.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {petGrowth.nextMilestone && (
+                <div style={{ marginTop: 8, color: 'var(--vscode-descriptionForeground)' }}>
+                  下一成长：Lv.{petGrowth.nextMilestone.level} · {petGrowth.nextMilestone.title} — {petGrowth.nextMilestone.description}
+                </div>
+              )}
+
+              <div style={{
+                marginTop: 8,
+                padding: 8,
+                borderRadius: 6,
+                background: 'rgba(127,127,127,0.08)',
+              }}>
+                <div style={{ fontWeight: 700, color: 'var(--vscode-foreground)' }}>
+                  工作节奏：{petGrowth.workRhythm.rhythmLabel}
+                </div>
+                <div style={{ color: 'var(--vscode-descriptionForeground)' }}>
+                  本次约 {petGrowth.workRhythm.currentSessionMinutes} 分钟；累计约 {petGrowth.workRhythm.totalWorkHours} 小时 {petGrowth.workRhythm.totalWorkMinutes % 60} 分钟。
+                </div>
+                <div style={{ marginTop: 3, color: 'var(--vscode-descriptionForeground)' }}>
+                  {petGrowth.workRhythm.rhythmHint}
+                </div>
+              </div>
+            </div>
+          </Section>
         </>
       )}
     </>
   );
+}
+
+const petMilestonePillStyle: React.CSSProperties = {
+  padding: '2px 7px',
+  borderRadius: 999,
+  border: '1px solid var(--vscode-panel-border)',
+  background: 'rgba(127,127,127,0.08)',
+  color: 'var(--vscode-foreground)',
+  fontSize: 10,
+};
+
+function formatPetMilestoneKind(kind: PetGrowthMilestoneKind): string {
+  if (kind === 'pet') { return '伙伴'; }
+  if (kind === 'memory') { return '记忆'; }
+  if (kind === 'suggestion') { return '建议'; }
+  if (kind === 'awareness') { return '感知'; }
+  return '陪伴';
+}
+
+function formatPetSuggestionActivity(value: string): string {
+  if (value === 'off') { return '勿扰'; }
+  if (value === 'quiet') { return '安静'; }
+  if (value === 'active') { return '活跃'; }
+  return '平衡';
+}
+
+function formatPetEventType(value: string): string {
+  const map: Record<string, string> = {
+    node_added: '新增节点',
+    node_deleted: '删除节点',
+    node_selected: '选中节点',
+    node_connected: '连接节点',
+    tool_run_completed: 'AI 完成',
+    tool_run_failed: 'AI 失败',
+    repeated_error: '连续错误',
+    long_session: '长时间工作',
+  };
+  return map[value] ?? value;
+}
+
+function formatPetNodeType(value: string): string {
+  const map: Record<string, string> = {
+    paper: '论文',
+    note: '笔记',
+    code: '代码',
+    image: '图片',
+    ai_output: 'AI 输出',
+    audio: '音频',
+    video: '视频',
+    experiment_log: '实验记录',
+    task: '任务',
+    data: '数据',
+    mindmap: '导图',
+    function: 'AI 工具',
+    group_hub: '节点组',
+    blueprint: '蓝图',
+  };
+  return map[value] ?? value;
+}
+
+function formatPetScene(value: string): string {
+  const map: Record<string, string> = {
+    paper: '论文',
+    proposal: '项目书',
+    patent: '专利',
+    mixed: '混合',
+  };
+  return map[value] ?? value;
 }

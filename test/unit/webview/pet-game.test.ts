@@ -75,13 +75,26 @@ describe('PetGame mini-game stats', () => {
     });
 
     const launcherButtons = Array.from(container.querySelectorAll('button')).filter(button =>
-      button.textContent?.includes('最近分数：0')
+      button.textContent?.includes('最近：0')
       && (button.textContent.includes('贪吃蛇') || button.textContent.includes('2048') || button.textContent.includes('数独') || button.textContent.includes('像素鸟')),
     );
     expect(launcherButtons).toHaveLength(4);
 
     const scrollContainer = Array.from(container.querySelectorAll('div')).find(div => div.style.overflowY === 'auto');
     expect(scrollContainer).toBeTruthy();
+  });
+
+  it('frames games as a short break instead of the pet main line', () => {
+    act(() => {
+      root.render(React.createElement(PetGame, {
+        dragHandleProps: { onMouseDown: () => undefined },
+      }));
+    });
+
+    expect(container.textContent).toContain('短休息');
+    expect(container.textContent).toContain('不会替代画布主线');
+    expect(container.textContent).toContain('画布工作流不会被自动改变');
+    expect(container.textContent).not.toContain('科研间隙放松一下');
   });
 
   it('does not auto-start snake until the user presses a direction key', () => {

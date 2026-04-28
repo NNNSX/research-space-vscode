@@ -8,7 +8,17 @@ import { runPipeline, pausePipeline, resumePipeline, cancelPipeline } from '../p
 import { getProviderById } from '../ai/provider';
 import { ToolRegistry } from '../ai/tool-registry';
 import { DataNodeRegistry } from '../core/data-node-registry';
-import { readPetState, writePetState, readPetSettings } from '../pet/pet-memory';
+import {
+  appendPetMemoryRecord,
+  clearPetLongTermMemory,
+  readPetMemorySummary,
+  readPetSettings,
+  readPetState,
+  updatePetProfileFromSnapshot,
+  writePetMemoryMarkdown,
+  writePetState,
+} from '../pet/pet-memory';
+import { extractPetPerception } from '../pet/pet-perception';
 import { extractPreviewWithMeta } from '../core/content-extractor';
 import { deleteBlueprintDefinition, listBlueprintDefinitions, readBlueprintDefinition, saveBlueprintDefinition } from '../blueprint/blueprint-registry';
 import { runBlueprintInstance } from '../blueprint/blueprint-runner';
@@ -1992,18 +2002,37 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       }
 
       case 'petSaveMemory': {
-        // Save pet memory as markdown
-        const memoryContent = (msg as any).content as string;
-        if (memoryContent) {
-          const fs = await import('fs');
-          const petDir = path.join(canvasDir, 'pet');
-          await fs.promises.mkdir(petDir, { recursive: true });
-          await fs.promises.writeFile(
-            path.join(petDir, 'memory.md'),
-            memoryContent,
-            'utf-8',
-          );
+        const petSettings = readPetSettings();
+        if (petSettings.longTermMemory) {
+          const memoryContent = (msg as any).content as string;
+          if (memoryContent) {
+            await writePetMemoryMarkdown(canvasDir, memoryContent);
+          }
+          if ((msg as any).profileSnapshot) {
+            const perception = extractPetPerception(document.data);
+            await updatePetProfileFromSnapshot(canvasDir, {
+              ...(msg as any).profileSnapshot,
+              frequentNodeTypes: Object.keys(perception.nodeStats).filter(type => (perception.nodeStats[type] ?? 0) > 0),
+              frequentTools: perception.functionNodeNames,
+              frequentScenes: perception.scene !== 'unknown' ? [perception.scene] : [],
+            });
+          }
+          if ((msg as any).memoryRecord) {
+            await appendPetMemoryRecord(canvasDir, (msg as any).memoryRecord);
+          }
         }
+        break;
+      }
+
+      case 'petClearMemory': {
+        await clearPetLongTermMemory(canvasDir);
+        webview.postMessage({ type: 'toastError', message: '宠物长期记忆已清空' });
+        break;
+      }
+
+      case 'petRequestMemorySummary': {
+        const summary = await readPetMemorySummary(canvasDir);
+        webview.postMessage({ type: 'petMemorySummary', profile: summary.profile, records: summary.records });
         break;
       }
     }
@@ -2018,6 +2047,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       petEnabled: petSettings.enabled,
       restReminderMin: petSettings.restReminderMin,
       groundTheme: petSettings.groundTheme,
+      suggestionActivity: petSettings.suggestionActivity,
+      displayMode: petSettings.displayMode,
+      longTermMemory: petSettings.longTermMemory,
     });
     const petAssetsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'pets')
@@ -2062,6 +2094,9 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
       mineruLocalApiUrl:        explosion.get<string>('mineru.apiUrl', 'http://localhost:8000'),
       petAiProvider:            pet.get<string>('aiProvider', 'auto'),
       petAiModel:               pet.get<string>('aiModel', ''),
+      petDisplayMode:           pet.get<string>('displayMode', 'panel'),
+      petSuggestionActivity:    pet.get<string>('suggestionActivity', 'balanced'),
+      petLongTermMemory:        pet.get<boolean>('longTermMemory', true),
       testMode:                 process.env.RESEARCH_SPACE_TEST_MODE === '1',
     };
   }

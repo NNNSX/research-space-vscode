@@ -24,7 +24,19 @@ export function PetCharacter({
   bubbleMaxWidth = 120,
   onBubbleClick,
 }: PetCharacterProps) {
-  const { engine, pet, bubbleText, handleClick, handleDoubleClick, handleSwipe, assetsBaseUri } = usePetStore();
+  const {
+    engine,
+    pet,
+    bubbleText,
+    bubbleSuggestionKind,
+    handleClick,
+    handleDoubleClick,
+    handleSwipe,
+    acceptSuggestion,
+    dismissSuggestion,
+    muteSuggestionKind,
+    assetsBaseUri,
+  } = usePetStore();
   const typeDef = getPetType(pet.petType);
   const swipeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -65,6 +77,9 @@ export function PetCharacter({
           text={bubbleText}
           maxWidth={bubbleMaxWidth}
           onClick={onBubbleClick}
+          onAccept={bubbleSuggestionKind ? () => acceptSuggestion(bubbleSuggestionKind) : undefined}
+          onLater={bubbleSuggestionKind ? () => dismissSuggestion(bubbleSuggestionKind) : undefined}
+          onMute={bubbleSuggestionKind ? () => muteSuggestionKind(bubbleSuggestionKind) : undefined}
         />
       )}
 

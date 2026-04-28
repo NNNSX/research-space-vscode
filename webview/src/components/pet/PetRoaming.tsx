@@ -2,6 +2,7 @@ import React from 'react';
 import { usePetStore } from '../../stores/pet-store';
 import { getPetType, getGroundTheme } from '../../pet/pet-types';
 import { PetCharacter } from './PetCharacter';
+import { PetSuggestionCard } from './PetSuggestionCard';
 import { getPetLevelProgress } from '../../../../src/core/pet-state';
 
 const ROAMING_WIDTH = 140;
@@ -33,6 +34,7 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
 
   return (
     <div style={{
+      position: 'relative',
       width: ROAMING_WIDTH,
       height: ROAMING_HEIGHT,
       borderRadius: 12,
@@ -43,6 +45,7 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
       display: 'flex',
       flexDirection: 'column',
     }}>
+      <PetSuggestionCard />
       {/* Pet ground area — draggable + clip backgrounds but allow bubble overflow */}
       <div
         {...dragHandleProps}
@@ -173,7 +176,7 @@ export function PetRoaming({ dragHandleProps }: PetRoamingProps) {
 
         <button
           onClick={(e) => { e.stopPropagation(); setMode('game'); }}
-          title="打开小游戏"
+          title="短休息"
           style={{
             background: 'transparent',
             color: 'var(--vscode-descriptionForeground)',

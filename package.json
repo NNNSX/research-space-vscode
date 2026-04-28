@@ -3,11 +3,11 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.3.1-alpha.1",
+  "version": "2.3.2-alpha.1",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/research-space-dev/research-space"
+    "url": "https://github.com/NNNSX/research-space-vscode"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -421,6 +421,31 @@
           "default": 15,
           "description": "AI suggestion minimum interval in minutes (0 = disabled)"
         },
+        "researchSpace.pet.suggestionActivity": {
+          "type": "string",
+          "enum": [
+            "off",
+            "quiet",
+            "balanced",
+            "active"
+          ],
+          "default": "balanced",
+          "description": "Pet proactive suggestion activity. off disables canvas event bubbles; quiet reduces interruptions; active lowers cooldowns."
+        },
+        "researchSpace.pet.displayMode": {
+          "type": "string",
+          "enum": [
+            "panel",
+            "canvas-follow"
+          ],
+          "default": "panel",
+          "description": "Pet display mode. panel keeps the compact floating panel; canvas-follow renders the pet as a lightweight canvas overlay following the current focus."
+        },
+        "researchSpace.pet.longTermMemory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable local long-term pet memory files under the workspace pet folder. These files store lightweight usage summaries, not source document contents."
+        },
         "researchSpace.pet.groundTheme": {
           "type": "string",
           "enum": [
@@ -473,7 +498,10 @@
     "test:aihubmix:tts-live": "node ./test/live/aihubmix-tts-live.mjs",
     "test:aihubmix:stt-live": "node ./test/live/aihubmix-stt-live.mjs",
     "test:aihubmix:video-live": "node ./test/live/aihubmix-video-live.mjs",
-    "test:aihubmix:live-matrix": "npm run test:aihubmix:tts-live && npm run test:aihubmix:stt-live && npm run test:aihubmix:gpt-image-live && npm run test:aihubmix:gemini-image-live && npm run test:aihubmix:doubao-image-live"
+    "test:aihubmix:live-matrix": "npm run test:aihubmix:tts-live && npm run test:aihubmix:stt-live && npm run test:aihubmix:gpt-image-live && npm run test:aihubmix:gemini-image-live && npm run test:aihubmix:doubao-image-live",
+    "package:generic": "npm run build:package && vsce package",
+    "package:target": "npm run build:package && node ./scripts/package-current-target.cjs",
+    "check:vsix": "node ./scripts/check-vsix-runtime-deps.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

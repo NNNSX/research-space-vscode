@@ -11,10 +11,46 @@ import {
 import { postMessage } from '../bridge';
 import type { PetChatMessage, PetState as SharedPetState } from '../../../src/core/canvas-model';
 import { getUnlockedPetsForLevel, normalizePetState } from '../../../src/core/pet-state';
+import {
+  createPetCanvasEvent,
+  pickPetLocalSuggestion,
+  trimPetEventHistory,
+  type PetCanvasEvent,
+  type PetCanvasEventInput,
+  type PetSuggestionActivity,
+  type PetSuggestionKind,
+} from '../pet/pet-event-policy';
+import { buildPetSuggestionCard, type PetSuggestionCard } from '../pet/pet-brain';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
 export type PetMode = 'minimized' | 'roaming' | 'chat' | 'game';
+export type PetDisplayMode = 'panel' | 'canvas-follow';
+
+export interface PetMemorySummaryState {
+  profile: {
+    frequentEventTypes: string[];
+    frequentNodeTypes: string[];
+    frequentTools: string[];
+    frequentScenes: string[];
+    suggestionStats: {
+      shown: number;
+      accepted: number;
+      later: number;
+      muted: number;
+    };
+    suggestionActivity: string;
+    displayMode: string;
+    updatedAt?: string;
+  };
+  records: Array<{
+    id: string;
+    createdAt: string;
+    type: string;
+    importance: number;
+    text: string;
+  }>;
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -51,10 +87,14 @@ interface PetStore {
 
   // Widget mode (replaces collapsed + chatOpen)
   mode: PetMode;
+  displayMode: PetDisplayMode;
 
   // Floating widget position (absolute left/top)
   widgetLeft: number;
   widgetTop: number;
+  canvasPetLeft: number | null;
+  canvasPetTop: number | null;
+  canvasPetManual: boolean;
   hovered: boolean;
 
   // Pre-chat position (saved when entering chat, restored when leaving)
@@ -82,6 +122,7 @@ interface PetStore {
 
   // Bubble
   bubbleText: string | null;
+  bubbleSuggestionKind: PetSuggestionKind | null;
 
   // Chat state (managed in store, not local component state)
   chatMessages: ChatMessage[];
@@ -89,18 +130,34 @@ interface PetStore {
 
   // Canvas event awareness
   lastCanvasReaction: number;  // Date.now() of last event reaction (30s throttle)
+  recentCanvasEvents: PetCanvasEvent[];
+  lastSuggestionByKind: Partial<Record<PetSuggestionKind, number>>;
+  mutedSuggestionKinds: Partial<Record<PetSuggestionKind, boolean>>;
+  suggestionActivity: PetSuggestionActivity;
+  longTermMemory: boolean;
+  memorySummary: PetMemorySummaryState | null;
+  suggestionStats: PetMemorySummaryState['profile']['suggestionStats'];
+  activeSuggestionCard: PetSuggestionCard | null;
 
   // Greeting shown this session?
   greetingShown: boolean;
 
   // Actions
   setAssetsBaseUri(uri: string): void;
-  init(state: PetState | null, enabled: boolean, restReminderMin: number, groundTheme?: GroundThemeId): void;
+  init(state: PetState | null, enabled: boolean, restReminderMin: number, groundTheme?: GroundThemeId, suggestionActivity?: string, displayMode?: string, longTermMemory?: boolean): void;
   setEnabled(enabled: boolean): void;
   setMode(mode: PetMode): void;
   setAnchor(left: number, top: number): void;
+  setCanvasPetPosition(left: number, top: number, manual?: boolean): void;
+  resetCanvasPetPosition(): void;
   setHovered(hovered: boolean): void;
   setGroundTheme(id: GroundThemeId): void;
+  setSuggestionActivity(activity: PetSuggestionActivity): void;
+  setDisplayMode(mode: PetDisplayMode): void;
+  setLongTermMemory(enabled: boolean): void;
+  clearLongTermMemory(): void;
+  requestMemorySummary(): void;
+  setMemorySummary(summary: PetMemorySummaryState): void;
   tickEngine(): void;
   handleClick(): void;
   handleDoubleClick(): void;
@@ -111,6 +168,10 @@ interface PetStore {
   addExp(amount: number): void;
   dismissRestReminder(): void;
   showBubble(text: string, durationMs?: number): void;
+  dismissSuggestion(kind?: PetSuggestionKind | null): void;
+  acceptSuggestion(kind?: PetSuggestionKind | null): void;
+  closeSuggestionCard(kind?: PetSuggestionKind | null): void;
+  muteSuggestionKind(kind?: PetSuggestionKind | null): void;
   savePetState(): void;
   saveMemory(): void;
   // Chat actions
@@ -118,7 +179,7 @@ interface PetStore {
   addChatResponse(text: string): void;
   clearChat(): void;
   // Canvas event awareness
-  notifyCanvasEvent(eventType: 'nodeAdded' | 'nodeDeleted' | 'aiDone' | 'aiError'): void;
+  notifyCanvasEvent(eventType: PetCanvasEventInput, meta?: Partial<Pick<PetCanvasEvent, 'nodeId' | 'nodeType' | 'title'>>): void;
   recordMiniGameResult(gameId: MiniGameId, score: number): void;
 }
 
@@ -128,8 +189,12 @@ export const usePetStore = create<PetStore>((set, get) => ({
   hydrated: false,
   enabled: false,
   mode: 'roaming',
+  displayMode: 'panel',
   widgetLeft: 16,
   widgetTop: -1,  // -1 = needs initial placement (bottom-left default)
+  canvasPetLeft: null,
+  canvasPetTop: null,
+  canvasPetManual: false,
   hovered: false,
   preChatLeft: null,
   preChatTop: null,
@@ -145,24 +210,41 @@ export const usePetStore = create<PetStore>((set, get) => ({
   restReminderMin: 45,
   waitingForAi: false,
   bubbleText: null,
+  bubbleSuggestionKind: null,
   chatMessages: [],
   chatLoading: false,
   lastCanvasReaction: 0,
+  recentCanvasEvents: [],
+  lastSuggestionByKind: {},
+  mutedSuggestionKinds: {},
+  suggestionActivity: 'balanced',
+  longTermMemory: true,
+  memorySummary: null,
+  suggestionStats: { shown: 0, accepted: 0, later: 0, muted: 0 },
+  activeSuggestionCard: null,
   greetingShown: false,
 
   setAssetsBaseUri(uri) {
     set({ assetsBaseUri: uri });
   },
 
-  init(state, enabled, restReminderMin, groundTheme) {
+  init(state, enabled, restReminderMin, groundTheme, suggestionActivity, displayMode, longTermMemory) {
     const pet = resetDailyMiniGameStats(normalizePetState(state) ?? createDefaultPetState());
     const now = Date.now();
+    const normalizedActivity: PetSuggestionActivity =
+      suggestionActivity === 'off' || suggestionActivity === 'quiet' || suggestionActivity === 'active'
+        ? suggestionActivity
+        : 'balanced';
+    const normalizedDisplayMode: PetDisplayMode = displayMode === 'canvas-follow' ? 'canvas-follow' : 'panel';
     set({
       pet: { ...pet, currentSessionStart: new Date().toISOString() },
       hydrated: true,
       enabled,
       restReminderMin,
       groundTheme: groundTheme ?? 'forest',
+      suggestionActivity: normalizedActivity,
+      displayMode: normalizedDisplayMode,
+      longTermMemory: longTermMemory !== false,
       sessionStartTime: now,
       lastInteractionTime: now,
       lastRestRemind: now,
@@ -171,6 +253,9 @@ export const usePetStore = create<PetStore>((set, get) => ({
       // Restore widget position from persisted state (migrate from anchor-based if needed)
       widgetLeft: pet.widgetLeft ?? 16,
       widgetTop: pet.widgetTop ?? -1,  // -1 = needs initial placement
+      canvasPetLeft: Number.isFinite(pet.canvasPetLeft) ? pet.canvasPetLeft! : null,
+      canvasPetTop: Number.isFinite(pet.canvasPetTop) ? pet.canvasPetTop! : null,
+      canvasPetManual: pet.canvasPetManual === true,
     });
 
     // Show greeting after a short delay
@@ -223,6 +308,16 @@ export const usePetStore = create<PetStore>((set, get) => ({
     setTimeout(() => get().savePetState(), 500);
   },
 
+  setCanvasPetPosition(left, top, manual = true) {
+    set({ canvasPetLeft: left, canvasPetTop: top, canvasPetManual: manual });
+    setTimeout(() => get().savePetState(), 500);
+  },
+
+  resetCanvasPetPosition() {
+    set({ canvasPetLeft: null, canvasPetTop: null, canvasPetManual: false });
+    setTimeout(() => get().savePetState(), 500);
+  },
+
   setHovered(hovered) {
     set({ hovered });
   },
@@ -230,6 +325,35 @@ export const usePetStore = create<PetStore>((set, get) => ({
   setGroundTheme(id) {
     set({ groundTheme: id });
     postMessage({ type: 'petSettingChanged', key: 'pet.groundTheme', value: id });
+  },
+
+  setSuggestionActivity(activity) {
+    set({ suggestionActivity: activity });
+    postMessage({ type: 'petSettingChanged', key: 'pet.suggestionActivity', value: activity });
+  },
+
+  setDisplayMode(mode) {
+    set({ displayMode: mode });
+    postMessage({ type: 'petSettingChanged', key: 'pet.displayMode', value: mode });
+  },
+
+  setLongTermMemory(enabled) {
+    set({ longTermMemory: enabled });
+    postMessage({ type: 'petSettingChanged', key: 'pet.longTermMemory', value: enabled });
+  },
+
+  clearLongTermMemory() {
+    set({ memorySummary: null });
+    postMessage({ type: 'petClearMemory' });
+  },
+
+  requestMemorySummary() {
+    if (!get().longTermMemory) { return; }
+    postMessage({ type: 'petRequestMemorySummary' });
+  },
+
+  setMemorySummary(summary) {
+    set({ memorySummary: summary });
   },
 
   tickEngine() {
@@ -310,6 +434,7 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
     // AI suggestion trigger: idle > 5min, interval elapsed, not already waiting
     if (
+      s.suggestionActivity !== 'off' &&
       !s.waitingForAi &&
       s.aiSuggestionInterval > 0 &&
       idleMinutes > 5 &&
@@ -449,23 +574,77 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
   showBubble(text, durationMs = 5000) {
     const engine = forceState(get().engine, get().engine.behavior, 'talk', text, durationMs);
-    set({ engine, bubbleText: text });
+    set({ engine, bubbleText: text, bubbleSuggestionKind: null });
+  },
+
+  dismissSuggestion(kind) {
+    const now = Date.now();
+    set(s => ({
+      bubbleText: null,
+      bubbleSuggestionKind: null,
+      activeSuggestionCard: null,
+      suggestionStats: kind ? { ...s.suggestionStats, later: s.suggestionStats.later + 1 } : s.suggestionStats,
+      ...(kind ? { lastSuggestionByKind: { ...s.lastSuggestionByKind, [kind]: now } } : {}),
+    }));
+  },
+
+  acceptSuggestion(kind) {
+    const now = Date.now();
+    set(s => ({
+      bubbleText: null,
+      bubbleSuggestionKind: null,
+      activeSuggestionCard: null,
+      suggestionStats: kind ? { ...s.suggestionStats, accepted: s.suggestionStats.accepted + 1 } : s.suggestionStats,
+      ...(kind ? { lastSuggestionByKind: { ...s.lastSuggestionByKind, [kind]: now } } : {}),
+      pet: {
+        ...s.pet,
+        mood: Math.min(100, s.pet.mood + 2),
+      },
+    }));
+  },
+
+  closeSuggestionCard(kind) {
+    const now = Date.now();
+    set(s => ({
+      activeSuggestionCard: null,
+      bubbleText: null,
+      bubbleSuggestionKind: null,
+      suggestionStats: kind ? { ...s.suggestionStats, later: s.suggestionStats.later + 1 } : s.suggestionStats,
+      ...(kind ? { lastSuggestionByKind: { ...s.lastSuggestionByKind, [kind]: now } } : {}),
+    }));
+  },
+
+  muteSuggestionKind(kind) {
+    if (!kind) {
+      set({ bubbleText: null, bubbleSuggestionKind: null });
+      return;
+    }
+    set(s => ({
+      bubbleText: null,
+      bubbleSuggestionKind: null,
+      activeSuggestionCard: null,
+      suggestionStats: { ...s.suggestionStats, muted: s.suggestionStats.muted + 1 },
+      mutedSuggestionKinds: { ...s.mutedSuggestionKinds, [kind]: true },
+    }));
   },
 
   savePetState() {
-    const { pet, widgetLeft, widgetTop, hydrated } = get();
+    const { pet, widgetLeft, widgetTop, canvasPetLeft, canvasPetTop, canvasPetManual, hydrated } = get();
     if (!hydrated) { return; }
     const stateToSave: SharedPetState = {
       ...pet,
       widgetLeft,
       widgetTop,
+      canvasPetLeft: canvasPetLeft ?? undefined,
+      canvasPetTop: canvasPetTop ?? undefined,
+      canvasPetManual,
     };
     postMessage({ type: 'savePetState', state: stateToSave });
   },
 
   saveMemory() {
-    const { pet, sessionStartTime, hydrated } = get();
-    if (!hydrated) { return; }
+    const { pet, sessionStartTime, hydrated, longTermMemory, recentCanvasEvents, suggestionActivity, displayMode, suggestionStats } = get();
+    if (!hydrated || !longTermMemory) { return; }
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
     const sessionMin = Math.floor((Date.now() - sessionStartTime) / 60_000);
@@ -489,7 +668,30 @@ export const usePetStore = create<PetStore>((set, get) => ({
       ``,
     ].join('\n');
 
-    postMessage({ type: 'petSaveMemory', content });
+    const frequentEventTypes = Array.from(new Set(recentCanvasEvents.map(event => event.type))).slice(-12);
+    postMessage({
+      type: 'petSaveMemory',
+      content,
+      profileSnapshot: {
+        frequentEventTypes,
+        frequentNodeTypes: recentCanvasEvents.map(event => event.nodeType).filter(Boolean),
+        frequentTools: recentCanvasEvents
+          .filter(event => event.type === 'tool_run_completed' || event.type === 'tool_run_failed')
+          .map(event => event.title)
+          .filter(Boolean),
+        suggestionStats,
+        suggestionActivity,
+        displayMode,
+      },
+      memoryRecord: {
+        id: `session-${Date.now()}`,
+        createdAt: now.toISOString(),
+        type: 'session',
+        importance: sessionMin >= 30 ? 3 : 2,
+        text: `本次宠物陪伴会话约 ${sessionMin} 分钟，近期画布事件：${frequentEventTypes.join(', ') || '暂无'}。`,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+      },
+    });
   },
 
   // ── Chat actions ────────────────────────────────────────────────────────
@@ -526,29 +728,70 @@ export const usePetStore = create<PetStore>((set, get) => ({
 
   // ── Canvas event awareness ────────────────────────────────────────────────
 
-  notifyCanvasEvent(eventType) {
+  notifyCanvasEvent(eventType, meta = {}) {
     const s = get();
     if (!s.enabled || !s.hydrated || s.mode === 'minimized') { return; }
+    if (s.suggestionActivity === 'off') { return; }
     const now = Date.now();
-    if (now - s.lastCanvasReaction < 30_000) { return; } // 30s throttle
+    const event = createPetCanvasEvent(eventType, meta, now);
+    const recentCanvasEvents = trimPetEventHistory([...s.recentCanvasEvents, event], now);
+    const localSuggestion = pickPetLocalSuggestion({
+      event,
+      recentEvents: recentCanvasEvents,
+      now,
+      activity: s.suggestionActivity,
+      mutedKinds: s.mutedSuggestionKinds,
+      lastSuggestionByKind: s.lastSuggestionByKind,
+    });
 
-    const phrases = (DIALOGUES as any).canvasEvents?.[eventType] as string[] | undefined;
-    if (!phrases?.length) { return; }
+    const genericCooldownMs = event.importance === 'high' ? 12_000 : 30_000;
+    if (!localSuggestion && now - s.lastCanvasReaction < genericCooldownMs) {
+      set({ recentCanvasEvents });
+      return;
+    }
 
-    s.showBubble(pickRandom(phrases), 4000);
+    const legacyPhraseKey = event.type === 'node_added'
+      ? 'nodeAdded'
+      : event.type === 'node_deleted'
+        ? 'nodeDeleted'
+        : event.type === 'tool_run_completed'
+          ? 'aiDone'
+          : event.type === 'tool_run_failed' || event.type === 'repeated_error'
+            ? 'aiError'
+            : event.type;
+    const directPhrases = (DIALOGUES as any).canvasEvents?.[event.type] as string[] | undefined;
+    const fallbackPhrases = (DIALOGUES as any).canvasEvents?.[legacyPhraseKey] as string[] | undefined;
+    const phrases = directPhrases ?? fallbackPhrases ?? [];
+    if (!localSuggestion && !phrases?.length) {
+      set({ recentCanvasEvents });
+      return;
+    }
+
+    const bubbleText = localSuggestion ? localSuggestion.message : pickRandom(phrases);
+    const engine = forceState(s.engine, s.engine.behavior, 'talk', bubbleText, localSuggestion ? 9000 : 4000);
 
     // Mood/exp adjustments for different events
     let moodDelta = 0;
     let expDelta = 0;
-    if (eventType === 'nodeAdded')  { moodDelta = 2; expDelta = 3; }
-    if (eventType === 'aiDone')     { moodDelta = 5; expDelta = 8; }
-    if (eventType === 'aiError')    { moodDelta = -2; }
+    if (event.type === 'node_added')  { moodDelta = 2; expDelta = 3; }
+    if (event.type === 'tool_run_completed') { moodDelta = 5; expDelta = 8; }
+    if (event.type === 'tool_run_failed' || event.type === 'repeated_error') { moodDelta = -2; }
 
     const nextExp = s.pet.exp + expDelta;
     const nextLevel = getLevelFromExp(Math.floor(nextExp));
     const leveledUp = nextLevel > s.pet.level;
     set({
       lastCanvasReaction: now,
+      recentCanvasEvents,
+      engine,
+      bubbleText,
+      bubbleSuggestionKind: localSuggestion?.kind ?? null,
+      activeSuggestionCard: localSuggestion ? buildPetSuggestionCard(localSuggestion, {
+        memorySummary: s.memorySummary,
+        suggestionStats: s.suggestionStats,
+      }) : null,
+      ...(localSuggestion ? { suggestionStats: { ...s.suggestionStats, shown: s.suggestionStats.shown + 1 } } : {}),
+      ...(localSuggestion ? { lastSuggestionByKind: { ...s.lastSuggestionByKind, [localSuggestion.kind]: now } } : {}),
       ...(leveledUp ? { bubbleText: `升级啦！Lv.${nextLevel}` } : {}),
       pet: {
         ...s.pet,
