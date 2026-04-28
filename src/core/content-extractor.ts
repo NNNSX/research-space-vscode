@@ -6,6 +6,8 @@ import { promisify } from 'util';
 import { AIContent } from '../ai/provider';
 import { CanvasNode } from './canvas-model';
 import { toAbsPath } from './storage';
+import { mindMapToMarkdown } from '../mindmap/mindmap-markdown';
+import { mindMapSummaryToPreview, normalizeMindMapFile, summarizeMindMap } from '../mindmap/mindmap-model';
 
 const execFileAsync = promisify(execFile);
 // `yauzl` is bundled into dist by esbuild; keep require-style import to avoid extra type deps.
@@ -51,6 +53,15 @@ export async function extractContent(
 
   const bytes = await vscode.workspace.fs.readFile(fileUri);
   const ext = path.extname(absPath).slice(1).toLowerCase();
+
+  if (node.node_type === 'mindmap') {
+    try {
+      const file = normalizeMindMapFile(JSON.parse(Buffer.from(bytes).toString('utf-8')));
+      return { type: 'text', title, text: limitText(mindMapToMarkdown(file)) };
+    } catch {
+      return { type: 'text', title, text: limitText(node.meta?.content_preview ?? '[思维导图读取失败]') };
+    }
+  }
 
   // PDF: extract text via pdf-parse
   if (ext === 'pdf') {
@@ -147,6 +158,16 @@ export async function extractPreviewWithMeta(
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
+
+    if (nodeType === 'mindmap') {
+      const file = normalizeMindMapFile(JSON.parse(Buffer.from(bytes).toString('utf-8')));
+      const summary = summarizeMindMap(file);
+      const preview = mindMapSummaryToPreview(summary);
+      return {
+        preview: preview.slice(0, 5000),
+        ai_readable_chars: mindMapToMarkdown(file).length,
+      };
+    }
 
     if (ext === 'pdf') {
       const analysis = await analyzePdf(Buffer.from(bytes));

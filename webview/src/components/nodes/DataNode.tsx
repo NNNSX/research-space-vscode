@@ -6,6 +6,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 // @ts-expect-error — Vite ?raw import returns file content as string
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?raw';
 import { DEFAULT_SIZES, type CanvasNode } from '../../../../src/core/canvas-model';
+import type { MindMapSummary } from '../../../../src/mindmap/mindmap-model';
 import { useCanvasStore } from '../../stores/canvas-store';
 import { postMessage } from '../../bridge';
 import { NodeContextMenu } from './NodeContextMenu';
@@ -49,6 +50,7 @@ const FALLBACK_COLORS: Record<string, string> = {
   audio:     'var(--vscode-terminal-ansiBlue)',
   video:     'var(--vscode-terminal-ansiYellow)',
   data:      'var(--vscode-terminal-ansiGreen)',
+  mindmap:   'var(--vscode-terminal-ansiMagenta)',
 };
 
 const FALLBACK_ICONS: Record<string, string> = {
@@ -60,6 +62,7 @@ const FALLBACK_ICONS: Record<string, string> = {
   audio:     '\u{1F3B5}',
   video:     '\u{1F3AC}',
   data:      '\u{1F4CA}',
+  mindmap:   '\u{1F9E0}',
 };
 
 const BLUEPRINT_ACCEPT_TYPE_LABELS: Partial<Record<CanvasNode['node_type'], string>> = {
@@ -71,6 +74,7 @@ const BLUEPRINT_ACCEPT_TYPE_LABELS: Partial<Record<CanvasNode['node_type'], stri
   audio: '音频',
   video: '视频',
   data: '表格数据',
+  mindmap: '思维导图',
   experiment_log: '实验记录',
   task: '任务清单',
 };
@@ -191,6 +195,241 @@ function CompactDataPreview({
         </div>
       )}
     </div>
+  );
+}
+
+function MindMapCardPreview({
+  summary,
+  fallback,
+  accentColor,
+}: {
+  summary?: MindMapSummary;
+  fallback?: string;
+  accentColor: string;
+}) {
+  const { previewBranches, hiddenBranchCount } = useMemo(() => {
+    if (summary?.firstLevelTitles?.length) {
+      const titles = summary.firstLevelTitles;
+      return {
+        previewBranches: titles.slice(0, 4).map((text, index) => ({
+          text,
+          side: index % 2 === 0 ? 'right' as const : 'left' as const,
+        })),
+        hiddenBranchCount: Math.max(0, (summary.firstLevelCount ?? titles.length) - 4),
+      };
+    }
+    const lines = summary?.outlinePreview
+      ? summary.outlinePreview.split(/\r?\n/).filter(line => line.trim()).slice(0, 8)
+      : [];
+    const branches: Array<{ text: string; side: 'left' | 'right' }> = [];
+    lines.forEach((line, index) => {
+      const indent = line.match(/^\s*/)?.[0].length ?? 0;
+      const depth = Math.max(1, Math.floor(indent / 2) + 1);
+      const text = line.trim().replace(/^[-*]\s*/, '').trim() || `分支 ${index + 1}`;
+      if (depth <= 1) {
+        branches.push({
+          text,
+          side: branches.length % 2 === 0 ? 'right' : 'left',
+        });
+      }
+    });
+    return {
+      previewBranches: branches.slice(0, 4),
+      hiddenBranchCount: Math.max(0, (summary?.firstLevelCount ?? branches.length) - 4),
+    };
+  }, [summary?.firstLevelTitles, summary?.outlinePreview]);
+  const rootTitle = summary?.rootTitle?.trim() || fallback?.split(/\r?\n/)[0]?.replace(/^#\s*/, '').trim() || '思维导图';
+  const hasPreview = previewBranches.length > 0 || !!summary;
+  return (
+    <div style={{
+      flex: 1,
+      minHeight: 0,
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 7,
+      paddingTop: 6,
+    }}>
+      {hasPreview ? (
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          border: `1px solid ${withAlpha(accentColor, 0.22, 'var(--vscode-panel-border)')}`,
+          borderRadius: 10,
+          background: `radial-gradient(circle at center, ${withAlpha(accentColor, 0.12, 'transparent')} 0, transparent 58%), var(--vscode-input-background)`,
+          position: 'relative',
+        }}>
+          <MindMapThumbnailSvg
+            rootTitle={rootTitle}
+            branches={previewBranches}
+            hiddenBranchCount={hiddenBranchCount}
+            accentColor={accentColor}
+          />
+          <div style={{
+            position: 'absolute',
+            left: 7,
+            right: 7,
+            bottom: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+            fontSize: 9,
+            color: 'var(--vscode-descriptionForeground)',
+            pointerEvents: 'none',
+          }}>
+            <span>{summary?.firstLevelCount ?? previewBranches.length} 分支</span>
+            <span>{summary?.totalItems ?? Math.max(1, previewBranches.length + 1)} 条目</span>
+            {(summary?.imageCount ?? 0) > 0 && <span>{summary?.imageCount} 图</span>}
+          </div>
+        </div>
+      ) : (
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          textAlign: 'center',
+          color: 'var(--vscode-descriptionForeground)',
+          fontSize: 11,
+          lineHeight: 1.5,
+          padding: '8px 10px',
+          border: `1px dashed ${withAlpha(accentColor, 0.32, 'var(--vscode-panel-border)')}`,
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}>
+          {fallback?.trim() || '暂无分支。双击节点进入导图编辑器添加结构。'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MindMapThumbnailSvg({
+  rootTitle,
+  branches,
+  hiddenBranchCount,
+  accentColor,
+}: {
+  rootTitle: string;
+  branches: Array<{ text: string; side: 'left' | 'right' }>;
+  hiddenBranchCount: number;
+  accentColor: string;
+}) {
+  const width = 320;
+  const height = 150;
+  const root = { x: 160, y: 68, width: 96, height: 30 };
+  const visibleBranches = branches.slice(0, 4);
+  const leftItems = visibleBranches.filter(item => item.side === 'left');
+  const rightItems = visibleBranches.filter(item => item.side === 'right');
+  const layout = (sideItems: typeof visibleBranches, side: 'left' | 'right') => sideItems.map((item, index) => {
+    const count = Math.max(1, sideItems.length);
+    const y = count === 1 ? 68 : 38 + index * (62 / Math.max(1, count - 1));
+    return {
+      ...item,
+      x: side === 'right' ? 226 : 22,
+      y,
+      width: 72,
+      height: 22,
+    };
+  });
+  const nodes = [...layout(leftItems, 'left'), ...layout(rightItems, 'right')];
+  const trim = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label={`思维导图预览：${rootTitle}`}>
+      <defs>
+        <filter id="mindmapThumbShadow" x="-20%" y="-30%" width="140%" height="160%">
+          <feDropShadow dx="0" dy="4" stdDeviation="4" floodColor="rgba(0,0,0,0.28)" />
+        </filter>
+      </defs>
+      {nodes.map((node, index) => {
+        const startX = node.side === 'right' ? root.x + root.width / 2 : root.x - root.width / 2;
+        const endX = node.side === 'right' ? node.x : node.x + node.width;
+        const control = node.side === 'right' ? 42 : -42;
+        const d = `M ${startX} ${root.y} C ${startX + control} ${root.y}, ${endX - control} ${node.y}, ${endX} ${node.y}`;
+        return (
+          <path
+            key={`path-${node.side}-${index}-${node.text}`}
+            d={d}
+            fill="none"
+            stroke={withAlpha(accentColor, 0.68, 'var(--vscode-panel-border)')}
+            strokeWidth={2.6}
+            strokeLinecap="round"
+          />
+        );
+      })}
+      <rect
+        x={root.x - root.width / 2}
+        y={root.y - root.height / 2}
+        width={root.width}
+        height={root.height}
+        rx={15}
+        fill={withAlpha(accentColor, 0.28, 'var(--vscode-button-background)')}
+        stroke={withAlpha(accentColor, 0.8, 'var(--vscode-panel-border)')}
+        strokeWidth={1.4}
+        filter="url(#mindmapThumbShadow)"
+      />
+      <text
+        x={root.x}
+        y={root.y + 4}
+        textAnchor="middle"
+        fill="var(--vscode-foreground)"
+        fontSize="12"
+        fontWeight="800"
+      >
+        {trim(rootTitle, 8)}
+      </text>
+      {nodes.map((node, index) => (
+        <g key={`node-${node.side}-${index}-${node.text}`}>
+          <rect
+            x={node.x}
+            y={node.y - node.height / 2}
+            width={node.width}
+            height={node.height}
+            rx={11}
+            fill="var(--vscode-editor-background)"
+            stroke={withAlpha(accentColor, Math.max(0.3, 0.65 - node.depth * 0.08), 'var(--vscode-panel-border)')}
+            strokeWidth={1.2}
+          />
+          <text
+            x={node.x + node.width / 2}
+            y={node.y + 4}
+            textAnchor="middle"
+            fill="var(--vscode-descriptionForeground)"
+            fontSize="10"
+            fontWeight={700}
+          >
+            {trim(node.text, 7)}
+          </text>
+        </g>
+      ))}
+      {hiddenBranchCount > 0 && (
+        <g>
+          <rect
+            x={width - 70}
+            y={12}
+            width={52}
+            height={20}
+            rx={10}
+            fill="var(--vscode-input-background)"
+            stroke={withAlpha(accentColor, 0.46, 'var(--vscode-panel-border)')}
+            strokeWidth={1}
+          />
+          <text
+            x={width - 44}
+            y={26}
+            textAnchor="middle"
+            fill="var(--vscode-descriptionForeground)"
+            fontSize="9"
+            fontWeight="700"
+          >
+            +{hiddenBranchCount} 更多
+          </text>
+        </g>
+      )}
+    </svg>
   );
 }
 
@@ -684,6 +923,12 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     if (data.node_type === 'paper') { return 'PDF / 文档节点'; }
     if (data.node_type === 'audio') { return '音频节点'; }
     if (data.node_type === 'video') { return '视频节点'; }
+    if (data.node_type === 'mindmap') {
+      const summary = data.meta?.mindmap_summary;
+      return summary
+        ? `${summary.rootTitle} · ${summary.firstLevelCount} 个分支 · ${summary.totalItems} 个条目${summary.imageCount > 0 ? ` · ${summary.imageCount} 张图片` : ''}`
+        : '思维导图节点';
+    }
     const text = typeof displayContent === 'string' ? displayContent.trim().replace(/\s+/g, ' ') : '';
     if (text) { return text.slice(0, 96); }
     return data.file_path ?? data.node_type;
@@ -718,13 +963,23 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
     openPreview(data.id);
   }, [canPreview, data.id, openPreview]);
 
+  const handleMindMapEditClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (data.node_type !== 'mindmap' || !data.file_path || isMissing) { return; }
+    postMessage({ type: 'readMindMapFile', nodeId: data.id, filePath: data.file_path });
+  }, [data.file_path, data.id, data.node_type, isMissing]);
+
   // Double click → open in VSCode editor (original behaviour)
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    if (data.node_type === 'mindmap' && data.file_path && !isMissing) {
+      postMessage({ type: 'readMindMapFile', nodeId: data.id, filePath: data.file_path });
+      return;
+    }
     if (data.file_path) {
       postMessage({ type: 'openFile', filePath: data.file_path });
     }
-  }, [data.file_path]);
+  }, [data.file_path, data.id, data.node_type, isMissing]);
 
   // Right click → context menu
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -857,6 +1112,25 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
                 }}
               >
                 预览
+              </button>
+            )}
+            {data.node_type === 'mindmap' && data.file_path && !isMissing && (
+              <button
+                onClick={handleMindMapEditClick}
+                title="编辑思维导图"
+                style={{
+                  background: 'var(--vscode-button-secondaryBackground)',
+                  color: 'var(--vscode-button-secondaryForeground)',
+                  border: '1px solid var(--vscode-button-border, transparent)',
+                  borderRadius: 3,
+                  padding: '1px 6px',
+                  fontSize: 10,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  lineHeight: 1.4,
+                }}
+              >
+                编辑
               </button>
             )}
             {isMissing && (
@@ -1044,8 +1318,16 @@ function DataNodeInner({ data, selected }: DataNodeProps) {
             </div>
           )}
 
+          {shouldRenderRichContent && data.node_type === 'mindmap' && (
+            <MindMapCardPreview
+              summary={data.meta?.mindmap_summary}
+              fallback={typeof displayContent === 'string' ? displayContent : undefined}
+              accentColor={accentColor}
+            />
+          )}
+
           {/* Text preview — skip node types that have dedicated body renderers or media previews */}
-            {shouldRenderRichContent && data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && displayContent && (
+            {shouldRenderRichContent && data.node_type !== 'image' && data.node_type !== 'paper' && data.node_type !== 'audio' && data.node_type !== 'video' && data.node_type !== 'data' && data.node_type !== 'experiment_log' && data.node_type !== 'task' && data.node_type !== 'mindmap' && displayContent && (
             <div style={{
               fontSize: 11,
               color: 'var(--vscode-descriptionForeground)',

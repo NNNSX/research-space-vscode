@@ -121,7 +121,7 @@ export function SelectionToolbar() {
         left: screenPos.x,
         top: screenPos.y - 52,
         transform: 'translateX(-50%)',
-        zIndex: 9998,
+        zIndex: 850,
         display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',

@@ -139,6 +139,7 @@ function nodeTypeToIcon(type: NodeType): string {
     case 'function':  return 'zap';
     case 'group_hub': return 'symbol-array';
     case 'ai_output': return 'sparkle';
+    case 'mindmap':   return 'type-hierarchy';
     default:          return 'file';
   }
 }

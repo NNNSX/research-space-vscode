@@ -9,6 +9,8 @@ import { readCanvas, writeCanvas } from './core/storage';
 import { toAbsPath, toRelPath } from './core/storage';
 import { extractPreviewWithMeta } from './core/content-extractor';
 import { getProvider, type AIContent } from './ai/provider';
+import { readMindMapFile } from './mindmap/mindmap-storage';
+import { saveMindMapToCanvasNode } from './mindmap/mindmap-canvas-sync';
 
 function getTestAuditLogPath(): string | null {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -101,6 +103,23 @@ export function activate(context: vscode.ExtensionContext): void {
           return CanvasEditorProvider.canvasSessionIds.has(targetPath);
         }
         return CanvasEditorProvider.canvasSessionIds.size > 0;
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.readMindMapFile',
+      async (fileUri: vscode.Uri) => {
+        return readMindMapFile(fileUri);
+      }
+    ),
+    vscode.commands.registerCommand(
+      'researchSpace.test.saveMindMapFile',
+      async (canvasUri: vscode.Uri, nodeId: string, filePath: string, mindmap: unknown) => {
+        const saved = await saveMindMapToCanvasNode(canvasUri, nodeId, filePath, mindmap);
+        const activeDoc = CanvasEditorProvider.activeDocuments.get(canvasUri.fsPath);
+        if (activeDoc) {
+          activeDoc.data = await readCanvas(canvasUri);
+        }
+        return saved;
       }
     ),
     vscode.commands.registerCommand(

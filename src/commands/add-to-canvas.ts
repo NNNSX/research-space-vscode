@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { readCanvas, writeCanvas, toRelPath, fileExtToNodeType, calcNewNodePosition, detectLanguage } from '../core/storage';
+import { readCanvas, writeCanvas, toRelPath, fileExtToNodeType, nodeTypeFromFilePath, calcNewNodePosition, detectLanguage } from '../core/storage';
 import { DEFAULT_SIZES } from '../core/canvas-model';
 import { CanvasNode } from '../core/canvas-model';
 import { extractPreview, extractPreviewWithMeta, getPdfPageCount } from '../core/content-extractor';
 import { CanvasEditorProvider } from '../providers/CanvasEditorProvider';
+import { createMindMapFile } from '../mindmap/mindmap-storage';
+import { mindMapSummaryToPreview, summarizeMindMap } from '../mindmap/mindmap-model';
+import { xmindBufferToMindMap } from '../mindmap/xmind-codec';
 
 // Re-export so CanvasEditorProvider can use it
 export { addToCanvas };
@@ -58,7 +61,32 @@ async function addToCanvas(
       for (let i = 0; i < uris.length; i++) {
         const uri = uris[i];
         const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
-        const nodeType = fileExtToNodeType(ext);
+        if (ext === 'xmind') {
+          try {
+            const bytes = await vscode.workspace.fs.readFile(uri);
+            const imported = xmindBufferToMindMap(Buffer.from(bytes));
+            const created = await createMindMapFile(target!, imported.root.text || imported.title || path.basename(uri.fsPath, path.extname(uri.fsPath)), imported);
+            const summary = summarizeMindMap(created.file);
+            newNodes.push({
+              id: uuid(),
+              node_type: 'mindmap',
+              title: summary.rootTitle,
+              position: { x: 0, y: 0 },
+              size: DEFAULT_SIZES['mindmap'],
+              file_path: created.relPath,
+              meta: {
+                content_preview: mindMapSummaryToPreview(summary),
+                mindmap_summary: summary,
+                ai_readable_chars: mindMapSummaryToPreview(summary).length,
+                staging_origin: 'workspace_file',
+              },
+            });
+          } catch (error) {
+            vscode.window.showWarningMessage(`XMind 导入失败：${path.basename(uri.fsPath)}；${error instanceof Error ? error.message : String(error)}`);
+          }
+          continue;
+        }
+        const nodeType = nodeTypeFromFilePath(uri.fsPath) ?? fileExtToNodeType(ext);
         if (!nodeType || nodeType === 'ai_output') { continue; }
 
         const relPath = toRelPath(uri.fsPath, target!);

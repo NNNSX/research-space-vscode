@@ -51,6 +51,7 @@ function nodeIcon(type: string): string {
     case 'experiment_log': return '🧪';
     case 'task':           return '✅';
     case 'data':           return '📊';
+    case 'mindmap':        return '🧠';
     case 'board':          return '📋';
     case 'function':       return '⚡';
     case 'blueprint':      return '📦';
@@ -73,6 +74,7 @@ export function StagingPanel() {
     n.node_type === 'ai_output' || n.node_type === 'audio' ||
     n.node_type === 'video' || n.node_type === 'experiment_log' ||
     n.node_type === 'task' || n.node_type === 'data' ||
+    n.node_type === 'mindmap' ||
     (n.node_type as string) === 'board'
   );
 

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
-import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, isBlueprintInstanceContainerNode, isCanvasFile, isFunctionNode } from '../core/canvas-model';
+import { CanvasFile, SettingsSnapshot, CustomProviderConfig, CanvasNode, NodeMeta, isBlueprintInstanceContainerNode, isCanvasFile, isFunctionNode } from '../core/canvas-model';
 import { readCanvas, writeCanvas, setDataNodeRegistry, ensureAiOutputDir, toRelPath } from '../core/storage';
 import { runFunctionNode, runBatchFunctionNode, cancelRun, cancelRunByNodeId, setToolRegistry } from '../ai/function-runner';
 import { runPipeline, pausePipeline, resumePipeline, cancelPipeline } from '../pipeline/pipeline-runner';
@@ -17,6 +17,12 @@ import { isMinerUSupportedFilePath, MINERU_SUPPORTED_FILE_HINT } from '../core/e
 import { MinerUError, formatMinerUErrorForDisplay } from '../explosion/mineru-adapter';
 import { runConversionDiagnostics } from '../explosion/conversion-diagnostics';
 import { buildSelectedNodesMarkdown, type SelectedMarkdownContent } from '../export/selected-markdown';
+import { createDefaultMindMap, mindMapSummaryToPreview, normalizeMindMapFile, summarizeMindMap } from '../mindmap/mindmap-model';
+import type { MindMapFile, MindMapItem } from '../mindmap/mindmap-model';
+import { createMindMapFile, readMindMapFile } from '../mindmap/mindmap-storage';
+import { mindMapToMarkdown } from '../mindmap/mindmap-markdown';
+import { mindMapToXMindBuffer } from '../mindmap/xmind-codec';
+import { saveMindMapToCanvasNode } from '../mindmap/mindmap-canvas-sync';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -106,6 +112,26 @@ function shouldReadNodeFileForMarkdownExport(node: CanvasNode): boolean {
 }
 
 async function resolveNodeMarkdownExportContent(node: CanvasNode, canvasUri: vscode.Uri): Promise<SelectedMarkdownContent> {
+  if (node.node_type === 'mindmap' && node.file_path) {
+    try {
+      const absPath = path.isAbsolute(node.file_path)
+        ? node.file_path
+        : path.join(path.dirname(canvasUri.fsPath), node.file_path);
+      const mindmap = await readMindMapFile(vscode.Uri.file(absPath));
+      const missingImagePaths = await findMissingMindMapImagePaths(mindmap, canvasUri);
+      return {
+        nodeId: node.id,
+        content: mindMapToMarkdown(mindmap, { missingImagePaths }),
+      };
+    } catch (error) {
+      return {
+        nodeId: node.id,
+        content: node.meta?.content_preview ?? '',
+        note: `思维导图读取失败，已使用节点预览内容：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
   if (!node.file_path || !shouldReadNodeFileForMarkdownExport(node)) {
     return {
       nodeId: node.id,
@@ -163,6 +189,37 @@ function expandSelectedMarkdownNodes(canvas: CanvasFile, selectedNodeIds: string
   }
 
   return result;
+}
+
+function collectMindMapImagePaths(file: MindMapFile): string[] {
+  const paths: string[] = [];
+  const visit = (item: MindMapItem) => {
+    for (const image of item.images ?? []) {
+      if (image.file_path) {
+        paths.push(image.file_path);
+      }
+    }
+    for (const child of item.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(file.root);
+  return paths;
+}
+
+async function findMissingMindMapImagePaths(file: MindMapFile, canvasUri: vscode.Uri): Promise<Set<string>> {
+  const missing = new Set<string>();
+  for (const imagePath of collectMindMapImagePaths(file)) {
+    const absPath = path.isAbsolute(imagePath)
+      ? imagePath
+      : path.join(path.dirname(canvasUri.fsPath), imagePath);
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(absPath));
+    } catch {
+      missing.add(imagePath);
+    }
+  }
+  return missing;
 }
 
 // ── Canvas Document ─────────────────────────────────────────────────────────
@@ -782,9 +839,38 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         break;
       }
 
+      case 'newMindMap': {
+        const inputTitle = await vscode.window.showInputBox({
+          prompt: '思维导图标题',
+          placeHolder: '思维导图',
+          value: (msg['title'] as string) || '',
+        });
+        if (inputTitle === undefined) { break; }
+        const title = inputTitle.trim() || '思维导图';
+        const mindmap = createDefaultMindMap(title);
+        const summary = summarizeMindMap(mindmap);
+        const { DEFAULT_SIZES } = await import('../core/canvas-model');
+        const newNode = {
+          id: require('uuid').v4(),
+          node_type: 'mindmap' as const,
+          title,
+          position: { x: 0, y: 0 },
+          size: DEFAULT_SIZES['mindmap'],
+          meta: {
+            content_preview: mindMapSummaryToPreview(summary),
+            mindmap_summary: summary,
+            staging_origin: 'draft' as const,
+            staging_materialize_kind: 'mindmap' as const,
+            staging_initial_content: JSON.stringify(mindmap),
+          },
+        };
+        webview.postMessage({ type: 'stageNodes', nodes: [newNode] });
+        break;
+      }
+
       case 'materializeStagingNode': {
         const sourceNodeId = msg['sourceNodeId'] as string;
-        const nodeType = msg['nodeType'] as 'note' | 'experiment_log' | 'task';
+        const nodeType = msg['nodeType'] as 'note' | 'experiment_log' | 'task' | 'mindmap';
         const rawTitle = msg['title'] as string;
         const content = msg['content'] as string;
         const position = msg['position'] as { x: number; y: number } | undefined;
@@ -793,21 +879,56 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
           const title = rawTitle.trim() || (
             nodeType === 'note' ? '新建笔记' :
             nodeType === 'experiment_log' ? '实验记录' :
-            '任务清单'
+            nodeType === 'task' ? '任务清单' :
+            '思维导图'
           );
-          const notesDir = await ensureNotesDir(canvasDir);
-          const { uri: fileUri, display: displayTitle } = await uniqueFile(notesDir, title, '.md');
-          await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content || `# ${displayTitle}\n`, 'utf-8'));
-
-          const { toRelPath } = await import('../core/storage');
-          const { extractPreviewWithMeta } = await import('../core/content-extractor');
-          const relPath = toRelPath(fileUri.fsPath, document.uri);
-          const previewData = await extractPreviewWithMeta(fileUri, nodeType);
           const stagedNode = document.data.stagingNodes?.find(node => node.id === sourceNodeId);
           const baseMeta = { ...(stagedNode?.meta ?? {}) };
           delete baseMeta.staging_origin;
           delete baseMeta.staging_materialize_kind;
           delete baseMeta.staging_initial_content;
+
+          let displayTitle = title;
+          let relPath = '';
+          let preview = content;
+          let previewMeta: Partial<NodeMeta> = {};
+
+          if (nodeType === 'mindmap') {
+            let parsed: unknown;
+            try {
+              parsed = content ? JSON.parse(content) : undefined;
+            } catch {
+              parsed = undefined;
+            }
+            const created = await createMindMapFile(document.uri, title, parsed ?? createDefaultMindMap(title));
+            displayTitle = created.displayTitle;
+            relPath = created.relPath;
+            const summary = summarizeMindMap(created.file);
+            preview = mindMapSummaryToPreview(summary);
+            previewMeta = {
+              mindmap_summary: summary,
+              ai_readable_chars: preview.length,
+            };
+          } else {
+            const notesDir = await ensureNotesDir(canvasDir);
+            const { uri: fileUri, display } = await uniqueFile(notesDir, title, '.md');
+            displayTitle = display;
+            await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content || `# ${displayTitle}\n`, 'utf-8'));
+
+            const { toRelPath } = await import('../core/storage');
+            const { extractPreviewWithMeta } = await import('../core/content-extractor');
+            relPath = toRelPath(fileUri.fsPath, document.uri);
+            const previewData = await extractPreviewWithMeta(fileUri, nodeType);
+            preview = previewData.preview || content;
+            previewMeta = {
+              ai_readable_chars: previewData.ai_readable_chars,
+              ai_readable_pages: previewData.ai_readable_pages,
+              has_unreadable_content: previewData.has_unreadable_content || undefined,
+              unreadable_hint: previewData.unreadable_hint,
+              csv_rows: previewData.csv_rows,
+              csv_cols: previewData.csv_cols,
+            };
+          }
 
           const newNode: CanvasNode = {
             id: sourceNodeId,
@@ -818,18 +939,14 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
               note: { width: 280, height: 160 },
               experiment_log: { width: 320, height: 300 },
               task: { width: 300, height: 240 },
+              mindmap: { width: 340, height: 240 },
             }[nodeType]),
             file_path: relPath,
             meta: {
               ...baseMeta,
-              content_preview: previewData.preview || content,
+              content_preview: preview,
               file_missing: false,
-              ai_readable_chars: previewData.ai_readable_chars,
-              ai_readable_pages: previewData.ai_readable_pages,
-              has_unreadable_content: previewData.has_unreadable_content || undefined,
-              unreadable_hint: previewData.unreadable_hint,
-              csv_rows: previewData.csv_rows,
-              csv_cols: previewData.csv_cols,
+              ...previewMeta,
             },
           };
 
@@ -837,6 +954,131 @@ export class CanvasEditorProvider implements vscode.CustomEditorProvider<CanvasD
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           webview.postMessage({ type: 'stagingNodeMaterializeFailed', sourceNodeId, message });
+        }
+        break;
+      }
+
+      case 'readMindMapFile': {
+        const nodeId = msg['nodeId'] as string;
+        const filePath = msg['filePath'] as string;
+        if (!nodeId || !filePath) { break; }
+        try {
+          const { toAbsPath } = await import('../core/storage');
+          const absPath = toAbsPath(filePath, document.uri);
+          const mindmap = await readMindMapFile(vscode.Uri.file(absPath));
+          webview.postMessage({ type: 'mindMapFileLoaded', nodeId, filePath, mindmap });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'mindMapError', nodeId, message: `思维导图读取失败：${message}` });
+        }
+        break;
+      }
+
+      case 'saveMindMapFile': {
+        const nodeId = msg['nodeId'] as string;
+        const filePath = msg['filePath'] as string;
+        const input = msg['mindmap'] as unknown;
+        if (!nodeId || !filePath || !input) { break; }
+        try {
+          const saved = await saveMindMapToCanvasNode(document.uri, nodeId, filePath, input);
+          document.data = await readCanvas(document.uri);
+          webview.postMessage({
+            type: 'mindMapFileSaved',
+            nodeId,
+            filePath,
+            title: saved.title,
+            mindmap: saved.written,
+            summary: saved.summary,
+            preview: saved.preview,
+          });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'mindMapError', nodeId, message: `思维导图保存失败：${message}` });
+        }
+        break;
+      }
+
+      case 'pickMindMapImage': {
+        const nodeId = msg['nodeId'] as string;
+        const itemId = msg['itemId'] as string;
+        if (!nodeId || !itemId) { break; }
+        try {
+          const picked = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: false,
+            title: '选择要嵌入思维导图的图片',
+            filters: {
+              Images: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'],
+            },
+          });
+          const uri = picked?.[0];
+          if (!uri) { break; }
+          const { toRelPath } = await import('../core/storage');
+          const relPath = toRelPath(uri.fsPath, document.uri);
+          webview.postMessage({
+            type: 'mindMapImagePicked',
+            nodeId,
+            itemId,
+            image: {
+              id: uuid(),
+              file_path: relPath,
+              caption: path.basename(uri.fsPath),
+            },
+            uri: webview.asWebviewUri(uri).toString(),
+          });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'mindMapError', nodeId, message: `选择图片失败：${message}` });
+        }
+        break;
+      }
+
+      case 'exportMindMapMarkdown': {
+        const nodeId = msg['nodeId'] as string;
+        const filePath = msg['filePath'] as string;
+        const input = msg['mindmap'] as unknown;
+        if (!nodeId || !filePath || !input) { break; }
+        try {
+          const mindmap = normalizeMindMapFile(input);
+          const missingImagePaths = await findMissingMindMapImagePaths(mindmap, document.uri);
+          const markdown = mindMapToMarkdown(mindmap, { missingImagePaths });
+          const defaultName = `${sanitizeExportFilename(mindmap.root.text || mindmap.title || '思维导图')}.md`;
+          const dest = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(canvasDir, defaultName)),
+            filters: { Markdown: ['md'] },
+            saveLabel: '导出思维导图 Markdown',
+          });
+          if (!dest) { break; }
+          await vscode.workspace.fs.writeFile(dest, Buffer.from(markdown, 'utf-8'));
+          vscode.window.showInformationMessage(`已导出思维导图：${path.basename(dest.fsPath)}`);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'mindMapError', nodeId, message: `导出思维导图失败：${message}` });
+        }
+        break;
+      }
+
+      case 'exportMindMapXMind': {
+        const nodeId = msg['nodeId'] as string;
+        const filePath = msg['filePath'] as string;
+        const input = msg['mindmap'] as unknown;
+        if (!nodeId || !filePath || !input) { break; }
+        try {
+          const mindmap = normalizeMindMapFile(input);
+          const xmind = mindMapToXMindBuffer(mindmap);
+          const defaultName = `${sanitizeExportFilename(mindmap.root.text || mindmap.title || '思维导图')}.xmind`;
+          const dest = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(canvasDir, defaultName)),
+            filters: { XMind: ['xmind'] },
+            saveLabel: '导出 XMind',
+          });
+          if (!dest) { break; }
+          await vscode.workspace.fs.writeFile(dest, xmind);
+          vscode.window.showInformationMessage(`已导出 XMind：${path.basename(dest.fsPath)}`);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          webview.postMessage({ type: 'mindMapError', nodeId, message: `导出 XMind 失败：${message}` });
         }
         break;
       }

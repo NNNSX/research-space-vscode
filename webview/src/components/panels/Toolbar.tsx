@@ -205,6 +205,12 @@ export function Toolbar() {
           + ✅ 任务
         </ToolbarButton>
 
+        <ToolbarButton onClick={() => {
+          postMessage({ type: 'newMindMap', title: '' });
+        }} title="新建思维导图节点">
+          + 🧠 导图
+        </ToolbarButton>
+
         <ToolbarButton
           onClick={() => setSelectionMode(!selectionMode)}
           title="框选模式"

@@ -114,6 +114,16 @@ function computeBadge(data: CanvasNode): BadgeInfo | null {
     return { level: 'full', mainText: '🤖 AI 可读: 全文' };
   }
 
+  if (data.node_type === 'mindmap') {
+    const summary = data.meta?.mindmap_summary;
+    return {
+      level: 'full',
+      mainText: summary
+        ? `🤖 AI 可读: 导图 ${summary.totalItems} 个条目`
+        : '🤖 AI 可读: 思维导图大纲',
+    };
+  }
+
   return null;
 }
 

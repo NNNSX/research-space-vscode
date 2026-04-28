@@ -17,6 +17,7 @@ const blueprintDefinitionResumeHistoryReload = require('./blueprint-definition-r
 const blueprintDefinitionResumeRefailReload = require('./blueprint-definition-resume-refail-reload.test.js');
 const blueprintRunHistoryReload = require('./blueprint-run-history-reload.test.js');
 const blueprintRunHistoryMessageFlow = require('./blueprint-run-history-message-flow.test.js');
+const mindmapSaveReload = require('./mindmap-save-reload.test.js');
 
 async function run() {
   await aiSettings.run();
@@ -38,6 +39,7 @@ async function run() {
   await blueprintDefinitionResumeRefailReload.run();
   await blueprintRunHistoryReload.run();
   await blueprintRunHistoryMessageFlow.run();
+  await mindmapSaveReload.run();
 }
 
 module.exports = { run };

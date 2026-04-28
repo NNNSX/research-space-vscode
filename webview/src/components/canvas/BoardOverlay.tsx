@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { ViewportPortal, useOnViewportChange, useReactFlow } from '@xyflow/react';
 import type { Board } from '../../../../src/core/canvas-model';
 import { useCanvasStore, startBoardDrag, endBoardDrag, type CanvasDetailLevel } from '../../stores/canvas-store';
@@ -417,7 +418,7 @@ function BoardEditDialog({ name, setName, color, setColor, inputRef, onConfirm, 
   return ReactDOM.createPortal(
     <div onClick={onCancel} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100200,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--vscode-editor-background)',

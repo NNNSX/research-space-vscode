@@ -1,6 +1,7 @@
 import type { BlueprintDraft, BlueprintDefinition, BlueprintSlotDef } from '../blueprint/blueprint-types';
 import type { BlueprintRegistryEntry } from '../blueprint/blueprint-registry';
 import type { BlueprintReplacementMode } from '../blueprint/blueprint-types';
+import type { MindMapFile, MindMapImage, MindMapSummary } from '../mindmap/mindmap-model';
 
 // ── AI Model info ────────────────────────────────────────────────────────────
 export interface ModelInfo {
@@ -73,7 +74,7 @@ export interface ConversionDiagnosticsReport {
 }
 
 // ── Node types ─────────────────────────────────────────────────────────────
-export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data';
+export type DataNodeType = 'paper' | 'note' | 'code' | 'image' | 'ai_output' | 'audio' | 'video' | 'experiment_log' | 'task' | 'data' | 'mindmap';
 export type NodeType = DataNodeType | 'function' | 'group_hub' | 'blueprint';
 export type FnStatus = 'idle' | 'running' | 'done' | 'error';
 export type RunIssueKind = 'missing_input' | 'missing_config' | 'run_failed' | 'skipped';
@@ -148,10 +149,11 @@ export interface NodeMeta {
   unreadable_hint?: string;          // Human-readable hint, e.g. "检测到 12 个图表引用，图片内容未识别"
   csv_rows?: number;                 // CSV/TSV row count (excluding header)
   csv_cols?: number;                 // CSV/TSV column count
+  mindmap_summary?: MindMapSummary;   // lightweight mind map summary stored in .rsws
 
   // Staging metadata
   staging_origin?: 'workspace_file' | 'draft';
-  staging_materialize_kind?: 'note' | 'experiment_log' | 'task';
+  staging_materialize_kind?: 'note' | 'experiment_log' | 'task' | 'mindmap';
   staging_initial_content?: string;
 
   // Group hub metadata
@@ -273,7 +275,7 @@ export interface DataNodeDef {
   icon: string;           // emoji icon
   color: string;          // CSS color variable for accent
   extensions: string[];   // file extensions (without dot) that map to this node type
-  previewType: 'text' | 'markdown' | 'none';  // how content_preview is rendered in the card
+  previewType: 'text' | 'markdown' | 'table' | 'none';  // how content_preview is rendered in the card
   watchContent: boolean;  // whether to refresh content_preview on file change
   contentExtractor: 'pdf' | 'image' | 'text' | 'audio' | 'video'; // which extractor to use
   supportsMultimodal: boolean;                 // true = image node (passes base64 to AI)
@@ -469,7 +471,7 @@ export function isCanvasFile(obj: unknown): obj is CanvasFile {
 }
 
 export function isDataNode(node: CanvasNode | undefined | null): node is DataCanvasNode {
-  return !!node && ['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'experiment_log', 'task', 'data'].includes(node.node_type);
+  return !!node && ['paper', 'note', 'code', 'image', 'ai_output', 'audio', 'video', 'experiment_log', 'task', 'data', 'mindmap'].includes(node.node_type);
 }
 
 export function isFunctionNode(node: CanvasNode | undefined | null): node is FunctionCanvasNode {
@@ -529,14 +531,20 @@ export type WebviewMessage =
   | { type: 'newNote'; title: string }
   | { type: 'newExperimentLog'; title: string }
   | { type: 'newTask'; title: string }
+  | { type: 'newMindMap'; title: string }
   | {
       type: 'materializeStagingNode';
       sourceNodeId: string;
-      nodeType: 'note' | 'experiment_log' | 'task';
+      nodeType: 'note' | 'experiment_log' | 'task' | 'mindmap';
       title: string;
       position: { x: number; y: number };
       content: string;
     }
+  | { type: 'readMindMapFile'; nodeId: string; filePath: string }
+  | { type: 'saveMindMapFile'; nodeId: string; filePath: string; mindmap: MindMapFile }
+  | { type: 'pickMindMapImage'; nodeId: string; itemId: string }
+  | { type: 'exportMindMapMarkdown'; nodeId: string; filePath: string; mindmap: MindMapFile }
+  | { type: 'exportMindMapXMind'; nodeId: string; filePath: string; mindmap: MindMapFile }
   | { type: 'syncDataNodeFile'; nodeId: string; content: string }
   | { type: 'deleteNote'; filePath: string }
   | { type: 'renameNode'; nodeId: string; newTitle: string }
@@ -601,6 +609,10 @@ export type ExtensionMessage =
   | { type: 'nodeFileStatus'; nodeId: string; missing: boolean }
   | { type: 'nodeFileMoved'; nodeId: string; newFilePath: string; newTitle: string }
   | { type: 'nodeContentUpdate'; nodeId: string; preview: string; metaPatch?: Partial<NodeMeta> }
+  | { type: 'mindMapFileLoaded'; nodeId: string; filePath: string; mindmap: MindMapFile }
+  | { type: 'mindMapFileSaved'; nodeId: string; filePath: string; title: string; mindmap: MindMapFile; summary: MindMapSummary; preview: string }
+  | { type: 'mindMapImagePicked'; nodeId: string; itemId: string; image: MindMapImage; uri?: string }
+  | { type: 'mindMapError'; nodeId?: string; message: string }
   | { type: 'toastError'; message: string }
   | { type: 'fnStatusUpdate'; nodeId: string; status: FnStatus; progressText?: string; issueKind?: RunIssueKind; issueMessage?: string }
   | { type: 'aiChunk'; runId: string; chunk: string }
@@ -650,5 +662,6 @@ export const DEFAULT_SIZES: Record<NodeType, { width: number; height: number }> 
   blueprint:       { width: 320, height: 180 },
   task:            { width: 300, height: 240 },
   data:            { width: 320, height: 200 },
+  mindmap:         { width: 340, height: 240 },
   function:        { width: 280, height: 220 },
 };

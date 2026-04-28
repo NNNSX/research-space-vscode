@@ -89,6 +89,8 @@ const EXT_TO_NODE_TYPE: Record<string, NodeType> = {
   sql: 'code', graphql: 'code', proto: 'code', ini: 'code', cfg: 'code', env: 'code', log: 'code', conf: 'code',
   // data
   csv: 'data', tsv: 'data', xls: 'data', xlt: 'data', xlsx: 'data', xlsm: 'data', xltx: 'data', xltm: 'data', ods: 'data', fods: 'data',
+  // mindmap
+  xmind: 'mindmap',
   // audio
   mp3: 'audio', wav: 'audio', opus: 'audio', aac: 'audio', flac: 'audio', m4a: 'audio', webm: 'audio', ogg: 'audio', oga: 'audio',
   // video
@@ -103,6 +105,9 @@ export function fileExtToNodeType(ext: string): NodeType | null {
 }
 
 export function nodeTypeFromFilePath(filePath: string): NodeType | null {
+  if (filePath.toLowerCase().endsWith('.rs-mindmap.json')) {
+    return 'mindmap';
+  }
   const ext = path.extname(filePath).slice(1);
   return fileExtToNodeType(ext);
 }

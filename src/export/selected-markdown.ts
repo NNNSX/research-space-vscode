@@ -24,6 +24,7 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   experiment_log: '实验记录',
   task: '任务',
   data: '数据',
+  mindmap: '思维导图',
   function: '功能节点',
   group_hub: '节点组',
   blueprint: '蓝图',

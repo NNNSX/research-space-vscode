@@ -1,0 +1,11 @@
+{
+  "id": "mindmap",
+  "label": "思维导图",
+  "icon": "🧠",
+  "color": "var(--vscode-terminal-ansiMagenta)",
+  "extensions": [],
+  "previewType": "markdown",
+  "watchContent": true,
+  "contentExtractor": "text",
+  "supportsMultimodal": false
+}

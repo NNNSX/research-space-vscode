@@ -4872,13 +4872,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         (
           node.meta?.staging_materialize_kind === 'note' ||
           node.meta?.staging_materialize_kind === 'experiment_log' ||
-          node.meta?.staging_materialize_kind === 'task'
+          node.meta?.staging_materialize_kind === 'task' ||
+          node.meta?.staging_materialize_kind === 'mindmap'
         );
       if (needsMaterialization) {
+        const materializeKind = node.meta?.staging_materialize_kind;
+        if (!materializeKind) { return {}; }
         postMessage({
           type: 'materializeStagingNode',
           sourceNodeId: node.id,
-          nodeType: node.meta?.staging_materialize_kind,
+          nodeType: materializeKind,
           title: node.title,
           position,
           content: node.meta?.staging_initial_content ?? node.meta?.content_preview ?? '',

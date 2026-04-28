@@ -224,6 +224,7 @@ function buildToolWarnings(args: {
     || node.node_type === 'code'
     || node.node_type === 'ai_output'
     || node.node_type === 'data'
+    || node.node_type === 'mindmap'
   ).length;
 
   if (toolId === 'chat') {

@@ -3,7 +3,7 @@
   "publisher": "research-space-dev",
   "displayName": "Research Space",
   "description": "Visual canvas for managing research workflows with AI-powered analysis",
-  "version": "2.2.2-alpha.31",
+  "version": "2.3.1-alpha.1",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -55,13 +55,13 @@
         {
           "command": "researchSpace.addToCanvas",
           "group": "researchSpace@1",
-          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|markdown|mdown|mkd|txt|text|rst|adoc|doc|dot|docx|docm|dotx|dotm|rtf|ppt|pps|pot|pptx|pptm|ppsx|ppsm|potx|potm|odt|odp|fodt|fodp|epub|py|js|mjs|cjs|ts|mts|cts|tsx|jsx|rs|go|java|c|cc|cpp|cxx|cs|h|hh|hpp|hxx|m|mm|rb|swift|kt|r|php|phtml|lua|pl|pm|scala|groovy|gradle|dart|jl|zig|nim|sh|bash|zsh|fish|ps1|psm1|psd1|bat|cmd|yaml|yml|json|jsonl|ndjson|toml|tex|bib|bst|ipynb|xml|html|css|scss|less|vue|svelte|astro|sql|graphql|proto|ini|cfg|env|log|conf|csv|tsv|xls|xlt|xlsx|xlsm|xltx|xltm|ods|fods|png|jpg|jpeg|gif|webp|svg|bmp|avif|ico|mp3|wav|opus|aac|flac|m4a|ogg|oga|webm|mp4|mov|m4v)$/"
+          "when": "explorerResourceIsFile && resourceExtname =~ /\\.(pdf|md|markdown|mdown|mkd|txt|text|rst|adoc|doc|dot|docx|docm|dotx|dotm|rtf|ppt|pps|pot|pptx|pptm|ppsx|ppsm|potx|potm|odt|odp|fodt|fodp|epub|py|js|mjs|cjs|ts|mts|cts|tsx|jsx|rs|go|java|c|cc|cpp|cxx|cs|h|hh|hpp|hxx|m|mm|rb|swift|kt|r|php|phtml|lua|pl|pm|scala|groovy|gradle|dart|jl|zig|nim|sh|bash|zsh|fish|ps1|psm1|psd1|bat|cmd|yaml|yml|json|jsonl|ndjson|toml|tex|bib|bst|ipynb|xml|html|css|scss|less|vue|svelte|astro|sql|graphql|proto|ini|cfg|env|log|conf|csv|tsv|xls|xlt|xlsx|xlsm|xltx|xltm|ods|fods|xmind|png|jpg|jpeg|gif|webp|svg|bmp|avif|ico|mp3|wav|opus|aac|flac|m4a|ogg|oga|webm|mp4|mov|m4v)$/"
         }
       ],
       "view/item/context": [
         {
           "command": "researchSpace.tree.openFile",
-          "when": "view == researchSpace.explorer && viewItem =~ /^node-(paper|note|code|image|ai_output|audio|video|data|experiment_log|task)/",
+          "when": "view == researchSpace.explorer && viewItem =~ /^node-(paper|note|code|image|ai_output|audio|video|data|experiment_log|task|mindmap)/",
           "group": "navigation@1"
         },
         {

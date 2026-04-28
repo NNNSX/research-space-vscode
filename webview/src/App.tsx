@@ -1,12 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider, useNodesInitialized } from '@xyflow/react';
 import { Canvas } from './components/canvas/Canvas';
 import { OutputHistoryModal } from './components/canvas/OutputHistoryModal';
 import { CreateBlueprintDialog } from './components/dialogs/CreateBlueprintDialog';
 import { PetWidget } from './components/pet/PetWidget';
+import { MindMapEditorModal } from './components/mindmap/MindMapEditorModal';
 import { useCanvasStore } from './stores/canvas-store';
 import { usePetStore } from './stores/pet-store';
 import { onMessage, postMessage } from './bridge';
+import type { MindMapFile, MindMapImage } from '../../src/mindmap/mindmap-model';
 
 import '@xyflow/react/dist/style.css';
 
@@ -312,6 +314,23 @@ export function App() {
   const syncBlueprintDefinitionAvailability = useCanvasStore(s => s.syncBlueprintDefinitionAvailability);
   const updateNodeMeta = useCanvasStore(s => s.updateNodeMeta);
   const lastInitialCanvasLoadStats = useCanvasStore(s => s.lastInitialCanvasLoadStats);
+  const imageUriMap = useCanvasStore(s => s.imageUriMap);
+  const [mindMapEditor, setMindMapEditor] = useState<{
+    nodeId: string;
+    filePath: string;
+    mindmap: MindMapFile;
+  } | null>(null);
+  const [mindMapSaveState, setMindMapSaveState] = useState<{
+    nodeId: string;
+    status: 'saving' | 'saved' | 'error';
+    message?: string;
+  } | null>(null);
+  const [mindMapPickedImage, setMindMapPickedImage] = useState<{
+    nodeId: string;
+    itemId: string;
+    image: MindMapImage;
+    uri?: string;
+  } | null>(null);
   const petInit = usePetStore(s => s.init);
   const petSetAssets = usePetStore(s => s.setAssetsBaseUri);
   const aiChunkBufferRef = useRef(new Map<string, string>());
@@ -697,6 +716,65 @@ export function App() {
             enqueueNodePreview(msg.nodeId, msg.preview as string, msg.metaPatch);
           }
           break;
+        case 'mindMapFileLoaded':
+          if (msg.nodeId && msg.filePath && msg.mindmap) {
+            setMindMapPickedImage(null);
+            setMindMapSaveState(null);
+            setMindMapEditor({
+              nodeId: msg.nodeId as string,
+              filePath: msg.filePath as string,
+              mindmap: msg.mindmap as MindMapFile,
+            });
+          }
+          break;
+        case 'mindMapFileSaved':
+          if (msg.nodeId && msg.filePath && msg.title) {
+            updateNodeFilePath(msg.nodeId as string, msg.filePath as string, msg.title as string);
+          }
+          if (msg.nodeId && msg.preview !== undefined) {
+            enqueueNodePreview(msg.nodeId as string, msg.preview as string, {
+              mindmap_summary: msg.summary as import('../../src/mindmap/mindmap-model').MindMapSummary,
+            });
+          }
+          if (msg.nodeId && msg.filePath && msg.mindmap) {
+            setMindMapSaveState({
+              nodeId: msg.nodeId as string,
+              status: 'saved',
+              message: '已保存到导图文件，画布节点摘要已同步。',
+            });
+            setMindMapEditor({
+              nodeId: msg.nodeId as string,
+              filePath: msg.filePath as string,
+              mindmap: msg.mindmap as MindMapFile,
+            });
+          }
+          break;
+        case 'mindMapImagePicked':
+          if (msg.nodeId && msg.itemId && msg.image) {
+            const picked = msg as { nodeId: string; itemId: string; image: MindMapImage; uri?: string };
+            if (picked.uri) {
+              enqueueImageUri(picked.image.file_path, picked.uri);
+            }
+            setMindMapPickedImage({
+              nodeId: picked.nodeId,
+              itemId: picked.itemId,
+              image: picked.image,
+              uri: picked.uri,
+            });
+          }
+          break;
+        case 'mindMapError':
+          if (msg.message) {
+            setError(msg.message as string);
+            if (msg.nodeId && String(msg.message).startsWith('思维导图保存失败')) {
+              setMindMapSaveState({
+                nodeId: msg.nodeId as string,
+                status: 'error',
+                message: `${msg.message as string}。当前弹窗中的编辑内容仍保留，磁盘文件未被确认覆盖。`,
+              });
+            }
+          }
+          break;
         case 'toastError':
           if (msg.message) {
             setError(msg.message as string);
@@ -994,6 +1072,51 @@ export function App() {
           />
         )}
         <OutputHistoryModal />
+        {mindMapEditor && (
+          <MindMapEditorModal
+            nodeId={mindMapEditor.nodeId}
+            filePath={mindMapEditor.filePath}
+            mindmap={mindMapEditor.mindmap}
+            pickedImage={mindMapPickedImage?.nodeId === mindMapEditor.nodeId ? mindMapPickedImage : null}
+            imageUriMap={imageUriMap}
+            saveState={mindMapSaveState?.nodeId === mindMapEditor.nodeId ? mindMapSaveState : null}
+            onSave={mindmap => {
+              setMindMapSaveState({
+                nodeId: mindMapEditor.nodeId,
+                status: 'saving',
+                message: '正在保存导图文件…',
+              });
+              postMessage({
+                type: 'saveMindMapFile',
+                nodeId: mindMapEditor.nodeId,
+                filePath: mindMapEditor.filePath,
+                mindmap,
+              });
+            }}
+            onPickImage={itemId => postMessage({
+              type: 'pickMindMapImage',
+              nodeId: mindMapEditor.nodeId,
+              itemId,
+            })}
+            onOpenImage={imageFilePath => postMessage({ type: 'openFile', filePath: imageFilePath })}
+            onExportMarkdown={mindmap => postMessage({
+              type: 'exportMindMapMarkdown',
+              nodeId: mindMapEditor.nodeId,
+              filePath: mindMapEditor.filePath,
+              mindmap,
+            })}
+            onExportXMind={mindmap => postMessage({
+              type: 'exportMindMapXMind',
+              nodeId: mindMapEditor.nodeId,
+              filePath: mindMapEditor.filePath,
+              mindmap,
+            })}
+            onClose={() => {
+              setMindMapEditor(null);
+              setMindMapPickedImage(null);
+            }}
+          />
+        )}
         <InitialCanvasLoadingNotice />
         {lastError && <ErrorToast message={lastError} onClose={clearError} />}
       </div>
